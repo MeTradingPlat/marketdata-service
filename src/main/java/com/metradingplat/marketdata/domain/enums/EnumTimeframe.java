@@ -1,0 +1,23 @@
+package com.metradingplat.marketdata.domain.enums;
+
+import lombok.Getter;
+
+@Getter
+public enum EnumTimeframe {
+    M1("1m", "{=1m}"),
+    M5("5m", "{=5m}"),
+    M15("15m", "{=15m}"),
+    M30("30m", "{=30m}"),
+    H1("1h", "{=1h}"),
+    D1("1d", "{=1d}"),
+    W1("1w", "{=1w}"),
+    MO1("1mo", "{=1mo}");
+
+    private final String label;
+    private final String dxLinkFormat;
+
+    EnumTimeframe(String label, String dxLinkFormat) {
+        this.label = label;
+        this.dxLinkFormat = dxLinkFormat;
+    }
+}
