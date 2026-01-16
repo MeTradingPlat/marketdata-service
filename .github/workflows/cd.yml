@@ -1,0 +1,148 @@
+name: CD Metradingplat MarketData Service
+
+on:
+  workflow_run:
+    workflows: ["CI Metradingplat MarketData Service"]
+    types:
+      - completed
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Create Docker Network
+        run: |
+          docker network create metradingplat-network || echo "Network already exists"
+
+      - name: Run Kafka Infrastructure
+        run: |
+          # Zookeeper
+          if [ -z "$(docker ps -a -q -f name=zookeeper)" ]; then
+            echo "Creating and starting zookeeper container..."
+            docker run -d \
+              --name "zookeeper" \
+              --network "metradingplat-network" \
+              --restart "always" \
+              -e ZOOKEEPER_CLIENT_PORT="2181" \
+              -e ZOOKEEPER_TICK_TIME="2000" \
+              -p 2181:2181 \
+              confluentinc/cp-zookeeper:7.5.0
+          else
+            echo "zookeeper container exists, ensuring it is started..."
+            docker start zookeeper
+          fi
+
+          # Wait for Zookeeper
+          sleep 10
+
+          # Kafka
+          if [ -z "$(docker ps -a -q -f name=kafka)" ]; then
+            echo "Creating and starting kafka container..."
+            docker run -d \
+              --name "kafka" \
+              --network "metradingplat-network" \
+              --restart "always" \
+              -e KAFKA_BROKER_ID="1" \
+              -e KAFKA_ZOOKEEPER_CONNECT="zookeeper:2181" \
+              -e KAFKA_ADVERTISED_LISTENERS="PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092" \
+              -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP="PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT" \
+              -e KAFKA_INTER_BROKER_LISTENER_NAME="PLAINTEXT" \
+              -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR="1" \
+              -e KAFKA_AUTO_CREATE_TOPICS_ENABLE="true" \
+              -p 9092:9092 \
+              confluentinc/cp-kafka:7.5.0
+          else
+            echo "kafka container exists, ensuring it is started..."
+            docker start kafka
+          fi
+
+      - name: Run Postgres Container
+        run: |
+          if [ -z "$(docker ps -a -q -f name=postgres-marketdata)" ]; then
+            echo "Creating and starting postgres-marketdata container..."
+            docker run -d \
+              --name "postgres-marketdata" \
+              --network "metradingplat-network" \
+              --restart "always" \
+              -e POSTGRES_DB="marketdata" \
+              -e POSTGRES_USER="user_marketdata" \
+              -e POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+              -p 5434:5432 \
+              -v postgres_marketdata_data:/var/lib/postgresql/data \
+              postgres:15-alpine
+          else
+            echo "postgres-marketdata container exists, ensuring it is started..."
+            docker start postgres-marketdata
+          fi
+
+      - name: Infrastructure Diagnosis & Cleanup
+        run: |
+          echo "--- DISK SPACE CHECK ---"
+          df -h
+          echo "--- CLEANING SHARED BASE IMAGES ---"
+          docker image rm -f eclipse-temurin:21-jdk eclipse-temurin:21-jre-alpine || true
+          echo "--- CLEANING SERVICE METADATA ---"
+          docker rm -f marketdata-service || true
+          docker image rm -f virtud142/metradingplat_marketdata_service:latest || true
+
+      - name: Pull Application Image (with Retry Logic)
+        run: |
+          echo "Attempting to pull image with auto-retry for stability..."
+          for i in 1 2 3; do
+            docker pull virtud142/metradingplat_marketdata_service:latest && exit 0 || \
+            (echo "Attempt $i failed, waiting 10s..." && sleep 10)
+          done
+          echo "All pull attempts failed. Docker daemon might need a manual restart."
+          exit 1
+
+      - name: Delete Old Application Container
+        run: docker rm -f marketdata-service || true
+
+      - name: Run Application Container
+        run: |
+          docker run -d \
+            -p 8082:8082 \
+            --name "marketdata-service" \
+            --network "metradingplat-network" \
+            --label project="metradingplat" \
+            --label service="marketdata-service" \
+            -e SPRING_PROFILES_ACTIVE="prod" \
+            -e DB_HOST="postgres-marketdata" \
+            -e POSTGRES_USER="user_marketdata" \
+            -e POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+            -e KAFKA_BOOTSTRAP_SERVERS="kafka:29092" \
+            -e EUREKA_HOST="directory" \
+            -e TT_CLIENT_ID="${{ secrets.TT_CLIENT_ID }}" \
+            -e TT_CLIENT_SECRET="${{ secrets.TT_CLIENT_SECRET }}" \
+            -e TT_REFRESH_TOKEN="${{ secrets.TT_REFRESH_TOKEN }}" \
+            -e TASTYTRADE_ACCOUNT_NUMBER="${{ secrets.TASTYTRADE_ACCOUNT_NUMBER }}" \
+            -e DXLINK_URL="${{ secrets.DXLINK_URL }}" \
+            virtud142/metradingplat_marketdata_service:latest
+
+      - name: Clean Old Images of This Service
+        run: |
+          echo "Cleaning old images for marketdata-service service..."
+          CURRENT_IMAGE=$(docker inspect marketdata-service --format='{{.Image}}' 2>/dev/null || echo "")
+          if [ -n "$CURRENT_IMAGE" ]; then
+            docker images --filter "label=service=marketdata-service" --format "{{.ID}}" | while read img; do
+              if [ "$img" != "${CURRENT_IMAGE:7:12}" ]; then
+                echo "Removing old image: $img"
+                docker rmi -f $img 2>/dev/null || true
+              fi
+            done
+          fi
+          docker images virtud142/metradingplat_marketdata_service --format "{{.ID}} {{.Tag}}" | grep -v "latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+
+      - name: Clean Stopped Containers of This Service
+        run: |
+          echo "Cleaning stopped containers for marketdata-service service..."
+          docker ps -a --filter "label=service=marketdata-service" --filter "status=exited" -q | xargs -r docker rm 2>/dev/null || true
+
+      - name: Final Status Check
+        run: |
+          sleep 10
+          docker ps | grep marketdata-service
+          echo "--- Container Logs (last 20 lines) ---"
+          docker logs --tail 20 marketdata-service
