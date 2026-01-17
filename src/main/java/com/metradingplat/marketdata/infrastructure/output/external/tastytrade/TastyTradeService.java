@@ -107,9 +107,14 @@ public class TastyTradeService {
 
         // Configurar callback temporal para recibir candles
         dxLinkClient.setOnCandle((sym, candle) -> {
-            if (sym.equals(symbol)) {
+            log.info("Candle callback: sym={}, symbol={}, match={}", sym, symbol, sym.equals(symbol));
+            if (sym.equals(symbol) || sym.startsWith(symbol)) {
+                candle.setSymbol(symbol); // Normalizar el símbolo
                 candle.setTimeframe(timeframe);
                 receivedCandles.add(candle);
+                log.info("Added candle to list: {} at {} O={} H={} L={} C={} V={}",
+                    symbol, candle.getTimestamp(), candle.getOpen(),
+                    candle.getHigh(), candle.getLow(), candle.getClose(), candle.getVolume());
                 historicalDataGateway.saveCandles(List.of(candle));
             }
         });
@@ -117,13 +122,27 @@ public class TastyTradeService {
         // Suscribir a candles históricos
         String tf = timeframe.getLabel();
         long fromTime = from.toInstant().toEpochMilli();
+        log.info("Subscribing to candles: symbol={}, timeframe={}, fromTime={} ({})",
+            symbol, tf, fromTime, from);
         dxLinkClient.subscribeCandles(symbol, tf, fromTime);
 
-        // Esperar unos segundos a que lleguen los datos
-        try {
-            Thread.sleep(5000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        // Esperar a que lleguen los datos (máximo 15 segundos, con verificación cada segundo)
+        int waitSeconds = 0;
+        int maxWaitSeconds = 15;
+        while (waitSeconds < maxWaitSeconds) {
+            try {
+                Thread.sleep(1000);
+                waitSeconds++;
+                if (!receivedCandles.isEmpty()) {
+                    log.info("Received {} candles so far after {}s", receivedCandles.size(), waitSeconds);
+                    // Si recibimos candles, esperar 2 segundos más por si vienen más
+                    Thread.sleep(2000);
+                    break;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
 
         // Restaurar callback original
@@ -131,8 +150,12 @@ public class TastyTradeService {
             historicalDataGateway.saveCandles(List.of(candle));
         });
 
-        log.info("Received {} candles from DxLink", receivedCandles.size());
-        return historicalDataGateway.getHistoricalData(symbol, timeframe, from, to);
+        log.info("Finished waiting. Received {} candles from DxLink for {}", receivedCandles.size(), symbol);
+
+        // Si no recibimos nada de DxLink, devolver lo que hay en BD (puede estar vacío)
+        List<Candle> dbCandles = historicalDataGateway.getHistoricalData(symbol, timeframe, from, to);
+        log.info("Returning {} candles from database for {}", dbCandles.size(), symbol);
+        return dbCandles;
     }
 
     private void ensureConnected() {

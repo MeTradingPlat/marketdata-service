@@ -73,4 +73,5 @@ public class TestController {
 
         return tastyTradeGateway.getCandles(symbol, tf, from, to);
     }
+
 }
