@@ -52,6 +52,13 @@ public class TastyTradeService {
             historicalDataGateway.saveCandles(List.of(candle));
         });
 
+        // Configurar token refresher para auto-reconexión
+        // Esto permite que DxLinkClient obtenga un token fresco cuando reconecta
+        dxLinkClient.setTokenRefresher(() -> {
+            log.info("Token refresher called - obtaining fresh API quote token");
+            return tastyTradeClient.getApiQuoteToken();
+        });
+
         // Conectar a DxLink
         try {
             log.info("Obtaining API quote token from TastyTrade...");
@@ -62,6 +69,8 @@ public class TastyTradeService {
             log.info("TastyTrade service initialized successfully");
         } catch (Exception e) {
             log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
+            // El DxLinkClient ahora maneja reconexión automáticamente
+            log.info("DxLinkClient will attempt auto-reconnection");
         }
     }
 

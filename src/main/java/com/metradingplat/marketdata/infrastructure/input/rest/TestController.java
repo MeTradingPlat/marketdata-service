@@ -2,6 +2,7 @@ package com.metradingplat.marketdata.infrastructure.input.rest;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.metradingplat.marketdata.application.output.GestionarComunicacionExternalGatewayIntPort;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.Candle;
+import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.DxLinkClient;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 public class TestController {
 
     private final GestionarComunicacionExternalGatewayIntPort tastyTradeGateway;
+    private final DxLinkClient dxLinkClient;
 
     /**
      * Suscribirse a datos real-time de un símbolo.
@@ -74,4 +77,28 @@ public class TestController {
         return tastyTradeGateway.getCandles(symbol, tf, from, to);
     }
 
+    /**
+     * Obtener el estado de la conexión DxLink.
+     * Útil para monitoreo y debugging.
+     *
+     * Ejemplo: GET http://localhost:8080/api/test/status
+     */
+    @GetMapping("/status")
+    public Map<String, Object> getStatus() {
+        log.info("Test: getting DxLink connection status");
+        return dxLinkClient.getConnectionStats();
+    }
+
+    /**
+     * Forzar reconexión del cliente DxLink.
+     * Útil cuando la conexión está en mal estado.
+     *
+     * Ejemplo: POST http://localhost:8080/api/test/reconnect
+     */
+    @PostMapping("/reconnect")
+    public String forceReconnect() {
+        log.info("Test: forcing DxLink reconnection");
+        dxLinkClient.forceReconnect();
+        return "Reconnection initiated. Check /status for connection state.";
+    }
 }

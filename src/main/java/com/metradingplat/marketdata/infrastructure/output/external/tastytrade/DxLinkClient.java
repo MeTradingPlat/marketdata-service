@@ -9,7 +9,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
@@ -53,10 +56,11 @@ public class DxLinkClient {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
 
     private WebSocketSession session;
     private String apiQuoteToken;
+    private String dxLinkUrl;
     private int channelId = 1;
 
     // Estados de conexión
@@ -64,7 +68,17 @@ public class DxLinkClient {
     private volatile boolean channelReady = false;
     private volatile boolean feedConfigured = false;
 
+    // Auto-reconexión
+    private final AtomicBoolean reconnecting = new AtomicBoolean(false);
+    private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+    private static final int MAX_RECONNECT_ATTEMPTS = 10;
+    private static final int INITIAL_RECONNECT_DELAY_SECONDS = 5;
+    private static final int MAX_RECONNECT_DELAY_SECONDS = 300; // 5 minutos máximo
+    private static final int HEALTH_CHECK_INTERVAL_SECONDS = 60;
+
     private ScheduledFuture<?> keepaliveTask;
+    private ScheduledFuture<?> healthCheckTask;
+    private Supplier<String> tokenRefresher;
 
     private BiConsumer<String, MarketDataStreamDTO> onMarketData;
     private BiConsumer<String, Candle> onCandle;
@@ -78,13 +92,23 @@ public class DxLinkClient {
     }
 
     /**
+     * Configura el proveedor de tokens frescos para auto-reconexión.
+     * Este supplier será llamado cada vez que se necesite reconectar.
+     */
+    public void setTokenRefresher(Supplier<String> tokenRefresher) {
+        this.tokenRefresher = tokenRefresher;
+    }
+
+    /**
      * Conecta al WebSocket DxLink y espera que esté completamente listo.
      */
     public void connect(String url, String token) {
+        this.dxLinkUrl = url;
         this.apiQuoteToken = token;
         this.authenticated = false;
         this.channelReady = false;
         this.feedConfigured = false;
+        this.reconnectAttempts.set(0);
 
         log.info("Connecting to DxLink: {}", url);
         log.info("Token prefix: {}", token != null ? token.substring(0, Math.min(10, token.length())) + "..." : "NULL");
@@ -121,6 +145,8 @@ public class DxLinkClient {
             if (channelReady) {
                 log.info("DxLink fully connected and ready (auth={}, channel={}, feed={})",
                     authenticated, channelReady, feedConfigured);
+                // Iniciar health check periódico
+                startHealthCheck();
             } else {
                 log.warn("DxLink connection timeout after 30s - auth={}, channel={}, feed={}",
                     authenticated, channelReady, feedConfigured);
@@ -129,10 +155,177 @@ public class DxLinkClient {
                     log.info("Session is still open but no SETUP received. Remote address: {}",
                         session.getRemoteAddress());
                 }
+                // Programar reconexión
+                scheduleReconnect();
             }
         } catch (Exception e) {
             log.error("Failed to connect to DxLink: {}", e.getMessage(), e);
-            throw new RuntimeException("DxLink connection failed: " + e.getMessage(), e);
+            // Programar reconexión en lugar de lanzar excepción
+            scheduleReconnect();
+        }
+    }
+
+    /**
+     * Intenta reconectar al WebSocket con backoff exponencial.
+     */
+    private void scheduleReconnect() {
+        if (!reconnecting.compareAndSet(false, true)) {
+            log.debug("Reconnection already in progress, skipping");
+            return;
+        }
+
+        int attempts = reconnectAttempts.incrementAndGet();
+        if (attempts > MAX_RECONNECT_ATTEMPTS) {
+            log.error("Max reconnection attempts ({}) reached. Manual intervention required.", MAX_RECONNECT_ATTEMPTS);
+            reconnecting.set(false);
+            reconnectAttempts.set(0);
+            return;
+        }
+
+        // Backoff exponencial: 5s, 10s, 20s, 40s, 80s, 160s, 300s (max)
+        int delaySeconds = Math.min(
+            INITIAL_RECONNECT_DELAY_SECONDS * (int) Math.pow(2, attempts - 1),
+            MAX_RECONNECT_DELAY_SECONDS
+        );
+
+        log.info("Scheduling reconnection attempt {}/{} in {} seconds...",
+            attempts, MAX_RECONNECT_ATTEMPTS, delaySeconds);
+
+        scheduler.schedule(() -> {
+            try {
+                performReconnect();
+            } finally {
+                reconnecting.set(false);
+            }
+        }, delaySeconds, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Ejecuta la reconexión real.
+     */
+    private void performReconnect() {
+        log.info("Attempting to reconnect to DxLink...");
+
+        // Limpiar estado anterior
+        cleanupConnection();
+
+        // Obtener token fresco si hay un refresher configurado
+        String freshToken = apiQuoteToken;
+        if (tokenRefresher != null) {
+            try {
+                freshToken = tokenRefresher.get();
+                log.info("Obtained fresh token for reconnection");
+            } catch (Exception e) {
+                log.error("Failed to refresh token: {}", e.getMessage());
+                scheduleReconnect();
+                return;
+            }
+        }
+
+        // Intentar reconectar
+        try {
+            connect(dxLinkUrl, freshToken);
+
+            if (channelReady) {
+                log.info("Reconnection successful! Re-subscribing to {} symbols...", subscribedSymbols.size());
+                reconnectAttempts.set(0);
+
+                // Re-suscribir a todos los símbolos anteriores
+                resubscribeAll();
+            }
+        } catch (Exception e) {
+            log.error("Reconnection failed: {}", e.getMessage());
+            scheduleReconnect();
+        }
+    }
+
+    /**
+     * Re-suscribe a todos los símbolos que estaban activos antes de la desconexión.
+     */
+    private void resubscribeAll() {
+        if (subscribedSymbols.isEmpty()) {
+            return;
+        }
+
+        log.info("Re-subscribing to {} symbols: {}", subscribedSymbols.size(), subscribedSymbols);
+
+        // Crear copia para evitar ConcurrentModificationException
+        Set<String> symbolsToResubscribe = Set.copyOf(subscribedSymbols);
+
+        for (String symbol : symbolsToResubscribe) {
+            try {
+                sendMessage(Map.of(
+                    "type", "FEED_SUBSCRIPTION",
+                    "channel", channelId,
+                    "add", List.of(
+                        Map.of("symbol", symbol, "type", "Quote"),
+                        Map.of("symbol", symbol, "type", "Trade")
+                    )
+                ));
+                log.debug("Re-subscribed to: {}", symbol);
+            } catch (Exception e) {
+                log.error("Failed to re-subscribe to {}: {}", symbol, e.getMessage());
+            }
+        }
+
+        log.info("Re-subscription complete");
+    }
+
+    /**
+     * Limpia la conexión anterior antes de reconectar.
+     */
+    private void cleanupConnection() {
+        authenticated = false;
+        channelReady = false;
+        feedConfigured = false;
+
+        if (keepaliveTask != null) {
+            keepaliveTask.cancel(false);
+            keepaliveTask = null;
+        }
+
+        if (session != null && session.isOpen()) {
+            try {
+                session.close();
+            } catch (Exception e) {
+                log.debug("Error closing old session: {}", e.getMessage());
+            }
+        }
+        session = null;
+    }
+
+    /**
+     * Inicia el health check periódico de la conexión.
+     */
+    private void startHealthCheck() {
+        if (healthCheckTask != null) {
+            healthCheckTask.cancel(false);
+        }
+
+        healthCheckTask = scheduler.scheduleAtFixedRate(() -> {
+            try {
+                checkConnectionHealth();
+            } catch (Exception e) {
+                log.error("Health check error: {}", e.getMessage());
+            }
+        }, HEALTH_CHECK_INTERVAL_SECONDS, HEALTH_CHECK_INTERVAL_SECONDS, TimeUnit.SECONDS);
+
+        log.info("Health check started (interval: {}s)", HEALTH_CHECK_INTERVAL_SECONDS);
+    }
+
+    /**
+     * Verifica el estado de la conexión y reconecta si es necesario.
+     */
+    private void checkConnectionHealth() {
+        boolean sessionOpen = session != null && session.isOpen();
+        boolean healthy = sessionOpen && authenticated && channelReady;
+
+        if (!healthy) {
+            log.warn("Connection health check failed - session={}, auth={}, channel={}. Triggering reconnect...",
+                sessionOpen, authenticated, channelReady);
+            scheduleReconnect();
+        } else {
+            log.debug("Connection health check passed");
         }
     }
 
@@ -229,13 +422,24 @@ public class DxLinkClient {
     }
 
     public void disconnect() {
+        log.info("Disconnecting from DxLink...");
         try {
+            // Cancelar tareas programadas
+            if (healthCheckTask != null) {
+                healthCheckTask.cancel(true);
+                healthCheckTask = null;
+            }
             if (keepaliveTask != null) {
                 keepaliveTask.cancel(true);
+                keepaliveTask = null;
             }
+            // Cerrar sesión con código NORMAL para evitar auto-reconexión
             if (session != null && session.isOpen()) {
-                session.close();
+                session.close(CloseStatus.NORMAL);
             }
+            authenticated = false;
+            channelReady = false;
+            feedConfigured = false;
         } catch (Exception e) {
             log.error("Error closing WebSocket", e);
         }
@@ -245,10 +449,45 @@ public class DxLinkClient {
         return session != null && session.isOpen() && channelReady;
     }
 
+    /**
+     * Fuerza una reconexión inmediata (útil para recuperación manual).
+     */
+    public void forceReconnect() {
+        log.info("Forcing reconnection...");
+        reconnectAttempts.set(0);
+        reconnecting.set(false);
+        cleanupConnection();
+        scheduleReconnect();
+    }
+
+    /**
+     * Obtiene estadísticas de conexión para monitoreo.
+     */
+    public Map<String, Object> getConnectionStats() {
+        return Map.of(
+            "connected", isConnected(),
+            "authenticated", authenticated,
+            "channelReady", channelReady,
+            "feedConfigured", feedConfigured,
+            "subscribedSymbols", subscribedSymbols.size(),
+            "reconnectAttempts", reconnectAttempts.get(),
+            "reconnecting", reconnecting.get()
+        );
+    }
+
     @PreDestroy
     public void cleanup() {
+        log.info("Cleaning up DxLinkClient...");
         disconnect();
         scheduler.shutdown();
+        try {
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            scheduler.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void sendMessage(Object message) {
@@ -579,6 +818,12 @@ public class DxLinkClient {
             authenticated = false;
             channelReady = false;
             feedConfigured = false;
+
+            // Disparar reconexión automática (excepto si fue un cierre intencional)
+            if (status.getCode() != CloseStatus.NORMAL.getCode()) {
+                log.info("Connection lost unexpectedly. Initiating auto-reconnect...");
+                scheduleReconnect();
+            }
         }
     }
 }
