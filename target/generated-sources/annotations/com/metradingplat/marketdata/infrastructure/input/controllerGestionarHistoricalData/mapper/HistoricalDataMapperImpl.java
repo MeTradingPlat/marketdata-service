@@ -9,8 +9,8 @@ import org.springframework.stereotype.Component;
 
 @Generated(
     value = "org.mapstruct.ap.MappingProcessor",
-    date = "2026-01-15T21:04:22-0500",
-    comments = "version: 1.5.5.Final, compiler: javac, environment: Java 21.0.9 (Eclipse Adoptium)"
+    date = "2026-01-16T20:41:33-0500",
+    comments = "version: 1.5.5.Final, compiler: Eclipse JDT (IDE) 3.45.0.v20260101-2150, environment: Java 21.0.9 (Eclipse Adoptium)"
 )
 @Component
 public class HistoricalDataMapperImpl implements HistoricalDataMapper {
@@ -23,12 +23,12 @@ public class HistoricalDataMapperImpl implements HistoricalDataMapper {
 
         CandleDTORespuesta.CandleDTORespuestaBuilder candleDTORespuesta = CandleDTORespuesta.builder();
 
-        candleDTORespuesta.symbol( candle.getSymbol() );
-        candleDTORespuesta.timestamp( candle.getTimestamp() );
-        candleDTORespuesta.open( candle.getOpen() );
+        candleDTORespuesta.close( candle.getClose() );
         candleDTORespuesta.high( candle.getHigh() );
         candleDTORespuesta.low( candle.getLow() );
-        candleDTORespuesta.close( candle.getClose() );
+        candleDTORespuesta.open( candle.getOpen() );
+        candleDTORespuesta.symbol( candle.getSymbol() );
+        candleDTORespuesta.timestamp( candle.getTimestamp() );
         candleDTORespuesta.volume( candle.getVolume() );
 
         return candleDTORespuesta.build();

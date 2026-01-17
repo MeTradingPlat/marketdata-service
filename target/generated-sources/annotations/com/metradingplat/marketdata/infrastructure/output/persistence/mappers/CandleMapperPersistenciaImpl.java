@@ -10,8 +10,8 @@ import org.springframework.stereotype.Component;
 
 @Generated(
     value = "org.mapstruct.ap.MappingProcessor",
-    date = "2026-01-15T21:04:22-0500",
-    comments = "version: 1.5.5.Final, compiler: javac, environment: Java 21.0.9 (Eclipse Adoptium)"
+    date = "2026-01-16T20:41:33-0500",
+    comments = "version: 1.5.5.Final, compiler: Eclipse JDT (IDE) 3.45.0.v20260101-2150, environment: Java 21.0.9 (Eclipse Adoptium)"
 )
 @Component
 public class CandleMapperPersistenciaImpl implements CandleMapperPersistencia {
@@ -25,12 +25,12 @@ public class CandleMapperPersistenciaImpl implements CandleMapperPersistencia {
         Candle.CandleBuilder candle = Candle.builder();
 
         candle.symbol( entitySymbolObjectSymbol( entity ) );
-        candle.timeframe( entity.getTimeframe() );
-        candle.timestamp( entity.getTimestamp() );
-        candle.open( entity.getOpen() );
+        candle.close( entity.getClose() );
         candle.high( entity.getHigh() );
         candle.low( entity.getLow() );
-        candle.close( entity.getClose() );
+        candle.open( entity.getOpen() );
+        candle.timeframe( entity.getTimeframe() );
+        candle.timestamp( entity.getTimestamp() );
         candle.volume( entity.getVolume() );
 
         return candle.build();
@@ -59,12 +59,12 @@ public class CandleMapperPersistenciaImpl implements CandleMapperPersistencia {
         CandleEntity.CandleEntityBuilder candleEntity = CandleEntity.builder();
 
         candleEntity.symbolObject( candleToSymbolEntity( candle ) );
-        candleEntity.timeframe( candle.getTimeframe() );
-        candleEntity.timestamp( candle.getTimestamp() );
-        candleEntity.open( candle.getOpen() );
+        candleEntity.close( candle.getClose() );
         candleEntity.high( candle.getHigh() );
         candleEntity.low( candle.getLow() );
-        candleEntity.close( candle.getClose() );
+        candleEntity.open( candle.getOpen() );
+        candleEntity.timeframe( candle.getTimeframe() );
+        candleEntity.timestamp( candle.getTimestamp() );
         candleEntity.volume( candle.getVolume() );
 
         return candleEntity.build();
