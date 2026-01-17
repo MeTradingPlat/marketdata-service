@@ -15,6 +15,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -23,7 +24,10 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "candles")
+@Table(name = "candles", uniqueConstraints = {
+    @UniqueConstraint(name = "uk_candle_symbol_timeframe_timestamp",
+                      columnNames = {"symbol_id", "timeframe", "timestamp"})
+})
 @Getter
 @Setter
 @Builder

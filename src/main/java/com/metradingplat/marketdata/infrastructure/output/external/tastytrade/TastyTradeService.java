@@ -1,9 +1,12 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Service;
 
@@ -112,60 +115,109 @@ public class TastyTradeService {
             OffsetDateTime from, OffsetDateTime to) {
         ensureConnected();
 
-        List<Candle> receivedCandles = Collections.synchronizedList(new ArrayList<>());
+        // Usar Set con comparador por timestamp para evitar duplicados
+        Set<CandleKey> seenCandles = ConcurrentHashMap.newKeySet();
+        List<Candle> receivedCandles = new ArrayList<>();
 
         // Configurar callback temporal para recibir candles
         dxLinkClient.setOnCandle((sym, candle) -> {
-            log.info("Candle callback: sym={}, symbol={}, match={}", sym, symbol, sym.equals(symbol));
+            log.debug("Candle callback: sym={}, symbol={}, match={}", sym, symbol, sym.equals(symbol));
             if (sym.equals(symbol) || sym.startsWith(symbol)) {
                 candle.setSymbol(symbol); // Normalizar el símbolo
                 candle.setTimeframe(timeframe);
-                receivedCandles.add(candle);
-                log.info("Added candle to list: {} at {} O={} H={} L={} C={} V={}",
-                    symbol, candle.getTimestamp(), candle.getOpen(),
-                    candle.getHigh(), candle.getLow(), candle.getClose(), candle.getVolume());
-                historicalDataGateway.saveCandles(List.of(candle));
+
+                // Evitar duplicados por timestamp
+                CandleKey key = new CandleKey(symbol, timeframe, candle.getTimestamp());
+                if (seenCandles.add(key)) {
+                    synchronized (receivedCandles) {
+                        receivedCandles.add(candle);
+                    }
+                    log.info("Added candle #{} to list: {} at {} O={} H={} L={} C={} V={}",
+                        receivedCandles.size(), symbol, candle.getTimestamp(), candle.getOpen(),
+                        candle.getHigh(), candle.getLow(), candle.getClose(), candle.getVolume());
+                } else {
+                    log.debug("Skipping duplicate candle: {} at {}", symbol, candle.getTimestamp());
+                }
             }
         });
 
-        // Suscribir a candles históricos
+        // Resetear estado del snapshot y suscribir a candles históricos
+        dxLinkClient.resetCandleSnapshot();
         String tf = timeframe.getLabel();
         long fromTime = from.toInstant().toEpochMilli();
         log.info("Subscribing to candles: symbol={}, timeframe={}, fromTime={} ({})",
             symbol, tf, fromTime, from);
         dxLinkClient.subscribeCandles(symbol, tf, fromTime);
 
-        // Esperar a que lleguen los datos (máximo 15 segundos, con verificación cada segundo)
+        // Esperar hasta que el snapshot esté completo O timeout (máximo 30 segundos)
         int waitSeconds = 0;
-        int maxWaitSeconds = 15;
+        int maxWaitSeconds = 30;
+        int noNewCandlesCount = 0;
+        int lastCount = 0;
+
         while (waitSeconds < maxWaitSeconds) {
             try {
                 Thread.sleep(1000);
                 waitSeconds++;
-                if (!receivedCandles.isEmpty()) {
-                    log.info("Received {} candles so far after {}s", receivedCandles.size(), waitSeconds);
-                    // Si recibimos candles, esperar 2 segundos más por si vienen más
-                    Thread.sleep(2000);
+
+                int currentCount = dxLinkClient.getCandleSnapshotCount();
+                boolean snapshotComplete = dxLinkClient.isCandleSnapshotComplete();
+
+                log.info("Waiting for candles... {}s elapsed, {} candles received, snapshotComplete={}",
+                    waitSeconds, currentCount, snapshotComplete);
+
+                // Si el snapshot está completo, terminar
+                if (snapshotComplete) {
+                    log.info("Snapshot complete signal received after {}s", waitSeconds);
                     break;
                 }
+
+                // Si no llegan más candles en 3 segundos consecutivos, considerar terminado
+                if (currentCount > 0 && currentCount == lastCount) {
+                    noNewCandlesCount++;
+                    if (noNewCandlesCount >= 3) {
+                        log.info("No new candles in 3 seconds, assuming complete");
+                        break;
+                    }
+                } else {
+                    noNewCandlesCount = 0;
+                }
+                lastCount = currentCount;
+
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
             }
         }
 
+        // Desuscribir de candles
+        dxLinkClient.unsubscribeCandles(symbol, tf);
+
         // Restaurar callback original
         dxLinkClient.setOnCandle((sym, candle) -> {
             historicalDataGateway.saveCandles(List.of(candle));
         });
 
-        log.info("Finished waiting. Received {} candles from DxLink for {}", receivedCandles.size(), symbol);
+        log.info("Finished waiting after {}s. Received {} unique candles from DxLink for {}",
+            waitSeconds, receivedCandles.size(), symbol);
 
-        // Si no recibimos nada de DxLink, devolver lo que hay en BD (puede estar vacío)
+        // Guardar candles únicos en BD
+        if (!receivedCandles.isEmpty()) {
+            // Ordenar por timestamp antes de guardar
+            receivedCandles.sort(Comparator.comparing(Candle::getTimestamp));
+            historicalDataGateway.saveCandles(receivedCandles);
+        }
+
+        // Devolver lo que hay en BD (incluye los que acabamos de guardar)
         List<Candle> dbCandles = historicalDataGateway.getHistoricalData(symbol, timeframe, from, to);
         log.info("Returning {} candles from database for {}", dbCandles.size(), symbol);
         return dbCandles;
     }
+
+    /**
+     * Clave única para identificar un candle y evitar duplicados.
+     */
+    private record CandleKey(String symbol, EnumTimeframe timeframe, Instant timestamp) {}
 
     private void ensureConnected() {
         if (!dxLinkClient.isConnected()) {

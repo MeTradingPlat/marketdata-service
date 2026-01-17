@@ -68,6 +68,10 @@ public class DxLinkClient {
     private volatile boolean channelReady = false;
     private volatile boolean feedConfigured = false;
 
+    // Estado del snapshot de candles históricos
+    private volatile boolean candleSnapshotComplete = false;
+    private final AtomicInteger candleSnapshotCount = new AtomicInteger(0);
+
     // Auto-reconexión
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
@@ -387,6 +391,10 @@ public class DxLinkClient {
             return;
         }
 
+        // Resetear estado del snapshot
+        candleSnapshotComplete = false;
+        candleSnapshotCount.set(0);
+
         // Formato del símbolo de candle: SYMBOL{=TIMEFRAME}
         // Timeframes: 1m, 5m, 15m, 30m, 1h, 1d, 1w, 1mo
         String candleSymbol = symbol + "{=" + timeframe + "}";
@@ -402,6 +410,44 @@ public class DxLinkClient {
             ))
         ));
         log.info("Subscribed to candles: {} from {}", candleSymbol, Instant.ofEpochMilli(fromTime));
+    }
+
+    /**
+     * Desuscribe de candles de un símbolo.
+     */
+    public void unsubscribeCandles(String symbol, String timeframe) {
+        String candleSymbol = symbol + "{=" + timeframe + "}";
+        sendMessage(Map.of(
+            "type", "FEED_SUBSCRIPTION",
+            "channel", channelId,
+            "remove", List.of(Map.of(
+                "symbol", candleSymbol,
+                "type", "Candle"
+            ))
+        ));
+        log.info("Unsubscribed from candles: {}", candleSymbol);
+    }
+
+    /**
+     * Verifica si el snapshot de candles está completo.
+     */
+    public boolean isCandleSnapshotComplete() {
+        return candleSnapshotComplete;
+    }
+
+    /**
+     * Obtiene el número de candles recibidos en el snapshot actual.
+     */
+    public int getCandleSnapshotCount() {
+        return candleSnapshotCount.get();
+    }
+
+    /**
+     * Resetea el estado del snapshot de candles.
+     */
+    public void resetCandleSnapshot() {
+        candleSnapshotComplete = false;
+        candleSnapshotCount.set(0);
     }
 
     /**
@@ -574,7 +620,7 @@ public class DxLinkClient {
         log.info("Channel {} opened for service: {}", openedChannel, service);
 
         if (openedChannel == channelId && "FEED".equals(service)) {
-            // Configurar el feed
+            // Configurar el feed - incluir eventFlags para detectar fin de snapshot
             sendMessage(Map.of(
                 "type", "FEED_SETUP",
                 "channel", channelId,
@@ -582,7 +628,7 @@ public class DxLinkClient {
                 "acceptEventFields", Map.of(
                     "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"),
                     "Trade", List.of("eventSymbol", "price", "size", "time"),
-                    "Candle", List.of("eventSymbol", "time", "open", "high", "low", "close", "volume")
+                    "Candle", List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags")
                 )
             ));
 
@@ -697,6 +743,13 @@ public class DxLinkClient {
                         String baseSymbol = symbol.contains("{")
                             ? symbol.substring(0, symbol.indexOf("{"))
                             : symbol;
+
+                        // eventFlags está en posición 7 (si se solicitó)
+                        // TX_PENDING = 0x01 - transacción pendiente (más datos por venir)
+                        // SNAPSHOT_END = fin del snapshot cuando TX_PENDING no está presente
+                        int eventFlags = data.path(7).asInt(0);
+                        boolean isTxPending = (eventFlags & 0x01) != 0;
+
                         Candle candle = Candle.builder()
                             .symbol(baseSymbol)
                             .timestamp(Instant.ofEpochMilli(data.path(1).asLong()))
@@ -706,10 +759,21 @@ public class DxLinkClient {
                             .close(data.path(5).asDouble())
                             .volume(data.path(6).asDouble())
                             .build();
-                        log.debug("Received candle: {} at {} O={} H={} L={} C={}",
-                            baseSymbol, candle.getTimestamp(), candle.getOpen(),
-                            candle.getHigh(), candle.getLow(), candle.getClose());
+
+                        candleSnapshotCount.incrementAndGet();
+
+                        log.info("Received candle #{}: {} at {} O={} H={} L={} C={} flags={} txPending={}",
+                            candleSnapshotCount.get(), baseSymbol, candle.getTimestamp(),
+                            candle.getOpen(), candle.getHigh(), candle.getLow(), candle.getClose(),
+                            eventFlags, isTxPending);
+
                         onCandle.accept(baseSymbol, candle);
+
+                        // Si TX_PENDING no está presente, el snapshot terminó
+                        if (!isTxPending && candleSnapshotCount.get() > 0) {
+                            candleSnapshotComplete = true;
+                            log.info("Candle snapshot complete! Total candles: {}", candleSnapshotCount.get());
+                        }
                     }
                 }
             }
@@ -751,6 +815,11 @@ public class DxLinkClient {
                         String baseSymbol = symbol.contains("{")
                             ? symbol.substring(0, symbol.indexOf("{"))
                             : symbol;
+
+                        // eventFlags para detectar fin de snapshot
+                        int eventFlags = data.path("eventFlags").asInt(0);
+                        boolean isTxPending = (eventFlags & 0x01) != 0;
+
                         Candle candle = Candle.builder()
                             .symbol(baseSymbol)
                             .timestamp(Instant.ofEpochMilli(data.path("time").asLong()))
@@ -760,10 +829,21 @@ public class DxLinkClient {
                             .close(data.path("close").asDouble())
                             .volume(data.path("volume").asDouble())
                             .build();
-                        log.debug("Received candle: {} at {} O={} H={} L={} C={}",
-                            baseSymbol, candle.getTimestamp(), candle.getOpen(),
-                            candle.getHigh(), candle.getLow(), candle.getClose());
+
+                        candleSnapshotCount.incrementAndGet();
+
+                        log.info("Received candle #{}: {} at {} O={} H={} L={} C={} flags={} txPending={}",
+                            candleSnapshotCount.get(), baseSymbol, candle.getTimestamp(),
+                            candle.getOpen(), candle.getHigh(), candle.getLow(), candle.getClose(),
+                            eventFlags, isTxPending);
+
                         onCandle.accept(baseSymbol, candle);
+
+                        // Si TX_PENDING no está presente, el snapshot terminó
+                        if (!isTxPending && candleSnapshotCount.get() > 0) {
+                            candleSnapshotComplete = true;
+                            log.info("Candle snapshot complete! Total candles: {}", candleSnapshotCount.get());
+                        }
                     }
                 }
             }
