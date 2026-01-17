@@ -77,6 +77,8 @@ public class TastyTradeClient {
                 .retrieve()
                 .body(Map.class);
 
+        log.info("API quote token response: {}", response);
+
         if (response == null || !response.containsKey("data")) {
             throw new RuntimeException("Failed to get API quote token");
         }
@@ -86,7 +88,8 @@ public class TastyTradeClient {
         this.apiQuoteToken = (String) data.get("token");
         this.dxlinkUrl = (String) data.get("dxlink-url");
 
-        log.info("API quote token obtained, DxLink URL: {}", dxlinkUrl);
+        log.info("API quote token obtained (length={}), DxLink URL: {}",
+            apiQuoteToken != null ? apiQuoteToken.length() : 0, dxlinkUrl);
         return this.apiQuoteToken;
     }
 

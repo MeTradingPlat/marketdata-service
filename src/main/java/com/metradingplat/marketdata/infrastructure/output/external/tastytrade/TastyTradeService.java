@@ -54,12 +54,14 @@ public class TastyTradeService {
 
         // Conectar a DxLink
         try {
+            log.info("Obtaining API quote token from TastyTrade...");
             String token = tastyTradeClient.getApiQuoteToken();
             String url = tastyTradeClient.getDxlinkUrl();
+            log.info("Got token and URL. Connecting to DxLink at: {}", url);
             dxLinkClient.connect(url, token);
             log.info("TastyTrade service initialized successfully");
         } catch (Exception e) {
-            log.error("Failed to initialize TastyTrade service", e);
+            log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
         }
     }
 

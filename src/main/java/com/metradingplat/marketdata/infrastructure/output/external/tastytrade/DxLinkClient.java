@@ -14,9 +14,13 @@ import java.util.function.BiConsumer;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+
+import jakarta.websocket.ContainerProvider;
+import jakarta.websocket.WebSocketContainer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -83,29 +87,52 @@ public class DxLinkClient {
         this.feedConfigured = false;
 
         log.info("Connecting to DxLink: {}", url);
+        log.info("Token prefix: {}", token != null ? token.substring(0, Math.min(10, token.length())) + "..." : "NULL");
 
         try {
-            StandardWebSocketClient client = new StandardWebSocketClient();
-            this.session = client.execute(new DxLinkHandler(), url).get(10, TimeUnit.SECONDS);
-            log.info("WebSocket connected, waiting for protocol handshake...");
+            // Configurar WebSocket container con timeouts extendidos
+            WebSocketContainer container = ContainerProvider.getWebSocketContainer();
+            container.setDefaultMaxSessionIdleTimeout(120000); // 2 minutos
+            container.setDefaultMaxTextMessageBufferSize(65536);
 
-            // Esperar hasta que el canal esté listo (máximo 20 segundos)
+            StandardWebSocketClient client = new StandardWebSocketClient(container);
+
+            // Headers HTTP para la conexión WebSocket
+            WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+            headers.add("User-Agent", "metradingplat/1.0");
+
+            log.info("Initiating WebSocket connection...");
+            this.session = client.execute(new DxLinkHandler(), headers, java.net.URI.create(url)).get(30, TimeUnit.SECONDS);
+            log.info("WebSocket connected successfully, session ID: {}, waiting for SETUP from server...",
+                session.getId());
+
+            // Esperar hasta que el canal esté listo (máximo 30 segundos)
             int waitCount = 0;
-            while (!channelReady && waitCount < 200) {
+            while (!channelReady && waitCount < 300) {
                 Thread.sleep(100);
                 waitCount++;
+                // Log progress cada 5 segundos
+                if (waitCount % 50 == 0) {
+                    log.info("Waiting for handshake... auth={}, channel={}, feed={} ({}s elapsed)",
+                        authenticated, channelReady, feedConfigured, waitCount / 10);
+                }
             }
 
             if (channelReady) {
                 log.info("DxLink fully connected and ready (auth={}, channel={}, feed={})",
                     authenticated, channelReady, feedConfigured);
             } else {
-                log.warn("DxLink connection timeout - auth={}, channel={}, feed={}",
+                log.warn("DxLink connection timeout after 30s - auth={}, channel={}, feed={}",
                     authenticated, channelReady, feedConfigured);
+                // Intentar cerrar la conexión y reportar el estado
+                if (session != null && session.isOpen()) {
+                    log.info("Session is still open but no SETUP received. Remote address: {}",
+                        session.getRemoteAddress());
+                }
             }
         } catch (Exception e) {
-            log.error("Failed to connect to DxLink", e);
-            throw new RuntimeException("DxLink connection failed", e);
+            log.error("Failed to connect to DxLink: {}", e.getMessage(), e);
+            throw new RuntimeException("DxLink connection failed: " + e.getMessage(), e);
         }
     }
 
@@ -231,7 +258,7 @@ public class DxLinkClient {
                 return;
             }
             String json = objectMapper.writeValueAsString(message);
-            log.debug("Sending: {}", json);
+            log.info(">>> Sending: {}", json);
             session.sendMessage(new TextMessage(json));
         } catch (Exception e) {
             log.error("Failed to send message", e);
@@ -515,22 +542,27 @@ public class DxLinkClient {
     private class DxLinkHandler extends TextWebSocketHandler {
         @Override
         public void afterConnectionEstablished(WebSocketSession session) {
-            log.info("WebSocket connection established");
+            log.info("WebSocket connection established - local: {}, remote: {}, protocol: {}",
+                session.getLocalAddress(), session.getRemoteAddress(), session.getAcceptedProtocol());
+            log.info("WebSocket attributes: {}", session.getAttributes());
         }
 
         @Override
         protected void handleTextMessage(WebSocketSession session, TextMessage message) {
-            DxLinkClient.this.handleMessage(message.getPayload());
+            String payload = message.getPayload();
+            log.info("<<< Received message ({}B): {}", payload.length(),
+                payload.length() > 500 ? payload.substring(0, 500) + "..." : payload);
+            DxLinkClient.this.handleMessage(payload);
         }
 
         @Override
         public void handleTransportError(WebSocketSession session, Throwable exception) {
-            log.error("WebSocket transport error", exception);
+            log.error("WebSocket transport error: {}", exception.getMessage(), exception);
         }
 
         @Override
         public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-            log.warn("WebSocket closed: {}", status);
+            log.warn("WebSocket closed - code: {}, reason: '{}'", status.getCode(), status.getReason());
             authenticated = false;
             channelReady = false;
             feedConfigured = false;

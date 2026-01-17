@@ -25,13 +25,14 @@ eureka:
   instance:
     prefer-ip-address: true
 
-# Logging para producción
+# Logging para producción (temporalmente más verboso para diagnóstico)
 logging:
   level:
     com.metradingplat.marketdata: INFO
-    '[com.metradingplat.marketdata.infrastructure.output.external.tastytrade]': INFO
+    '[com.metradingplat.marketdata.infrastructure.output.external.tastytrade]': DEBUG
     org.springframework.kafka: WARN
-    org.springframework.web.socket: INFO
+    org.springframework.web.socket: DEBUG
+    org.springframework.web.socket.client: DEBUG
 
 # TastyTrade Production Configuration
 tastytrade:
