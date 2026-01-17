@@ -20,7 +20,8 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Servicio interno de TastyTrade.
  * Orquesta TastyTradeClient (REST) y DxLinkClient (WebSocket).
- * No implementa la interfaz directamente - eso lo hace GestionarComunicacionExternalGatewayImplAdapter.
+ * No implementa la interfaz directamente - eso lo hace
+ * GestionarComunicacionExternalGatewayImplAdapter.
  */
 @Service
 @RequiredArgsConstructor
@@ -97,7 +98,7 @@ public class TastyTradeService {
     }
 
     private List<Candle> fetchCandlesFromDxLink(String symbol, EnumTimeframe timeframe,
-                                                  OffsetDateTime from, OffsetDateTime to) {
+            OffsetDateTime from, OffsetDateTime to) {
         ensureConnected();
 
         List<Candle> receivedCandles = Collections.synchronizedList(new ArrayList<>());
