@@ -102,9 +102,9 @@ public class DxLinkClient {
             headers.add("User-Agent", "metradingplat/1.0");
 
             log.info("Initiating WebSocket connection...");
-            this.session = client.execute(new DxLinkHandler(), headers, java.net.URI.create(url)).get(30, TimeUnit.SECONDS);
-            log.info("WebSocket connected successfully, session ID: {}, waiting for SETUP from server...",
-                session.getId());
+            // La sesión se guarda en afterConnectionEstablished del handler
+            client.execute(new DxLinkHandler(), headers, java.net.URI.create(url)).get(30, TimeUnit.SECONDS);
+            log.info("WebSocket connection initiated, waiting for handshake to complete...");
 
             // Esperar hasta que el canal esté listo (máximo 30 segundos)
             int waitCount = 0;
@@ -535,20 +535,29 @@ public class DxLinkClient {
 
     private class DxLinkHandler extends TextWebSocketHandler {
         @Override
-        public void afterConnectionEstablished(WebSocketSession session) {
+        public void afterConnectionEstablished(WebSocketSession wsSession) {
             log.info("WebSocket connection established - local: {}, remote: {}, protocol: {}",
-                session.getLocalAddress(), session.getRemoteAddress(), session.getAcceptedProtocol());
-            log.info("WebSocket attributes: {}", session.getAttributes());
+                wsSession.getLocalAddress(), wsSession.getRemoteAddress(), wsSession.getAcceptedProtocol());
+            log.info("WebSocket attributes: {}", wsSession.getAttributes());
+
+            // Guardar la sesión y enviar SETUP directamente usando la sesión local
+            DxLinkClient.this.session = wsSession;
 
             // El CLIENTE debe enviar SETUP primero según el protocolo dxLink
             log.info("Sending initial SETUP message to server...");
-            sendMessage(Map.of(
-                "type", "SETUP",
-                "channel", 0,
-                "version", "0.1-js/1.0.0",
-                "keepaliveTimeout", 60,
-                "acceptKeepaliveTimeout", 60
-            ));
+            try {
+                String setupJson = objectMapper.writeValueAsString(Map.of(
+                    "type", "SETUP",
+                    "channel", 0,
+                    "version", "0.1-js/1.0.0",
+                    "keepaliveTimeout", 60,
+                    "acceptKeepaliveTimeout", 60
+                ));
+                log.info(">>> Sending: {}", setupJson);
+                wsSession.sendMessage(new TextMessage(setupJson));
+            } catch (Exception e) {
+                log.error("Failed to send initial SETUP", e);
+            }
         }
 
         @Override

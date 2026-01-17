@@ -157,9 +157,8 @@ public class TastyTradeClient {
     }
 
     public String getApiQuoteToken() {
-        if (apiQuoteToken == null) {
-            refreshApiQuoteToken();
-        }
+        // Siempre obtener un token fresco para evitar problemas de expiración
+        refreshApiQuoteToken();
         return apiQuoteToken;
     }
 
