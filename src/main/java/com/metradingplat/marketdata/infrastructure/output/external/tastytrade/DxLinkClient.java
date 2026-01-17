@@ -54,16 +54,30 @@ public class DxLinkClient {
     }
 
     /**
-     * Conecta al WebSocket DxLink.
+     * Conecta al WebSocket DxLink y espera autenticación.
      */
     public void connect(String url, String token) {
         this.apiQuoteToken = token;
+        this.authenticated = false;
         log.info("Connecting to DxLink: {}", url);
 
         try {
             StandardWebSocketClient client = new StandardWebSocketClient();
             this.session = client.execute(new DxLinkHandler(), url).get(10, TimeUnit.SECONDS);
-            log.info("WebSocket connected");
+            log.info("WebSocket connected, waiting for authentication...");
+
+            // Esperar autenticación (máximo 15 segundos)
+            int waitCount = 0;
+            while (!authenticated && waitCount < 150) {
+                Thread.sleep(100);
+                waitCount++;
+            }
+
+            if (authenticated) {
+                log.info("DxLink authenticated and ready");
+            } else {
+                log.warn("DxLink connected but authentication timeout");
+            }
         } catch (Exception e) {
             log.error("Failed to connect to DxLink", e);
             throw new RuntimeException("DxLink connection failed", e);
@@ -72,10 +86,23 @@ public class DxLinkClient {
 
     /**
      * Suscribe a quotes y trades de un símbolo.
+     * Espera hasta que la autenticación esté completa.
      */
     public void subscribe(String symbol) {
+        // Esperar autenticación (máximo 10 segundos)
+        int waitCount = 0;
+        while (!authenticated && waitCount < 100) {
+            try {
+                Thread.sleep(100);
+                waitCount++;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
         if (!authenticated) {
-            log.warn("Not authenticated yet, queuing subscription for: {}", symbol);
+            log.warn("Cannot subscribe - not authenticated after waiting. Queuing: {}", symbol);
             subscribedSymbols.add(symbol);
             return;
         }
@@ -111,8 +138,26 @@ public class DxLinkClient {
 
     /**
      * Suscribe a candles históricos.
+     * Espera hasta que la autenticación esté completa.
      */
     public void subscribeCandles(String symbol, String timeframe, long fromTime) {
+        // Esperar autenticación (máximo 10 segundos)
+        int waitCount = 0;
+        while (!authenticated && waitCount < 100) {
+            try {
+                Thread.sleep(100);
+                waitCount++;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
+        if (!authenticated) {
+            log.warn("Cannot subscribe to candles - not authenticated after waiting");
+            return;
+        }
+
         String candleSymbol = symbol + "{=" + timeframe + "}";
         sendMessage(Map.of(
                 "type", "FEED_SUBSCRIPTION",
