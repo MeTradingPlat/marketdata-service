@@ -292,21 +292,15 @@ public class DxLinkClient {
     }
 
     /**
-     * El servidor envía SETUP primero, luego respondemos con nuestro SETUP
+     * El servidor responde con SETUP después de recibir nuestro SETUP.
+     * Ahora enviamos AUTH con el token.
      */
     private void handleSetup(JsonNode msg) {
-        log.info("Received SETUP from server, sending client SETUP and AUTH");
+        log.info("Received SETUP from server: version={}, keepaliveTimeout={}",
+            msg.path("version").asText(), msg.path("keepaliveTimeout").asInt());
 
-        // Responder con nuestro SETUP
-        sendMessage(Map.of(
-            "type", "SETUP",
-            "channel", 0,
-            "version", "0.1-js/1.0.0",
-            "keepaliveTimeout", 60,
-            "acceptKeepaliveTimeout", 60
-        ));
-
-        // Enviar AUTH inmediatamente después
+        // Enviar AUTH con el token
+        log.info("Sending AUTH with token...");
         sendMessage(Map.of(
             "type", "AUTH",
             "channel", 0,
@@ -545,6 +539,16 @@ public class DxLinkClient {
             log.info("WebSocket connection established - local: {}, remote: {}, protocol: {}",
                 session.getLocalAddress(), session.getRemoteAddress(), session.getAcceptedProtocol());
             log.info("WebSocket attributes: {}", session.getAttributes());
+
+            // El CLIENTE debe enviar SETUP primero según el protocolo dxLink
+            log.info("Sending initial SETUP message to server...");
+            sendMessage(Map.of(
+                "type", "SETUP",
+                "channel", 0,
+                "version", "0.1-js/1.0.0",
+                "keepaliveTimeout", 60,
+                "acceptKeepaliveTimeout", 60
+            ));
         }
 
         @Override
