@@ -740,37 +740,60 @@ public class DxLinkClient {
                 }
                 case "Candle" -> {
                     if (onCandle != null) {
-                        String baseSymbol = symbol.contains("{")
-                            ? symbol.substring(0, symbol.indexOf("{"))
-                            : symbol;
+                        // Formato COMPACT: los datos vienen como array plano con múltiples candles
+                        // Cada candle tiene 8 campos: symbol, time, open, high, low, close, volume, eventFlags
+                        int fieldsPerCandle = 8;
+                        int totalCandles = data.size() / fieldsPerCandle;
 
-                        // eventFlags está en posición 7 (si se solicitó)
-                        // TX_PENDING = 0x01 - transacción pendiente (más datos por venir)
-                        // SNAPSHOT_END = fin del snapshot cuando TX_PENDING no está presente
-                        int eventFlags = data.path(7).asInt(0);
-                        boolean isTxPending = (eventFlags & 0x01) != 0;
+                        log.info("Processing {} candles from COMPACT array (size={})", totalCandles, data.size());
 
-                        Candle candle = Candle.builder()
-                            .symbol(baseSymbol)
-                            .timestamp(Instant.ofEpochMilli(data.path(1).asLong()))
-                            .open(data.path(2).asDouble())
-                            .high(data.path(3).asDouble())
-                            .low(data.path(4).asDouble())
-                            .close(data.path(5).asDouble())
-                            .volume(data.path(6).asDouble())
-                            .build();
+                        boolean lastCandleTxPending = false;
 
-                        candleSnapshotCount.incrementAndGet();
+                        for (int idx = 0; idx < data.size(); idx += fieldsPerCandle) {
+                            String candleSymbol = data.path(idx).asText();
+                            String baseSymbol = candleSymbol.contains("{")
+                                ? candleSymbol.substring(0, candleSymbol.indexOf("{"))
+                                : candleSymbol;
 
-                        log.info("Received candle #{}: {} at {} O={} H={} L={} C={} flags={} txPending={}",
-                            candleSnapshotCount.get(), baseSymbol, candle.getTimestamp(),
-                            candle.getOpen(), candle.getHigh(), candle.getLow(), candle.getClose(),
-                            eventFlags, isTxPending);
+                            long timestamp = data.path(idx + 1).asLong();
+                            double open = data.path(idx + 2).asDouble();
+                            double high = data.path(idx + 3).asDouble();
+                            double low = data.path(idx + 4).asDouble();
+                            double close = data.path(idx + 5).asDouble();
+                            double volume = data.path(idx + 6).asDouble();
+                            int eventFlags = data.path(idx + 7).asInt(0);
 
-                        onCandle.accept(baseSymbol, candle);
+                            // Skip candles with NaN values (incomplete data)
+                            if (Double.isNaN(open) || Double.isNaN(high) || Double.isNaN(low) || Double.isNaN(close)) {
+                                log.debug("Skipping candle with NaN values at index {}", idx);
+                                continue;
+                            }
 
-                        // Si TX_PENDING no está presente, el snapshot terminó
-                        if (!isTxPending && candleSnapshotCount.get() > 0) {
+                            boolean isTxPending = (eventFlags & 0x01) != 0;
+                            lastCandleTxPending = isTxPending;
+
+                            Candle candle = Candle.builder()
+                                .symbol(baseSymbol)
+                                .timestamp(Instant.ofEpochMilli(timestamp))
+                                .open(open)
+                                .high(high)
+                                .low(low)
+                                .close(close)
+                                .volume(volume)
+                                .build();
+
+                            candleSnapshotCount.incrementAndGet();
+
+                            log.info("Received candle #{}: {} at {} O={} H={} L={} C={} V={} flags={} txPending={}",
+                                candleSnapshotCount.get(), baseSymbol, candle.getTimestamp(),
+                                candle.getOpen(), candle.getHigh(), candle.getLow(), candle.getClose(),
+                                candle.getVolume(), eventFlags, isTxPending);
+
+                            onCandle.accept(baseSymbol, candle);
+                        }
+
+                        // Si el último candle no tiene TX_PENDING, el snapshot terminó
+                        if (!lastCandleTxPending && candleSnapshotCount.get() > 0) {
                             candleSnapshotComplete = true;
                             log.info("Candle snapshot complete! Total candles: {}", candleSnapshotCount.get());
                         }
