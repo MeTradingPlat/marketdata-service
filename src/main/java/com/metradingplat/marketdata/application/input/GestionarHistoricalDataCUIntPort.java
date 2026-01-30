@@ -10,5 +10,5 @@ public interface GestionarHistoricalDataCUIntPort {
     List<Candle> getHistoricalMarketData(String symbol, EnumTimeframe timeframe, OffsetDateTime from,
             OffsetDateTime to);
 
-    void saveCandles(List<Candle> candles);
+    Candle getLastCandle(String symbol, EnumTimeframe timeframe);
 }

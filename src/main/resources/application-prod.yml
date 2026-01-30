@@ -1,9 +1,4 @@
 spring:
-  datasource:
-    url: jdbc:postgresql://${DB_HOST:postgres-marketdata}:5432/marketdata
-    username: ${POSTGRES_USER}
-    password: ${POSTGRES_PASSWORD}
-
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:29092}
     consumer:
@@ -12,7 +7,6 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        # Permite deserializar todos los paquetes Java desde JSON (requerido para DTOs)
         spring.json.trusted.packages: "*"
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -25,7 +19,7 @@ eureka:
   instance:
     prefer-ip-address: true
 
-# Logging para producción (temporalmente más verboso para diagnóstico)
+# Logging para producción
 logging:
   level:
     com.metradingplat.marketdata: INFO

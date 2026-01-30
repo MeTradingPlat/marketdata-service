@@ -1,9 +1,4 @@
 spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/marketdata
-    username: postgres
-    password: root
-
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -12,7 +7,6 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        # Permite deserializar todos los paquetes Java desde JSON (requerido para DTOs)
         spring.json.trusted.packages: "*"
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer

@@ -1,11 +1,17 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import com.metradingplat.marketdata.domain.models.ActiveEquity;
+import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
 
@@ -174,5 +180,256 @@ public class TastyTradeClient {
             refreshAccessToken();
         }
         return accessToken;
+    }
+
+    /**
+     * Obtiene equities activos (paginado) desde TastyTrade.
+     * GET /instruments/equities/active?per-page={perPage}&page-offset={pageOffset}
+     */
+    @SuppressWarnings("unchecked")
+    public List<ActiveEquity> getActiveEquities(int pageOffset, int perPage) {
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/instruments/equities/active")
+                            .queryParam("per-page", perPage)
+                            .queryParam("page-offset", pageOffset)
+                            .build())
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response == null || !response.containsKey("data")) {
+                return List.of();
+            }
+
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+            if (items == null) return List.of();
+
+            List<ActiveEquity> equities = new ArrayList<>();
+            for (Map<String, Object> item : items) {
+                equities.add(ActiveEquity.builder()
+                        .symbol((String) item.get("symbol"))
+                        .description((String) item.get("description"))
+                        .listedMarket((String) item.get("listed-market"))
+                        .build());
+            }
+            return equities;
+
+        } catch (Exception e) {
+            log.error("Failed to get active equities: {}", e.getMessage());
+            if (e.getMessage() != null && e.getMessage().contains("401")) {
+                refreshAccessToken();
+                return getActiveEquities(pageOffset, perPage);
+            }
+            return List.of();
+        }
+    }
+
+    /**
+     * Obtiene quote actual via TastyTrade market data.
+     * GET /market-data/by-type?equity={symbol}
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getMarketDataByType(String symbol) {
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/market-data/by-type")
+                            .queryParam("equity", symbol)
+                            .build())
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response == null || !response.containsKey("data")) {
+                return Map.of();
+            }
+            return (Map<String, Object>) response.get("data");
+
+        } catch (Exception e) {
+            log.error("Failed to get market data for {}: {}", symbol, e.getMessage());
+            if (e.getMessage() != null && e.getMessage().contains("401")) {
+                refreshAccessToken();
+                return getMarketDataByType(symbol);
+            }
+            return Map.of();
+        }
+    }
+
+    /**
+     * Obtiene earnings reports historicos.
+     * GET /market-metrics/historic-corporate-events/earnings-reports/{symbol}?start-date={startDate}
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getEarningsReports(String symbol, String startDate) {
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/market-metrics/historic-corporate-events/earnings-reports/{symbol}")
+                            .queryParam("start-date", startDate)
+                            .build(symbol))
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response == null || !response.containsKey("data")) {
+                return List.of();
+            }
+
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+            return items != null ? items : List.of();
+
+        } catch (Exception e) {
+            log.error("Failed to get earnings for {}: {}", symbol, e.getMessage());
+            if (e.getMessage() != null && e.getMessage().contains("401")) {
+                refreshAccessToken();
+                return getEarningsReports(symbol, startDate);
+            }
+            return List.of();
+        }
+    }
+
+    /**
+     * Envía una orden bracket (OTOCO) a TastyTrade.
+     * POST /accounts/{accountNumber}/orders
+     */
+    public OrderResponse submitBracketOrder(BracketOrder order) {
+        log.info("Submitting bracket order: {} {} {} @ entry={} SL={} TP={}",
+                order.getAction(), order.getQuantity(), order.getSymbol(),
+                order.getEntryPrice(), order.getStopLossPrice(), order.getTakeProfitPrice());
+
+        if (accessToken == null) refreshAccessToken();
+
+        // Accion de cierre inversa
+        String closeAction = order.getAction().name().contains("BUY")
+                ? "Sell to Close" : "Buy to Close";
+
+        // Leg de entrada
+        Map<String, Object> entryLeg = Map.of(
+                "instrument-type", "Equity",
+                "symbol", order.getSymbol(),
+                "quantity", order.getQuantity(),
+                "action", order.getAction().name().replace("_", " ")
+        );
+
+        Map<String, Object> entryOrder = Map.of(
+                "time-in-force", order.getTimeInForce() != null ? order.getTimeInForce() : "Day",
+                "order-type", "Limit",
+                "price", order.getEntryPrice().toString(),
+                "legs", new Map[]{entryLeg}
+        );
+
+        // Leg de take profit (LIMIT)
+        Map<String, Object> tpLeg = Map.of(
+                "instrument-type", "Equity",
+                "symbol", order.getSymbol(),
+                "quantity", order.getQuantity(),
+                "action", closeAction
+        );
+
+        Map<String, Object> tpOrder = Map.of(
+                "time-in-force", "GTC",
+                "order-type", "Limit",
+                "price", order.getTakeProfitPrice().toString(),
+                "legs", new Map[]{tpLeg}
+        );
+
+        // Leg de stop loss (STOP)
+        Map<String, Object> slLeg = Map.of(
+                "instrument-type", "Equity",
+                "symbol", order.getSymbol(),
+                "quantity", order.getQuantity(),
+                "action", closeAction
+        );
+
+        Map<String, Object> slOrder = Map.of(
+                "time-in-force", "GTC",
+                "order-type", "Stop",
+                "stop-trigger", order.getStopLossPrice().toString(),
+                "legs", new Map[]{slLeg}
+        );
+
+        // OTOCO: One Triggers One Cancels Other
+        Map<String, Object> otoco = Map.of(
+                "type", "OTOCO",
+                "trigger-order", entryOrder,
+                "orders", new Map[]{tpOrder, slOrder}
+        );
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> response = tastyTradeRestClient
+                    .post()
+                    .uri("/accounts/{accountNumber}/complex-orders", config.getAccountNumber())
+                    .header("Authorization", "Bearer " + accessToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(otoco)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response == null) {
+                throw new RuntimeException("Empty response from bracket order submission");
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+
+            return OrderResponse.builder()
+                    .orderId(String.valueOf(data.get("id")))
+                    .status("RECEIVED")
+                    .complexOrderId(String.valueOf(data.get("id")))
+                    .build();
+
+        } catch (Exception e) {
+            log.error("Bracket order submission failed", e);
+            if (e.getMessage() != null && e.getMessage().contains("401")) {
+                refreshAccessToken();
+                return submitBracketOrder(order);
+            }
+            throw new RuntimeException("Bracket order failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Cancela una orden.
+     * DELETE /accounts/{accountNumber}/orders/{orderId}
+     */
+    public void cancelOrder(String orderId) {
+        log.info("Cancelling order: {}", orderId);
+
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            tastyTradeRestClient
+                    .delete()
+                    .uri("/accounts/{accountNumber}/orders/{orderId}",
+                            config.getAccountNumber(), orderId)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .toBodilessEntity();
+
+            log.info("Order {} cancelled successfully", orderId);
+
+        } catch (Exception e) {
+            log.error("Failed to cancel order {}: {}", orderId, e.getMessage());
+            if (e.getMessage() != null && e.getMessage().contains("401")) {
+                refreshAccessToken();
+                cancelOrder(orderId);
+                return;
+            }
+            throw new RuntimeException("Cancel order failed: " + e.getMessage(), e);
+        }
     }
 }

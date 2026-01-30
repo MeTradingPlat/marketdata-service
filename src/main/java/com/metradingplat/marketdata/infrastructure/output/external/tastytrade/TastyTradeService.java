@@ -5,16 +5,19 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Service;
 
 import com.metradingplat.marketdata.application.output.GestionarChangeNotificationsProducerIntPort;
-import com.metradingplat.marketdata.application.output.GestionarHistoricalDataGatewayIntPort;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
+import com.metradingplat.marketdata.domain.models.ActiveEquity;
+import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
+import com.metradingplat.marketdata.domain.models.OrderResponse;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -23,8 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Servicio interno de TastyTrade.
  * Orquesta TastyTradeClient (REST) y DxLinkClient (WebSocket).
- * No implementa la interfaz directamente - eso lo hace
- * GestionarComunicacionExternalGatewayImplAdapter.
+ * Los datos históricos se obtienen directamente de DxLink sin caché en BD.
  */
 @Service
 @RequiredArgsConstructor
@@ -34,7 +36,6 @@ public class TastyTradeService {
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
-    private final GestionarHistoricalDataGatewayIntPort historicalDataGateway;
 
     @PostConstruct
     public void init() {
@@ -47,16 +48,14 @@ public class TastyTradeService {
             kafkaProducer.publishMarketData(data);
         });
 
-        // Configurar callback para candles → guardar en BD
+        // Configurar callback para candles (solo logging, no se guarda en BD)
         dxLinkClient.setOnCandle((symbol, candle) -> {
             log.debug("Candle received for {}: {} O={} H={} L={} C={}",
                     symbol, candle.getTimestamp(), candle.getOpen(),
                     candle.getHigh(), candle.getLow(), candle.getClose());
-            historicalDataGateway.saveCandles(List.of(candle));
         });
 
         // Configurar token refresher para auto-reconexión
-        // Esto permite que DxLinkClient obtenga un token fresco cuando reconecta
         dxLinkClient.setTokenRefresher(() -> {
             log.info("Token refresher called - obtaining fresh API quote token");
             return tastyTradeClient.getApiQuoteToken();
@@ -72,7 +71,6 @@ public class TastyTradeService {
             log.info("TastyTrade service initialized successfully");
         } catch (Exception e) {
             log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
-            // El DxLinkClient ahora maneja reconexión automáticamente
             log.info("DxLinkClient will attempt auto-reconnection");
         }
     }
@@ -94,20 +92,12 @@ public class TastyTradeService {
         dxLinkClient.unsubscribe(symbol);
     }
 
+    /**
+     * Obtiene candles históricos directamente de DxLink.
+     * No hay caché en BD, siempre se consulta DxLink.
+     */
     public List<Candle> getCandles(String symbol, EnumTimeframe timeframe, OffsetDateTime from, OffsetDateTime to) {
         log.info("Fetching candles for {} {} from {} to {}", symbol, timeframe, from, to);
-
-        // Primero buscar en BD
-        long count = historicalDataGateway.countData(symbol, timeframe, from, to);
-        long expected = calculateExpectedCandles(timeframe, from, to);
-
-        if (count >= expected * 0.95) {
-            log.info("Returning {} candles from database", count);
-            return historicalDataGateway.getHistoricalData(symbol, timeframe, from, to);
-        }
-
-        // Si no hay suficientes, obtener de DxLink
-        log.info("Insufficient data in DB ({}/{}), fetching from DxLink", count, expected);
         return fetchCandlesFromDxLink(symbol, timeframe, from, to);
     }
 
@@ -115,7 +105,7 @@ public class TastyTradeService {
             OffsetDateTime from, OffsetDateTime to) {
         ensureConnected();
 
-        // Usar Set con comparador por timestamp para evitar duplicados
+        // Usar Set para evitar duplicados
         Set<CandleKey> seenCandles = ConcurrentHashMap.newKeySet();
         List<Candle> receivedCandles = new ArrayList<>();
 
@@ -123,10 +113,9 @@ public class TastyTradeService {
         dxLinkClient.setOnCandle((sym, candle) -> {
             log.debug("Candle callback: sym={}, symbol={}, match={}", sym, symbol, sym.equals(symbol));
             if (sym.equals(symbol) || sym.startsWith(symbol)) {
-                candle.setSymbol(symbol); // Normalizar el símbolo
+                candle.setSymbol(symbol);
                 candle.setTimeframe(timeframe);
 
-                // Evitar duplicados por timestamp
                 CandleKey key = new CandleKey(symbol, timeframe, candle.getTimestamp());
                 if (seenCandles.add(key)) {
                     synchronized (receivedCandles) {
@@ -149,7 +138,7 @@ public class TastyTradeService {
             symbol, tf, fromTime, from);
         dxLinkClient.subscribeCandles(symbol, tf, fromTime);
 
-        // Esperar hasta que el snapshot esté completo O timeout (máximo 30 segundos)
+        // Esperar hasta que el snapshot esté completo O timeout
         int waitSeconds = 0;
         int maxWaitSeconds = 30;
         int noNewCandlesCount = 0;
@@ -166,13 +155,11 @@ public class TastyTradeService {
                 log.info("Waiting for candles... {}s elapsed, {} candles received, snapshotComplete={}",
                     waitSeconds, currentCount, snapshotComplete);
 
-                // Si el snapshot está completo, terminar
                 if (snapshotComplete) {
                     log.info("Snapshot complete signal received after {}s", waitSeconds);
                     break;
                 }
 
-                // Si no llegan más candles en 3 segundos consecutivos, considerar terminado
                 if (currentCount > 0 && currentCount == lastCount) {
                     noNewCandlesCount++;
                     if (noNewCandlesCount >= 3) {
@@ -193,31 +180,42 @@ public class TastyTradeService {
         // Desuscribir de candles
         dxLinkClient.unsubscribeCandles(symbol, tf);
 
-        // Restaurar callback original
+        // Restaurar callback por defecto (solo logging)
         dxLinkClient.setOnCandle((sym, candle) -> {
-            historicalDataGateway.saveCandles(List.of(candle));
+            log.debug("Candle received for {}: {} O={} H={} L={} C={}",
+                    sym, candle.getTimestamp(), candle.getOpen(),
+                    candle.getHigh(), candle.getLow(), candle.getClose());
         });
 
         log.info("Finished waiting after {}s. Received {} unique candles from DxLink for {}",
             waitSeconds, receivedCandles.size(), symbol);
 
-        // Guardar candles únicos en BD
-        if (!receivedCandles.isEmpty()) {
-            // Ordenar por timestamp antes de guardar
-            receivedCandles.sort(Comparator.comparing(Candle::getTimestamp));
-            historicalDataGateway.saveCandles(receivedCandles);
-        }
-
-        // Devolver lo que hay en BD (incluye los que acabamos de guardar)
-        List<Candle> dbCandles = historicalDataGateway.getHistoricalData(symbol, timeframe, from, to);
-        log.info("Returning {} candles from database for {}", dbCandles.size(), symbol);
-        return dbCandles;
+        // Ordenar por timestamp y devolver
+        receivedCandles.sort(Comparator.comparing(Candle::getTimestamp));
+        return receivedCandles;
     }
 
-    /**
-     * Clave única para identificar un candle y evitar duplicados.
-     */
     private record CandleKey(String symbol, EnumTimeframe timeframe, Instant timestamp) {}
+
+    public List<ActiveEquity> getActiveEquities(int pageOffset, int perPage) {
+        return tastyTradeClient.getActiveEquities(pageOffset, perPage);
+    }
+
+    public Map<String, Object> getMarketDataByType(String symbol) {
+        return tastyTradeClient.getMarketDataByType(symbol);
+    }
+
+    public List<Map<String, Object>> getEarningsReports(String symbol, String startDate) {
+        return tastyTradeClient.getEarningsReports(symbol, startDate);
+    }
+
+    public OrderResponse sendBracketOrder(BracketOrder order) {
+        return tastyTradeClient.submitBracketOrder(order);
+    }
+
+    public void cancelOrder(String orderId) {
+        tastyTradeClient.cancelOrder(orderId);
+    }
 
     private void ensureConnected() {
         if (!dxLinkClient.isConnected()) {
@@ -226,19 +224,5 @@ public class TastyTradeService {
             String url = tastyTradeClient.getDxlinkUrl();
             dxLinkClient.connect(url, token);
         }
-    }
-
-    private long calculateExpectedCandles(EnumTimeframe timeframe, OffsetDateTime from, OffsetDateTime to) {
-        long minutes = java.time.Duration.between(from, to).toMinutes();
-        return switch (timeframe) {
-            case M1 -> minutes;
-            case M5 -> minutes / 5;
-            case M15 -> minutes / 15;
-            case M30 -> minutes / 30;
-            case H1 -> minutes / 60;
-            case D1 -> java.time.Duration.between(from, to).toDays();
-            case W1 -> java.time.Duration.between(from, to).toDays() / 7;
-            case MO1 -> java.time.Duration.between(from, to).toDays() / 30;
-        };
     }
 }

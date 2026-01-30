@@ -28,7 +28,8 @@ public class KafkaProducerAdapter implements GestionarChangeNotificationsProduce
 
     @Override
     public void publishMarketData(MarketDataStreamDTO data) {
-        // Log is too verbose for stream, maybe trace
+        log.debug("Publishing market data to Kafka: symbol={}, bid={}, ask={}, last={}",
+                data.getSymbol(), data.getBid(), data.getAsk(), data.getLastPrice());
         kafkaTemplate.send(MARKETDATA_STREAM_TOPIC, data.getSymbol(), data);
     }
 }

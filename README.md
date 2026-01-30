@@ -1,278 +1,204 @@
 # MarketData Service
 
-Microservicio de gestión de datos de mercado con integración a TastyTrade DxLink WebSocket para datos en tiempo real y órdenes.
+Microservicio de datos de mercado con integracion a TastyTrade (OAuth 2.0, DxLink WebSocket, REST API para ordenes).
 
----
+## Arquitectura
 
-## Arquitectura del Sistema
+```mermaid
+graph TB
+    subgraph Input["Input Adapters"]
+        KC[Kafka Consumers<br/>orders.commands<br/>marketdata.commands]
+        REST[REST Controllers<br/>Historical, Markets, Quote<br/>Earnings, Orders]
+    end
 
-Este servicio forma parte de la arquitectura de microservicios de MetradingPlat:
+    subgraph UseCases["Use Cases"]
+        UCOrders[GestionarOrdersCU]
+        UCRealTime[GestionarRealTimeCU]
+        UCHistorical[GestionarHistoricalDataCU]
+        UCMercados[GestionarMercadosCU]
+        UCQuote[GestionarQuoteCU]
+        UCEarnings[GestionarEarningsCU]
+    end
 
-- **Directory (Eureka)**: Servicio de descubrimiento en puerto 8761
-- **Gateway**: API Gateway en puerto 8080
-- **MarketData Service**: Este servicio en puerto 8082
+    subgraph Output["Output Adapters"]
+        Gateway[GestionarComunicacionExternalGateway]
+        KP[Kafka Producer<br/>marketdata.stream<br/>orders.updates]
+        DB[(PostgreSQL<br/>Historical Cache)]
+    end
 
-El servicio se registra automáticamente en Eureka y solo acepta peticiones que pasen por el Gateway (header `X-Gateway-Passed`).
+    subgraph TastyTrade["TastyTrade Integration"]
+        Facade[TastyTradeFacade]
+        Auth[TastyTradeAuthClient<br/>OAuth 2.0]
+        RestClient[TastyTradeRestClient<br/>Orders + Instruments]
+        DxLink[DxLink WebSocket<br/>Real-time streaming]
+    end
 
----
+    KC --> UCOrders & UCRealTime
+    REST --> UCHistorical & UCMercados & UCQuote & UCEarnings
 
-## Requisitos Previos
+    UCOrders & UCRealTime & UCHistorical --> Gateway
+    UCMercados & UCQuote & UCEarnings --> Gateway
+    Gateway --> Facade
 
-- **Java 21** (JDK 21.0.9 o superior)
-- **Maven 3.9+** (incluido via wrapper `mvnw.cmd`)
-- **PostgreSQL** (Docker en producción)
-- **Apache Kafka** (Docker en producción)
-- **Credenciales de TastyTrade** (OAuth 2.0)
-
----
-
-## Desarrollo Local
-
-### 1. Configurar Variables de Entorno
-
-Para desarrollo local, configura las siguientes variables de entorno en tu sistema:
-
-```bash
-# Windows (PowerShell)
-$env:TT_CLIENT_ID="tu_client_id"
-$env:TT_CLIENT_SECRET="tu_client_secret"
-$env:TT_REFRESH_TOKEN="tu_refresh_token"
-$env:TASTYTRADE_ACCOUNT_NUMBER="tu_numero_cuenta"
-
-# Linux/Mac
-export TT_CLIENT_ID="tu_client_id"
-export TT_CLIENT_SECRET="tu_client_secret"
-export TT_REFRESH_TOKEN="tu_refresh_token"
-export TASTYTRADE_ACCOUNT_NUMBER="tu_numero_cuenta"
+    Facade --> Auth & RestClient & DxLink
+    DxLink --> KP & DB
+    UCOrders --> KP
 ```
 
-### 2. Iniciar Servicios de Infraestructura
+## Flujo Real-Time
 
-Asegúrate de tener corriendo:
-- **Directory (Eureka)** en `localhost:8761`
-- **PostgreSQL** en `localhost:5432`
-- **Kafka** en `localhost:9092`
+```mermaid
+sequenceDiagram
+    participant K as Kafka (commands)
+    participant UC as GestionarRealTimeCU
+    participant F as TastyTradeFacade
+    participant WS as DxLink WebSocket
+    participant KP as Kafka (stream)
 
-### 3. Compilar el Proyecto
+    K->>UC: SUBSCRIBE AAPL
+    UC->>F: subscribe("AAPL")
+    F->>WS: FEED_SUBSCRIPTION Quote + Trade
+    loop Streaming
+        WS-->>F: FEED_DATA (Quote/Trade)
+        F-->>KP: marketdata.stream
+    end
+```
+
+## Flujo Historical Candles
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant UC as GestionarHistoricalDataCU
+    participant DB as PostgreSQL
+    participant F as TastyTradeFacade
+    participant WS as DxLink WebSocket
+
+    C->>UC: GET /historical/AAPL?timeframe=M5
+    UC->>DB: countData(AAPL, M5, from, to)
+    alt Cache incompleto
+        UC->>F: getCandles(AAPL, M5, from, to)
+        F->>WS: FEED_SUBSCRIPTION Candle
+        WS-->>F: FEED_DATA (candles)
+        F->>DB: saveCandles()
+    end
+    DB-->>UC: List<Candle>
+    UC-->>C: JSON response
+```
+
+## Flujo Bracket Order (OTOCO)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant UC as GestionarOrdersCU
+    participant F as TastyTradeFacade
+    participant TT as TastyTrade REST
+
+    C->>UC: POST /orders (bracket)
+    UC->>F: sendBracketOrder()
+    F->>TT: POST /accounts/{id}/complex-orders
+    Note over TT: OTOCO: Entry + StopLoss + TakeProfit
+    TT-->>F: 201 Created
+    F-->>UC: OrderResponse
+    UC-->>C: {orderId, status}
+```
+
+## REST API
+
+| Metodo | Endpoint | Descripcion |
+|--------|----------|-------------|
+| GET | `/api/marketdata/historical/{symbol}` | Candles historicos (`?timeframe=M5&from=...&to=...`) |
+| GET | `/api/marketdata/markets` | Mercados disponibles (NYSE, NASDAQ, AMEX, ETF, OTC) |
+| GET | `/api/marketdata/symbols` | Simbolos por mercado (`?markets=NYSE,NASDAQ`) |
+| GET | `/api/marketdata/quote/{symbol}` | Quote actual (bid, ask, last, halt status) |
+| GET | `/api/marketdata/earnings/{symbol}` | Proximo earnings report |
+| POST | `/api/marketdata/orders` | Enviar orden bracket (OTOCO) |
+| DELETE | `/api/marketdata/orders/{orderId}` | Cancelar orden |
+
+## Kafka Topics
+
+| Topic | Direccion | Payload |
+|-------|-----------|---------|
+| `orders.commands` | IN | `{symbol, action, quantity, type, price, stopLossPrice, takeProfitPrice}` |
+| `marketdata.commands` | IN | `{symbol, action: SUBSCRIBE/UNSUBSCRIBE}` |
+| `orders.updates` | OUT | `{orderId, status, receivedAt}` |
+| `marketdata.stream` | OUT | `{symbol, lastPrice, bid, ask, volume, timestamp}` |
+
+## Stack
+
+| Componente | Tecnologia |
+|------------|------------|
+| Runtime | Java 21 + Spring Boot 3.5.9 |
+| Base de datos | PostgreSQL |
+| Mensajeria | Apache Kafka |
+| WebSocket | DxLink (TastyTrade) |
+| Mapping | MapStruct 1.6.3 |
+| Auth | OAuth 2.0 (refresh_token) |
+| Service Discovery | Eureka |
+
+## Configuracion
+
+### Variables de entorno requeridas
 
 ```bash
-# Windows
+TT_CLIENT_ID=...
+TT_CLIENT_SECRET=...
+TT_REFRESH_TOKEN=...
+TASTYTRADE_ACCOUNT_NUMBER=...
+DXLINK_URL=wss://tasty.dxfeed.com/realtime  # produccion
+```
+
+### Perfiles
+
+- **dev**: PostgreSQL localhost:5432, Kafka localhost:9092, Eureka localhost:8761
+- **prod**: PostgreSQL Docker, Kafka Docker, Eureka Docker
+
+### Compilar y ejecutar
+
+```bash
 mvnw.cmd clean compile -DskipTests
-
-# Linux/Mac
-./mvnw clean compile -DskipTests
-```
-
-### 4. Ejecutar el Servicio
-
-```bash
-# Windows
 mvnw.cmd spring-boot:run
-
-# Linux/Mac
-./mvnw spring-boot:run
 ```
 
-El servicio iniciará en el puerto 8082 y se registrará en Eureka.
+El servicio inicia en puerto 8082 y se registra en Eureka. Solo acepta peticiones a traves del Gateway (puerto 8080, header `X-Gateway-Passed`).
 
----
+## Arquitectura Hexagonal
 
-## Despliegue en Producción (GitHub Actions)
+```mermaid
+graph LR
+    subgraph Input["Input (Driving)"]
+        R[REST Controllers]
+        K[Kafka Listeners]
+    end
 
-El servicio usa GitHub Actions para CI/CD automatizado.
+    subgraph Application["Application"]
+        IP[Input Ports<br/>CUIntPort]
+    end
 
-### GitHub Secrets Requeridos
+    subgraph Domain["Domain"]
+        UC[Use Cases<br/>CUAdapter]
+        M[Models]
+    end
 
-Configura los siguientes secrets en tu repositorio u organización de GitHub:
+    subgraph AppOut["Application"]
+        OP[Output Ports<br/>GatewayIntPort]
+    end
 
-| Secret | Descripción |
-|--------|-------------|
-| `DOCKER_USERNAME` | Usuario de DockerHub |
-| `DOCKER_PASSWORD` | Password de DockerHub |
-| `POSTGRES_PASSWORD` | Password de PostgreSQL |
-| `TT_CLIENT_ID` | TastyTrade OAuth Client ID |
-| `TT_CLIENT_SECRET` | TastyTrade OAuth Client Secret |
-| `TT_REFRESH_TOKEN` | TastyTrade OAuth Refresh Token |
-| `TASTYTRADE_ACCOUNT_NUMBER` | Número de cuenta TastyTrade |
-| `DXLINK_URL` | URL del WebSocket DxLink |
+    subgraph Output["Output (Driven)"]
+        GW[Gateway Adapter]
+        KP[Kafka Producer]
+        DB[(PostgreSQL)]
+    end
 
-### Workflows
-
-- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): Se ejecuta en cada push a `master`. Compila el proyecto y publica la imagen Docker.
-
-- **CD** ([.github/workflows/cd.yml](.github/workflows/cd.yml)): Se ejecuta automáticamente después de CI exitoso. Despliega en el servidor self-hosted con toda la infraestructura (Kafka, PostgreSQL).
-
-### Infraestructura Desplegada
-
-El CD workflow despliega automáticamente:
-
-| Contenedor | Puerto | Red |
-|------------|--------|-----|
-| `zookeeper` | 2181 | metradingplat-network |
-| `kafka` | 9092 | metradingplat-network |
-| `postgres-marketdata` | 5434 | metradingplat-network |
-| `marketdata-service` | 8082 | metradingplat-network |
-
----
-
-## Configuración
-
-### Perfiles Disponibles
-
-- **dev**: Desarrollo local
-  - PostgreSQL: `localhost:5432`
-  - Kafka: `localhost:9092`
-  - Eureka: `localhost:8761`
-
-- **prod**: Producción (Docker)
-  - PostgreSQL: `postgres-marketdata:5432`
-  - Kafka: `kafka:29092`
-  - Eureka: `directory:8761`
-
-### Variables de Entorno
-
-| Variable | Descripción | Default |
-|----------|-------------|---------|
-| `TT_CLIENT_ID` | TastyTrade OAuth Client ID | Requerido |
-| `TT_CLIENT_SECRET` | TastyTrade OAuth Client Secret | Requerido |
-| `TT_REFRESH_TOKEN` | TastyTrade OAuth Refresh Token | Requerido |
-| `TASTYTRADE_ACCOUNT_NUMBER` | Número de cuenta TastyTrade | Requerido |
-| `DXLINK_URL` | URL del WebSocket DxLink | `wss://tasty.dxfeed.com/realtime` |
-| `DB_HOST` | Host PostgreSQL | `localhost` |
-| `POSTGRES_USER` | Usuario PostgreSQL | `user_marketdata` |
-| `POSTGRES_PASSWORD` | Password PostgreSQL | Requerido en prod |
-| `KAFKA_BOOTSTRAP_SERVERS` | Servidores Kafka | `localhost:9092` |
-| `EUREKA_HOST` | Host de Eureka | `localhost` |
-
----
-
-## Arquitectura Interna
-
-### Componentes Principales
-
-1. **TastyTrade Integration**
-   - OAuth 2.0 Authentication
-   - DxLink WebSocket para datos en tiempo real
-   - REST API para envío de órdenes
-
-2. **Gateway Header Filter**
-   - Bloquea peticiones que no pasen por el Gateway
-   - Requiere header `X-Gateway-Passed: true`
-
-3. **Kafka Listeners**
-   - `orders.commands` - Recibe comandos de órdenes
-   - `marketdata.commands` - Recibe comandos de suscripción
-   - `orders.updates` - Publica actualizaciones de órdenes
-   - `marketdata.stream` - Publica datos en tiempo real
-
-4. **REST API**
-   - `GET /api/marketdata/historical/{symbol}` - Candles históricos
-
-5. **PostgreSQL**
-   - Caché de datos históricos
-   - Persistencia de candles
-
-### Flujo de Datos
-
-```
-Kafka (commands) → Use Cases → TastyTrade Facade
-                                    ↓
-                    ┌───────────────┴───────────────┐
-                    ↓                               ↓
-            DxLink WebSocket                  REST API Client
-            (Real-time data)                  (Orders)
-                    ↓                               ↓
-            Event Handlers ──────────────→ Kafka Producer
-                    ↓                               ↓
-                PostgreSQL                   orders.updates
-                    ↓
-            marketdata.stream
+    R & K --> IP --> UC
+    UC --> M
+    UC --> OP --> GW & KP & DB
 ```
 
----
+## Seguridad
 
-## Topics de Kafka
-
-### INPUT (Consumers)
-
-- `orders.commands` - Comandos de órdenes
-  ```json
-  {
-    "symbol": "AAPL",
-    "action": "BUY_TO_OPEN",
-    "quantity": 10,
-    "type": "LIMIT",
-    "price": 178.0
-  }
-  ```
-
-- `marketdata.commands` - Comandos de suscripción
-  ```json
-  {
-    "symbol": "AAPL",
-    "action": "SUBSCRIBE"
-  }
-  ```
-
-### OUTPUT (Producers)
-
-- `orders.updates` - Actualizaciones de órdenes
-  ```json
-  {
-    "orderId": "123456",
-    "status": "Received",
-    "receivedAt": "2026-01-12T10:30:00Z"
-  }
-  ```
-
-- `marketdata.stream` - Datos en tiempo real
-  ```json
-  {
-    "symbol": "AAPL",
-    "lastPrice": 178.45,
-    "bid": 178.44,
-    "ask": 178.46,
-    "volume": 1500,
-    "timestamp": "2026-01-12T10:30:45.123Z"
-  }
-  ```
-
----
-
-## Troubleshooting
-
-### Error: "OAuth authentication failed"
-- Verifica que las variables de entorno estén configuradas correctamente
-- En producción, verifica los GitHub Secrets
-
-### Error: "Connection refused" (Kafka)
-- En desarrollo: Verifica que Kafka esté corriendo localmente
-- En producción: El CD workflow inicia Kafka automáticamente
-
-### Error: "Access denied: Request must pass through API Gateway"
-- Las peticiones deben pasar por el Gateway en puerto 8080
-- El Gateway agrega el header `X-Gateway-Passed: true`
-
-### Error: "WebSocket disconnected"
-- El token se renueva automáticamente cada 15 minutos
-- Verifica los logs para más detalles
-
----
-
-## Features
-
-- OAuth 2.0 Authentication con TastyTrade
-- WebSocket persistente con DxLink
-- Auto-renovación de tokens
-- Suscripción a datos en tiempo real (Quote, Trade, Candle)
-- Envío de órdenes con validación dry-run
-- Caché inteligente en PostgreSQL
-- Publicación a Kafka en tiempo real
-- CI/CD automatizado con GitHub Actions
-- Despliegue containerizado con Docker
-- Integración con Eureka para service discovery
-- Filtro de seguridad Gateway-only
-
----
-
-**Desarrollado para MetradingPlat**
+- **Tokens**: Access token (15 min) + API quote token (24h), renovacion automatica
+- **Thread-safety**: ConcurrentHashMap + ReadWriteLock en suscripciones, volatile + synchronized en tokens
+- **Reconexion**: Backoff exponencial 1s -> 60s max, keepalive cada 30s, restore de suscripciones post-reconexion
+- **Gateway filter**: Solo acepta requests con header `X-Gateway-Passed: true`

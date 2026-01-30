@@ -4,9 +4,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.metradingplat.marketdata.application.output.GestionarComunicacionExternalGatewayIntPort;
-import com.metradingplat.marketdata.application.output.GestionarHistoricalDataGatewayIntPort;
+import com.metradingplat.marketdata.domain.usecases.GestionarEarningsCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarHistoricalDataCUAdapter;
+import com.metradingplat.marketdata.domain.usecases.GestionarMercadosCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarOrdersCUAdapter;
+import com.metradingplat.marketdata.domain.usecases.GestionarQuoteCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarRealTimeCUAdapter;
 
 @Configuration
@@ -14,9 +16,8 @@ public class BeanConfigurations {
 
     @Bean
     public GestionarHistoricalDataCUAdapter gestionarHistoricalDataCUIntPort(
-            GestionarHistoricalDataGatewayIntPort objObtenerHistoricalDataGateway,
             GestionarComunicacionExternalGatewayIntPort objExternalGateway) {
-        return new GestionarHistoricalDataCUAdapter(objObtenerHistoricalDataGateway, objExternalGateway);
+        return new GestionarHistoricalDataCUAdapter(objExternalGateway);
     }
 
     @Bean
@@ -29,5 +30,23 @@ public class BeanConfigurations {
     public GestionarRealTimeCUAdapter gestionarRealTimeCUIntPort(
             GestionarComunicacionExternalGatewayIntPort objGestionarComunicacionExterna) {
         return new GestionarRealTimeCUAdapter(objGestionarComunicacionExterna);
+    }
+
+    @Bean
+    public GestionarMercadosCUAdapter gestionarMercadosCUIntPort(
+            GestionarComunicacionExternalGatewayIntPort objExternalGateway) {
+        return new GestionarMercadosCUAdapter(objExternalGateway);
+    }
+
+    @Bean
+    public GestionarQuoteCUAdapter gestionarQuoteCUIntPort(
+            GestionarComunicacionExternalGatewayIntPort objExternalGateway) {
+        return new GestionarQuoteCUAdapter(objExternalGateway);
+    }
+
+    @Bean
+    public GestionarEarningsCUAdapter gestionarEarningsCUIntPort(
+            GestionarComunicacionExternalGatewayIntPort objExternalGateway) {
+        return new GestionarEarningsCUAdapter(objExternalGateway);
     }
 }

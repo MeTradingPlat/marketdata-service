@@ -513,9 +513,10 @@ public class DxLinkClient {
         return Map.of(
             "connected", isConnected(),
             "authenticated", authenticated,
-            "channelReady", channelReady,
+            "channelOpened", channelReady,
             "feedConfigured", feedConfigured,
-            "subscribedSymbols", subscribedSymbols.size(),
+            "activeSubscriptions", subscribedSymbols.size(),
+            "subscribedSymbolsList", List.copyOf(subscribedSymbols),
             "reconnectAttempts", reconnectAttempts.get(),
             "reconnecting", reconnecting.get()
         );
@@ -717,25 +718,36 @@ public class DxLinkClient {
 
             switch (eventType) {
                 case "Quote" -> {
+                    double bid = data.path(1).asDouble();
+                    double ask = data.path(2).asDouble();
+                    log.info("Quote received for {}: bid={}, ask={}", symbol, bid, ask);
                     if (onMarketData != null) {
                         MarketDataStreamDTO dto = MarketDataStreamDTO.builder()
                             .symbol(symbol)
-                            .bid(data.path(1).asDouble())
-                            .ask(data.path(2).asDouble())
+                            .bid(bid)
+                            .ask(ask)
                             .timestamp(Instant.now())
                             .build();
                         onMarketData.accept(symbol, dto);
+                    } else {
+                        log.warn("Quote received but onMarketData callback is null!");
                     }
                 }
                 case "Trade" -> {
+                    double price = data.path(1).asDouble();
+                    long volume = data.path(2).asLong();
+                    long time = data.path(3).asLong();
+                    log.info("Trade received for {}: price={}, volume={}, time={}", symbol, price, volume, time);
                     if (onMarketData != null) {
                         MarketDataStreamDTO dto = MarketDataStreamDTO.builder()
                             .symbol(symbol)
-                            .lastPrice(data.path(1).asDouble())
-                            .volume(data.path(2).asLong())
-                            .timestamp(Instant.ofEpochMilli(data.path(3).asLong()))
+                            .lastPrice(price)
+                            .volume(volume)
+                            .timestamp(Instant.ofEpochMilli(time))
                             .build();
                         onMarketData.accept(symbol, dto);
+                    } else {
+                        log.warn("Trade received but onMarketData callback is null!");
                     }
                 }
                 case "Candle" -> {

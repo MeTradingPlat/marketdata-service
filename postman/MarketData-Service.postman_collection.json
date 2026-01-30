@@ -1,0 +1,407 @@
+{
+	"info": {
+		"name": "MarketData Service",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://metradingplat.com/api/marketdata"
+		}
+	],
+	"item": [
+		{
+			"name": "Markets",
+			"item": [
+				{
+					"name": "Listar mercados disponibles",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/markets",
+							"host": ["{{baseUrl}}"],
+							"path": ["markets"]
+						}
+					}
+				},
+				{
+					"name": "Simbolos por mercado (NYSE)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/symbols?markets=NYSE",
+							"host": ["{{baseUrl}}"],
+							"path": ["symbols"],
+							"query": [
+								{
+									"key": "markets",
+									"value": "NYSE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Simbolos por mercado (NASDAQ)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/symbols?markets=NASDAQ",
+							"host": ["{{baseUrl}}"],
+							"path": ["symbols"],
+							"query": [
+								{
+									"key": "markets",
+									"value": "NASDAQ"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Simbolos por multiples mercados",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/symbols?markets=NYSE,NASDAQ",
+							"host": ["{{baseUrl}}"],
+							"path": ["symbols"],
+							"query": [
+								{
+									"key": "markets",
+									"value": "NYSE,NASDAQ"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Historical Data",
+			"item": [
+				{
+					"name": "Candles historicos AAPL (M5)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/AAPL?timeframe=M5&from=2026-01-29T14:30:00Z&to=2026-01-29T21:00:00Z",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "AAPL"],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M5"
+								},
+								{
+									"key": "from",
+									"value": "2026-01-29T14:30:00Z"
+								},
+								{
+									"key": "to",
+									"value": "2026-01-29T21:00:00Z"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Candles historicos SPY (M1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/SPY?timeframe=M1&from=2026-01-29T14:30:00Z&to=2026-01-29T15:30:00Z",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "SPY"],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M1"
+								},
+								{
+									"key": "from",
+									"value": "2026-01-29T14:30:00Z"
+								},
+								{
+									"key": "to",
+									"value": "2026-01-29T15:30:00Z"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Candles historicos TSLA (H1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/TSLA?timeframe=H1&from=2026-01-27T14:30:00Z&to=2026-01-29T21:00:00Z",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "TSLA"],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "H1"
+								},
+								{
+									"key": "from",
+									"value": "2026-01-27T14:30:00Z"
+								},
+								{
+									"key": "to",
+									"value": "2026-01-29T21:00:00Z"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Candles historicos MSFT (D1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/MSFT?timeframe=D1&from=2026-01-01T00:00:00Z&to=2026-01-30T00:00:00Z",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "MSFT"],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "D1"
+								},
+								{
+									"key": "from",
+									"value": "2026-01-01T00:00:00Z"
+								},
+								{
+									"key": "to",
+									"value": "2026-01-30T00:00:00Z"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Ultima barra AAPL (M5)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/AAPL/last?timeframe=M5",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "AAPL", "last"],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M5"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Ultima barra SPY (M1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/SPY/last?timeframe=M1",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "SPY", "last"],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M1"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Ultima barra TSLA (H1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/TSLA/last?timeframe=H1",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "TSLA", "last"],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "H1"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Ultima barra MSFT (D1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/MSFT/last?timeframe=D1",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "MSFT", "last"],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "D1"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Quote",
+			"item": [
+				{
+					"name": "Quote AAPL",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/quote/AAPL",
+							"host": ["{{baseUrl}}"],
+							"path": ["quote", "AAPL"]
+						}
+					}
+				},
+				{
+					"name": "Quote SPY",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/quote/SPY",
+							"host": ["{{baseUrl}}"],
+							"path": ["quote", "SPY"]
+						}
+					}
+				},
+				{
+					"name": "Quote TSLA",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/quote/TSLA",
+							"host": ["{{baseUrl}}"],
+							"path": ["quote", "TSLA"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Earnings",
+			"item": [
+				{
+					"name": "Earnings AAPL",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/earnings/AAPL",
+							"host": ["{{baseUrl}}"],
+							"path": ["earnings", "AAPL"]
+						}
+					}
+				},
+				{
+					"name": "Earnings TSLA",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/earnings/TSLA",
+							"host": ["{{baseUrl}}"],
+							"path": ["earnings", "TSLA"]
+						}
+					}
+				},
+				{
+					"name": "Earnings MSFT",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/earnings/MSFT",
+							"host": ["{{baseUrl}}"],
+							"path": ["earnings", "MSFT"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Orders",
+			"item": [
+				{
+					"name": "Enviar orden bracket (BUY)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbol\": \"AAPL\",\n  \"action\": \"BUY_TO_OPEN\",\n  \"quantity\": 1,\n  \"entryPrice\": 230.00,\n  \"stopLossPrice\": 225.00,\n  \"takeProfitPrice\": 240.00\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/orders",
+							"host": ["{{baseUrl}}"],
+							"path": ["orders"]
+						}
+					}
+				},
+				{
+					"name": "Enviar orden bracket (SELL)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbol\": \"SPY\",\n  \"action\": \"SELL_TO_OPEN\",\n  \"quantity\": 5,\n  \"entryPrice\": 600.00,\n  \"stopLossPrice\": 605.00,\n  \"takeProfitPrice\": 590.00\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/orders",
+							"host": ["{{baseUrl}}"],
+							"path": ["orders"]
+						}
+					}
+				},
+				{
+					"name": "Cancelar orden",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/orders/{{orderId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["orders", "{{orderId}}"]
+						}
+					}
+				}
+			]
+		}
+	]
+}
