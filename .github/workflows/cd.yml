@@ -83,9 +83,6 @@ jobs:
           df -h
           echo "--- CLEANING SHARED BASE IMAGES ---"
           docker image rm -f eclipse-temurin:21-jdk eclipse-temurin:21-jre-alpine || true
-          echo "--- CLEANING SERVICE METADATA ---"
-          docker rm -f marketdata-service || true
-          docker image rm -f virtud142/metradingplat_marketdata_service:latest || true
 
       - name: Pull Application Image (with Retry Logic)
         run: |
