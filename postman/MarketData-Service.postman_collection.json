@@ -1,14 +1,9 @@
 {
 	"info": {
+		"_postman_id": "a93c5d82-849c-4e89-9154-123456789abc",
 		"name": "MarketData Service",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
-	"variable": [
-		{
-			"key": "baseUrl",
-			"value": "https://metradingplat.com/api/marketdata"
-		}
-	],
 	"item": [
 		{
 			"name": "Markets",
@@ -20,10 +15,15 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/markets",
-							"host": ["{{baseUrl}}"],
-							"path": ["markets"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"markets"
+							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Simbolos por mercado (NYSE)",
@@ -32,8 +32,12 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/symbols?markets=NYSE",
-							"host": ["{{baseUrl}}"],
-							"path": ["symbols"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"symbols"
+							],
 							"query": [
 								{
 									"key": "markets",
@@ -41,7 +45,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Simbolos por mercado (NASDAQ)",
@@ -50,8 +55,12 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/symbols?markets=NASDAQ",
-							"host": ["{{baseUrl}}"],
-							"path": ["symbols"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"symbols"
+							],
 							"query": [
 								{
 									"key": "markets",
@@ -59,7 +68,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Simbolos por multiples mercados",
@@ -68,8 +78,12 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/symbols?markets=NYSE,NASDAQ",
-							"host": ["{{baseUrl}}"],
-							"path": ["symbols"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"symbols"
+							],
 							"query": [
 								{
 									"key": "markets",
@@ -77,7 +91,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				}
 			]
 		},
@@ -91,8 +106,13 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/historical/AAPL?timeframe=M5&from=2026-01-29T14:30:00Z&to=2026-01-29T21:00:00Z",
-							"host": ["{{baseUrl}}"],
-							"path": ["historical", "AAPL"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"AAPL"
+							],
 							"query": [
 								{
 									"key": "timeframe",
@@ -108,7 +128,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Candles historicos SPY (M1)",
@@ -117,8 +138,13 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/historical/SPY?timeframe=M1&from=2026-01-29T14:30:00Z&to=2026-01-29T15:30:00Z",
-							"host": ["{{baseUrl}}"],
-							"path": ["historical", "SPY"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"SPY"
+							],
 							"query": [
 								{
 									"key": "timeframe",
@@ -134,7 +160,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Candles historicos TSLA (H1)",
@@ -143,8 +170,13 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/historical/TSLA?timeframe=H1&from=2026-01-27T14:30:00Z&to=2026-01-29T21:00:00Z",
-							"host": ["{{baseUrl}}"],
-							"path": ["historical", "TSLA"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"TSLA"
+							],
 							"query": [
 								{
 									"key": "timeframe",
@@ -160,7 +192,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Candles historicos MSFT (D1)",
@@ -169,8 +202,13 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/historical/MSFT?timeframe=D1&from=2026-01-01T00:00:00Z&to=2026-01-30T00:00:00Z",
-							"host": ["{{baseUrl}}"],
-							"path": ["historical", "MSFT"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"MSFT"
+							],
 							"query": [
 								{
 									"key": "timeframe",
@@ -186,7 +224,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Ultima barra AAPL (M5)",
@@ -195,8 +234,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/historical/AAPL/last?timeframe=M5",
-							"host": ["{{baseUrl}}"],
-							"path": ["historical", "AAPL", "last"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"AAPL",
+								"last"
+							],
 							"query": [
 								{
 									"key": "timeframe",
@@ -204,7 +249,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Ultima barra SPY (M1)",
@@ -213,8 +259,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/historical/SPY/last?timeframe=M1",
-							"host": ["{{baseUrl}}"],
-							"path": ["historical", "SPY", "last"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"SPY",
+								"last"
+							],
 							"query": [
 								{
 									"key": "timeframe",
@@ -222,7 +274,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Ultima barra TSLA (H1)",
@@ -231,8 +284,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/historical/TSLA/last?timeframe=H1",
-							"host": ["{{baseUrl}}"],
-							"path": ["historical", "TSLA", "last"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"TSLA",
+								"last"
+							],
 							"query": [
 								{
 									"key": "timeframe",
@@ -240,7 +299,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Ultima barra MSFT (D1)",
@@ -249,8 +309,14 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/historical/MSFT/last?timeframe=D1",
-							"host": ["{{baseUrl}}"],
-							"path": ["historical", "MSFT", "last"],
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"MSFT",
+								"last"
+							],
 							"query": [
 								{
 									"key": "timeframe",
@@ -258,7 +324,8 @@
 								}
 							]
 						}
-					}
+					},
+					"response": []
 				}
 			]
 		},
@@ -272,10 +339,16 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/quote/AAPL",
-							"host": ["{{baseUrl}}"],
-							"path": ["quote", "AAPL"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"quote",
+								"AAPL"
+							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Quote SPY",
@@ -284,10 +357,16 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/quote/SPY",
-							"host": ["{{baseUrl}}"],
-							"path": ["quote", "SPY"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"quote",
+								"SPY"
+							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Quote TSLA",
@@ -296,10 +375,16 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/quote/TSLA",
-							"host": ["{{baseUrl}}"],
-							"path": ["quote", "TSLA"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"quote",
+								"TSLA"
+							]
 						}
-					}
+					},
+					"response": []
 				}
 			]
 		},
@@ -313,10 +398,16 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/earnings/AAPL",
-							"host": ["{{baseUrl}}"],
-							"path": ["earnings", "AAPL"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"earnings",
+								"AAPL"
+							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Earnings TSLA",
@@ -325,10 +416,16 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/earnings/TSLA",
-							"host": ["{{baseUrl}}"],
-							"path": ["earnings", "TSLA"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"earnings",
+								"TSLA"
+							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Earnings MSFT",
@@ -337,10 +434,16 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/earnings/MSFT",
-							"host": ["{{baseUrl}}"],
-							"path": ["earnings", "MSFT"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"earnings",
+								"MSFT"
+							]
 						}
-					}
+					},
+					"response": []
 				}
 			]
 		},
@@ -363,10 +466,15 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/orders",
-							"host": ["{{baseUrl}}"],
-							"path": ["orders"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"orders"
+							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Enviar orden bracket (SELL)",
@@ -384,10 +492,15 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/orders",
-							"host": ["{{baseUrl}}"],
-							"path": ["orders"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"orders"
+							]
 						}
-					}
+					},
+					"response": []
 				},
 				{
 					"name": "Cancelar orden",
@@ -396,12 +509,24 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/orders/{{orderId}}",
-							"host": ["{{baseUrl}}"],
-							"path": ["orders", "{{orderId}}"]
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"orders",
+								"{{orderId}}"
+							]
 						}
-					}
+					},
+					"response": []
 				}
 			]
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://metradingplat.com/api/marketdata"
 		}
 	]
 }
