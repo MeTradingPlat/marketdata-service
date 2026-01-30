@@ -14,6 +14,7 @@ import com.metradingplat.marketdata.application.output.GestionarComunicacionExte
 import com.metradingplat.marketdata.domain.enums.EnumMercado;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -38,19 +39,22 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
     public List<ActiveEquity> obtenerSimbolosPorMercados(List<String> markets) {
         cargarEquitiesSiNecesario();
 
-        Set<String> marketFilter = markets != null && !markets.isEmpty()
+        Set<String> userMarkets = markets != null && !markets.isEmpty()
                 ? markets.stream().map(String::toUpperCase).collect(Collectors.toSet())
                 : Set.of();
 
-        if (marketFilter.isEmpty()) {
+        if (userMarkets.isEmpty()) {
             return new ArrayList<>(cachedEquities);
         }
 
-        log.info("Filtrando equities por mercados: {}, total en cache: {}", marketFilter, cachedEquities.size());
+        // Convert user-facing codes (NYSE, NASDAQ) to TastyTrade MIC codes (XNYS, XNAS)
+        Set<String> micFilter = EnumMercado.toMicCodes(userMarkets);
+
+        log.info("Filtrando equities por mercados: {} -> MIC codes: {}, total en cache: {}", userMarkets, micFilter, cachedEquities.size());
 
         return cachedEquities.stream()
                 .filter(eq -> eq.getListedMarket() != null
-                        && marketFilter.contains(eq.getListedMarket().toUpperCase()))
+                        && micFilter.contains(eq.getListedMarket().toUpperCase()))
                 .collect(Collectors.toList());
     }
 
