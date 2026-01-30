@@ -18,22 +18,16 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class GestionarEarningsCUAdapter implements GestionarEarningsCUIntPort {
 
-    private static final int QUARTERLY_DAYS = 91;
+    private static final int EARNINGS_ANNOUNCEMENT_OFFSET = 35;
 
     private final GestionarComunicacionExternalGatewayIntPort objExternalGateway;
 
     @Override
     public EarningsReport obtenerProximoEarnings(String symbol) {
         LocalDate today = LocalDate.now();
-        // TastyTrade solo tiene earnings historicos, buscar ultimo año
-        String startDate = today.minusYears(1).toString();
+        String startDate = today.minusYears(2).toString();
 
         List<Map<String, Object>> reports = this.objExternalGateway.getEarningsReports(symbol, startDate);
-
-        // Debug: ver estructura raw de la respuesta
-        if (!reports.isEmpty()) {
-            log.info("Earnings raw response for {} (first item keys): {}", symbol, reports.get(0));
-        }
 
         if (reports.isEmpty()) {
             log.warn("No earnings reports found for {}", symbol);
@@ -43,45 +37,58 @@ public class GestionarEarningsCUAdapter implements GestionarEarningsCUIntPort {
                     .build();
         }
 
-        // Encontrar el earnings mas reciente (fecha mas cercana a hoy)
-        Optional<LocalDate> lastEarningsOpt = reports.stream()
-                .map(r -> (String) r.get("occurred-date"))
-                .filter(d -> d != null)
-                .map(LocalDate::parse)
-                .filter(d -> !d.isAfter(today))
-                .max(Comparator.naturalOrder());
+        // TastyTrade devuelve occurred-date = fin de trimestre fiscal, eps = null si aun no reportado
+        // Buscar el ultimo trimestre CON eps (ya reportado)
+        Optional<Map<String, Object>> lastReportedOpt = reports.stream()
+                .filter(r -> r.get("occurred-date") != null && r.get("eps") != null)
+                .max(Comparator.comparing(r -> LocalDate.parse((String) r.get("occurred-date"))));
 
-        if (lastEarningsOpt.isEmpty()) {
-            return EarningsReport.builder()
-                    .symbol(symbol)
-                    .daysUntilEarnings(-1L)
-                    .build();
-        }
+        // Buscar el primer trimestre SIN eps (proximo earnings pendiente)
+        Optional<Map<String, Object>> nextPendingOpt = reports.stream()
+                .filter(r -> r.get("occurred-date") != null && r.get("eps") == null)
+                .min(Comparator.comparing(r -> LocalDate.parse((String) r.get("occurred-date"))));
 
-        LocalDate lastEarnings = lastEarningsOpt.get();
-
-        // Obtener EPS del ultimo earnings
         Double eps = null;
-        for (Map<String, Object> report : reports) {
-            String dateStr = (String) report.get("occurred-date");
-            if (dateStr != null && LocalDate.parse(dateStr).equals(lastEarnings)) {
-                Object epsObj = report.get("eps");
-                if (epsObj instanceof Number) {
-                    eps = ((Number) epsObj).doubleValue();
+        LocalDate lastReportedDate = null;
+
+        if (lastReportedOpt.isPresent()) {
+            Map<String, Object> lastReported = lastReportedOpt.get();
+            lastReportedDate = LocalDate.parse((String) lastReported.get("occurred-date"));
+            Object epsObj = lastReported.get("eps");
+            if (epsObj instanceof Number) {
+                eps = ((Number) epsObj).doubleValue();
+            } else if (epsObj instanceof String) {
+                try {
+                    eps = Double.parseDouble((String) epsObj);
+                } catch (NumberFormatException e) {
+                    log.warn("Could not parse eps value: {}", epsObj);
                 }
-                break;
             }
         }
 
-        // Estimar proximo earnings: ~91 dias despues del ultimo
-        LocalDate estimatedNext = lastEarnings.plusDays(QUARTERLY_DAYS);
-        long daysUntil = ChronoUnit.DAYS.between(today, estimatedNext);
-
-        log.info("Earnings {}: ultimo={}, estimado proximo={}, dias={}", symbol, lastEarnings, estimatedNext, daysUntil);
+        // Calcular daysUntilEarnings
+        long daysUntil;
+        if (nextPendingOpt.isPresent()) {
+            // Hay un trimestre pendiente: earnings se anuncian ~35 dias despues del fin del trimestre
+            LocalDate pendingQuarterEnd = LocalDate.parse((String) nextPendingOpt.get().get("occurred-date"));
+            LocalDate estimatedAnnouncement = pendingQuarterEnd.plusDays(EARNINGS_ANNOUNCEMENT_OFFSET);
+            daysUntil = ChronoUnit.DAYS.between(today, estimatedAnnouncement);
+            log.info("Earnings {}: ultimo reportado={} eps={}, pendiente trimestre={}, anuncio estimado={}, dias={}",
+                    symbol, lastReportedDate, eps, pendingQuarterEnd, estimatedAnnouncement, daysUntil);
+        } else if (lastReportedDate != null) {
+            // Todos reportados, estimar siguiente trimestre
+            LocalDate nextQuarterEnd = lastReportedDate.plusMonths(3);
+            LocalDate estimatedAnnouncement = nextQuarterEnd.plusDays(EARNINGS_ANNOUNCEMENT_OFFSET);
+            daysUntil = ChronoUnit.DAYS.between(today, estimatedAnnouncement);
+            log.info("Earnings {}: ultimo reportado={} eps={}, estimado proximo anuncio={}, dias={}",
+                    symbol, lastReportedDate, eps, estimatedAnnouncement, daysUntil);
+        } else {
+            daysUntil = -1L;
+        }
 
         return EarningsReport.builder()
                 .symbol(symbol)
-                .occurredDate(lastEarnings)
+                .occurredDate(lastReportedDate)
                 .eps(eps)
                 .daysUntilEarnings(daysUntil)
                 .build();
