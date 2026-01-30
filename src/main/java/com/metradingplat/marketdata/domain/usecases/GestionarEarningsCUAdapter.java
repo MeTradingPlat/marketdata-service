@@ -30,6 +30,11 @@ public class GestionarEarningsCUAdapter implements GestionarEarningsCUIntPort {
 
         List<Map<String, Object>> reports = this.objExternalGateway.getEarningsReports(symbol, startDate);
 
+        // Debug: ver estructura raw de la respuesta
+        if (!reports.isEmpty()) {
+            log.info("Earnings raw response for {} (first item keys): {}", symbol, reports.get(0));
+        }
+
         if (reports.isEmpty()) {
             log.warn("No earnings reports found for {}", symbol);
             return EarningsReport.builder()
