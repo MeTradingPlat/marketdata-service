@@ -132,8 +132,9 @@ public class TastyTradeService {
         // Resetear estado del snapshot y suscribir a candles históricos
         dxLinkClient.resetCandleSnapshot();
         String tf = timeframe.getLabel();
-        long fromTime = 0L; // DxLink siempre retorna ~700 candles desde ahora hacia atras
-        log.info("Subscribing to candles: symbol={}, timeframe={}", symbol, tf);
+        // Calcular fromTime: ~800 barras hacia atras para cubrir las ~700 que DxLink envia
+        long fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(800)).toEpochMilli();
+        log.info("Subscribing to candles: symbol={}, timeframe={}, fromTime={}", symbol, tf, Instant.ofEpochMilli(fromTime));
         dxLinkClient.subscribeCandles(symbol, tf, fromTime);
 
         // Esperar hasta que el snapshot esté completo O timeout
