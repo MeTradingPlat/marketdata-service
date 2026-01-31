@@ -1,6 +1,5 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -44,17 +43,16 @@ public class TastyTradeClient {
                 "grant_type", "refresh_token",
                 "refresh_token", config.getRefreshToken(),
                 "client_id", config.getClientId(),
-                "client_secret", config.getClientSecret()
-        );
+                "client_secret", config.getClientSecret());
 
-        @SuppressWarnings("unchecked")
         Map<String, Object> response = tastyTradeRestClient
                 .post()
                 .uri("/oauth/token")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(request)
                 .retrieve()
-                .body(Map.class);
+                .body(new ParameterizedTypeReference<Map<String, Object>>() {
+                });
 
         if (response == null || !response.containsKey("access_token")) {
             throw new RuntimeException("Failed to get access token from TastyTrade");
@@ -83,7 +81,6 @@ public class TastyTradeClient {
             refreshAccessToken();
         }
 
-        @SuppressWarnings("unchecked")
         Map<String, Object> response;
         try {
             response = tastyTradeRestClient
@@ -91,7 +88,8 @@ public class TastyTradeClient {
                     .uri("/api-quote-tokens")
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
-                    .body(Map.class);
+                    .body(new ParameterizedTypeReference<Map<String, Object>>() {
+                    });
         } catch (Exception e) {
             if (e.getMessage() != null && e.getMessage().contains("401")) {
                 log.info("Access token expired while getting quote token, refreshing...");
@@ -101,7 +99,8 @@ public class TastyTradeClient {
                         .uri("/api-quote-tokens")
                         .header("Authorization", "Bearer " + accessToken)
                         .retrieve()
-                        .body(Map.class);
+                        .body(new ParameterizedTypeReference<Map<String, Object>>() {
+                        });
             } else {
                 throw e;
             }
@@ -119,7 +118,7 @@ public class TastyTradeClient {
         this.dxlinkUrl = (String) data.get("dxlink-url");
 
         log.info("API quote token obtained (length={}), DxLink URL: {}",
-            apiQuoteToken != null ? apiQuoteToken.length() : 0, dxlinkUrl);
+                apiQuoteToken != null ? apiQuoteToken.length() : 0, dxlinkUrl);
         return this.apiQuoteToken;
     }
 
@@ -139,15 +138,13 @@ public class TastyTradeClient {
                 "instrument-type", "Equity",
                 "symbol", order.getSymbol(),
                 "quantity", order.getQuantity(),
-                "action", order.getAction().name()
-        );
+                "action", order.getAction().name());
 
         Map<String, Object> orderBody = Map.of(
                 "time-in-force", "Day",
                 "order-type", order.getType().name(),
                 "price", order.getPrice() != null ? order.getPrice().toString() : "0",
-                "legs", new Map[]{leg}
-        );
+                "legs", new Map[] { leg });
 
         try {
             @SuppressWarnings("unchecked")
@@ -212,7 +209,8 @@ public class TastyTradeClient {
      */
     @SuppressWarnings("unchecked")
     public List<ActiveEquity> getActiveEquities(int pageOffset, int perPage) {
-        if (accessToken == null) refreshAccessToken();
+        if (accessToken == null)
+            refreshAccessToken();
 
         try {
             Map<String, Object> response = tastyTradeRestClient
@@ -232,7 +230,8 @@ public class TastyTradeClient {
 
             Map<String, Object> data = (Map<String, Object>) response.get("data");
             List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
-            if (items == null) return List.of();
+            if (items == null)
+                return List.of();
 
             List<ActiveEquity> equities = new ArrayList<>();
             for (Map<String, Object> item : items) {
@@ -260,7 +259,8 @@ public class TastyTradeClient {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> getMarketDataByType(String symbol) {
-        if (accessToken == null) refreshAccessToken();
+        if (accessToken == null)
+            refreshAccessToken();
 
         try {
             Map<String, Object> response = tastyTradeRestClient
@@ -290,11 +290,13 @@ public class TastyTradeClient {
 
     /**
      * Obtiene earnings reports historicos.
-     * GET /market-metrics/historic-corporate-events/earnings-reports/{symbol}?start-date={startDate}
+     * GET
+     * /market-metrics/historic-corporate-events/earnings-reports/{symbol}?start-date={startDate}
      */
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getEarningsReports(String symbol, String startDate) {
-        if (accessToken == null) refreshAccessToken();
+        if (accessToken == null)
+            refreshAccessToken();
 
         try {
             Map<String, Object> response = tastyTradeRestClient
@@ -334,63 +336,58 @@ public class TastyTradeClient {
                 order.getAction(), order.getQuantity(), order.getSymbol(),
                 order.getEntryPrice(), order.getStopLossPrice(), order.getTakeProfitPrice());
 
-        if (accessToken == null) refreshAccessToken();
+        if (accessToken == null)
+            refreshAccessToken();
 
         // Accion de cierre inversa
         String closeAction = order.getAction().name().contains("BUY")
-                ? "Sell to Close" : "Buy to Close";
+                ? "Sell to Close"
+                : "Buy to Close";
 
         // Leg de entrada
         Map<String, Object> entryLeg = Map.of(
                 "instrument-type", "Equity",
                 "symbol", order.getSymbol(),
                 "quantity", order.getQuantity(),
-                "action", order.getAction().name().replace("_", " ")
-        );
+                "action", order.getAction().name().replace("_", " "));
 
         Map<String, Object> entryOrder = Map.of(
                 "time-in-force", order.getTimeInForce() != null ? order.getTimeInForce() : "Day",
                 "order-type", "Limit",
                 "price", order.getEntryPrice().toString(),
-                "legs", new Map[]{entryLeg}
-        );
+                "legs", new Map[] { entryLeg });
 
         // Leg de take profit (LIMIT)
         Map<String, Object> tpLeg = Map.of(
                 "instrument-type", "Equity",
                 "symbol", order.getSymbol(),
                 "quantity", order.getQuantity(),
-                "action", closeAction
-        );
+                "action", closeAction);
 
         Map<String, Object> tpOrder = Map.of(
                 "time-in-force", "GTC",
                 "order-type", "Limit",
                 "price", order.getTakeProfitPrice().toString(),
-                "legs", new Map[]{tpLeg}
-        );
+                "legs", new Map[] { tpLeg });
 
         // Leg de stop loss (STOP)
         Map<String, Object> slLeg = Map.of(
                 "instrument-type", "Equity",
                 "symbol", order.getSymbol(),
                 "quantity", order.getQuantity(),
-                "action", closeAction
-        );
+                "action", closeAction);
 
         Map<String, Object> slOrder = Map.of(
                 "time-in-force", "GTC",
                 "order-type", "Stop",
                 "stop-trigger", order.getStopLossPrice().toString(),
-                "legs", new Map[]{slLeg}
-        );
+                "legs", new Map[] { slLeg });
 
         // OTOCO: One Triggers One Cancels Other
         Map<String, Object> otoco = Map.of(
                 "type", "OTOCO",
                 "trigger-order", entryOrder,
-                "orders", new Map[]{tpOrder, slOrder}
-        );
+                "orders", new Map[] { tpOrder, slOrder });
 
         try {
             @SuppressWarnings("unchecked")
@@ -433,7 +430,8 @@ public class TastyTradeClient {
     public void cancelOrder(String orderId) {
         log.info("Cancelling order: {}", orderId);
 
-        if (accessToken == null) refreshAccessToken();
+        if (accessToken == null)
+            refreshAccessToken();
 
         try {
             tastyTradeRestClient

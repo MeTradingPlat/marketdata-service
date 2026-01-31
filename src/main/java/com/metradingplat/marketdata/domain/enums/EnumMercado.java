@@ -1,9 +1,7 @@
 package com.metradingplat.marketdata.domain.enums;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -20,14 +18,6 @@ public enum EnumMercado {
     private final String code;
     private final String name;
     private final List<String> micCodes;
-
-    private static final Map<String, EnumMercado> MIC_TO_MARKET;
-
-    static {
-        MIC_TO_MARKET = Arrays.stream(values())
-                .flatMap(m -> m.micCodes.stream().map(mic -> Map.entry(mic, m)))
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-    }
 
     EnumMercado(String code, String name, List<String> micCodes) {
         this.code = code;
