@@ -540,6 +540,8 @@ public class DxLinkClient {
         }
     }
 
+    private final Object sendLock = new Object();
+
     private void sendMessage(Object message) {
         try {
             if (session == null || !session.isOpen()) {
@@ -548,7 +550,9 @@ public class DxLinkClient {
             }
             String json = objectMapper.writeValueAsString(message);
             log.info(">>> Sending: {}", json);
-            session.sendMessage(new TextMessage(json));
+            synchronized (sendLock) {
+                session.sendMessage(new TextMessage(json));
+            }
         } catch (Exception e) {
             log.error("Failed to send message", e);
         }
