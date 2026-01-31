@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 
@@ -200,9 +201,21 @@ public class TastyTradeService {
         log.info("Finished waiting after {}s. Received {} unique candles from DxLink for {}",
             waitSeconds, receivedCandles.size(), symbol);
 
-        // Ordenar por timestamp y devolver
-        receivedCandles.sort(Comparator.comparing(Candle::getTimestamp));
-        return receivedCandles;
+        // Filtrar por rango [from, to] y ordenar por timestamp
+        Instant fromInstant = from.toInstant();
+        Instant toInstant = to.toInstant();
+
+        List<Candle> filtered;
+        synchronized (receivedCandles) {
+            filtered = receivedCandles.stream()
+                .filter(c -> !c.getTimestamp().isBefore(fromInstant) && !c.getTimestamp().isAfter(toInstant))
+                .sorted(Comparator.comparing(Candle::getTimestamp))
+                .collect(Collectors.toList());
+        }
+
+        log.info("Filtered candles for {} from {} to {}: {} of {} total",
+            symbol, from, to, filtered.size(), receivedCandles.size());
+        return filtered;
     }
 
     private record CandleKey(String symbol, EnumTimeframe timeframe, Instant timestamp) {}
