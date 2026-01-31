@@ -31,17 +31,15 @@ public class HistoricalDataRestController {
     private final HistoricalDataMapper objMapper;
 
     @GetMapping("/{symbol}")
-    public ResponseEntity<List<CandleDTORespuesta>> getHistoricalData(
+    public ResponseEntity<List<CandleDTORespuesta>> getCandles(
             @PathVariable("symbol") @NotNull String symbol,
             @RequestParam("timeframe") @NotNull EnumTimeframe timeframe,
-            @RequestParam("from") @NotNull @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime from,
-            @RequestParam("to") @NotNull @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime to) {
+            @RequestParam(value = "endDate", required = false)
+                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime endDate,
+            @RequestParam(value = "bars", required = false) Integer bars) {
 
-        List<Candle> candles = this.objGestionarHistoricalDataCUInt.getHistoricalMarketData(symbol, timeframe, from,
-                to);
-        List<CandleDTORespuesta> respuesta = this.objMapper.deDominioARespuestas(candles);
-
-        return ResponseEntity.ok(respuesta);
+        List<Candle> candles = this.objGestionarHistoricalDataCUInt.getCandles(symbol, timeframe, endDate, bars);
+        return ResponseEntity.ok(this.objMapper.deDominioARespuestas(candles));
     }
 
     @GetMapping("/{symbol}/last")

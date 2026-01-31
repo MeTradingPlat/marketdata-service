@@ -1,7 +1,6 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -95,15 +94,14 @@ public class TastyTradeService {
 
     /**
      * Obtiene candles históricos directamente de DxLink.
-     * No hay caché en BD, siempre se consulta DxLink.
+     * Retorna todas las candles que DxLink envía (~700 max), ordenadas por timestamp ascendente.
      */
-    public List<Candle> getCandles(String symbol, EnumTimeframe timeframe, OffsetDateTime from, OffsetDateTime to) {
-        log.info("Fetching candles for {} {} from {} to {}", symbol, timeframe, from, to);
-        return fetchCandlesFromDxLink(symbol, timeframe, from, to);
+    public List<Candle> getCandles(String symbol, EnumTimeframe timeframe) {
+        log.info("Fetching candles for {} {}", symbol, timeframe);
+        return fetchCandlesFromDxLink(symbol, timeframe);
     }
 
-    private List<Candle> fetchCandlesFromDxLink(String symbol, EnumTimeframe timeframe,
-            OffsetDateTime from, OffsetDateTime to) {
+    private List<Candle> fetchCandlesFromDxLink(String symbol, EnumTimeframe timeframe) {
         ensureConnected();
 
         // Usar Set para evitar duplicados
@@ -134,9 +132,8 @@ public class TastyTradeService {
         // Resetear estado del snapshot y suscribir a candles históricos
         dxLinkClient.resetCandleSnapshot();
         String tf = timeframe.getLabel();
-        long fromTime = from.toInstant().toEpochMilli();
-        log.info("Subscribing to candles: symbol={}, timeframe={}, fromTime={} ({})",
-            symbol, tf, fromTime, from);
+        long fromTime = 0L; // DxLink siempre retorna ~700 candles desde ahora hacia atras
+        log.info("Subscribing to candles: symbol={}, timeframe={}", symbol, tf);
         dxLinkClient.subscribeCandles(symbol, tf, fromTime);
 
         // Esperar hasta que el snapshot esté completo O timeout
@@ -201,21 +198,16 @@ public class TastyTradeService {
         log.info("Finished waiting after {}s. Received {} unique candles from DxLink for {}",
             waitSeconds, receivedCandles.size(), symbol);
 
-        // Filtrar por rango [from, to] y ordenar por timestamp
-        Instant fromInstant = from.toInstant();
-        Instant toInstant = to.toInstant();
-
-        List<Candle> filtered;
+        // Ordenar por timestamp ascendente
+        List<Candle> sorted;
         synchronized (receivedCandles) {
-            filtered = receivedCandles.stream()
-                .filter(c -> !c.getTimestamp().isBefore(fromInstant) && !c.getTimestamp().isAfter(toInstant))
+            sorted = receivedCandles.stream()
                 .sorted(Comparator.comparing(Candle::getTimestamp))
                 .collect(Collectors.toList());
         }
 
-        log.info("Filtered candles for {} from {} to {}: {} of {} total",
-            symbol, from, to, filtered.size(), receivedCandles.size());
-        return filtered;
+        log.info("Returning {} candles for {} {}", sorted.size(), symbol, timeframe);
+        return sorted;
     }
 
     private record CandleKey(String symbol, EnumTimeframe timeframe, Instant timestamp) {}

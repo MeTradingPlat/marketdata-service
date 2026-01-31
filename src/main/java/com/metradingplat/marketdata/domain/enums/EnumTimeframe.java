@@ -1,5 +1,7 @@
 package com.metradingplat.marketdata.domain.enums;
 
+import java.time.Duration;
+
 import lombok.Getter;
 
 @Getter
@@ -19,5 +21,18 @@ public enum EnumTimeframe {
     EnumTimeframe(String label, String dxLinkFormat) {
         this.label = label;
         this.dxLinkFormat = dxLinkFormat;
+    }
+
+    public Duration getDuration() {
+        return switch (this) {
+            case M1  -> Duration.ofMinutes(1);
+            case M5  -> Duration.ofMinutes(5);
+            case M15 -> Duration.ofMinutes(15);
+            case M30 -> Duration.ofMinutes(30);
+            case H1  -> Duration.ofHours(1);
+            case D1  -> Duration.ofDays(1);
+            case W1  -> Duration.ofDays(7);
+            case MO1 -> Duration.ofDays(30);
+        };
     }
 }

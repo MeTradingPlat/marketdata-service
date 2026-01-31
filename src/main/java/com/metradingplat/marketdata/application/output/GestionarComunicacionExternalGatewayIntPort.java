@@ -1,6 +1,5 @@
 package com.metradingplat.marketdata.application.output;
 
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -22,7 +21,7 @@ public interface GestionarComunicacionExternalGatewayIntPort {
 
     void unsubscribe(String symbol);
 
-    List<Candle> getCandles(String symbol, EnumTimeframe timeframe, OffsetDateTime from, OffsetDateTime to);
+    List<Candle> getCandles(String symbol, EnumTimeframe timeframe);
 
     List<ActiveEquity> getActiveEquities(int pageOffset, int perPage);
 

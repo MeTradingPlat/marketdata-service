@@ -1,6 +1,5 @@
 package com.metradingplat.marketdata.infrastructure.output.external.gateway;
 
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -56,9 +55,9 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
     }
 
     @Override
-    public List<Candle> getCandles(String symbol, EnumTimeframe timeframe, OffsetDateTime from, OffsetDateTime to) {
-        log.info("Gateway: Fetching candles for symbol: {} from {} to {}", symbol, from, to);
-        return tastyTradeService.getCandles(symbol, timeframe, from, to);
+    public List<Candle> getCandles(String symbol, EnumTimeframe timeframe) {
+        log.info("Gateway: Fetching candles for symbol: {} timeframe: {}", symbol, timeframe);
+        return tastyTradeService.getCandles(symbol, timeframe);
     }
 
     @Override

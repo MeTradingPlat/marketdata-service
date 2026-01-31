@@ -100,12 +100,36 @@
 			"name": "Historical Data",
 			"item": [
 				{
-					"name": "Candles historicos AAPL (M5)",
+					"name": "Todas las barras AAPL (M5)",
 					"request": {
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/historical/AAPL?timeframe=M5&from=2026-01-29T14:30:00Z&to=2026-01-29T21:00:00Z",
+							"raw": "{{baseUrl}}/historical/AAPL?timeframe=M5",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"AAPL"
+							],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M5"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Ultimas 100 barras AAPL (M5)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/AAPL?timeframe=M5&bars=100",
 							"host": [
 								"{{baseUrl}}"
 							],
@@ -119,12 +143,8 @@
 									"value": "M5"
 								},
 								{
-									"key": "from",
-									"value": "2026-01-29T14:30:00Z"
-								},
-								{
-									"key": "to",
-									"value": "2026-01-29T21:00:00Z"
+									"key": "bars",
+									"value": "100"
 								}
 							]
 						}
@@ -132,12 +152,12 @@
 					"response": []
 				},
 				{
-					"name": "Candles historicos SPY (M1)",
+					"name": "15 barras de minuto SPY",
 					"request": {
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/historical/SPY?timeframe=M1&from=2026-01-29T14:30:00Z&to=2026-01-29T15:30:00Z",
+							"raw": "{{baseUrl}}/historical/SPY?timeframe=M1&bars=15",
 							"host": [
 								"{{baseUrl}}"
 							],
@@ -151,12 +171,8 @@
 									"value": "M1"
 								},
 								{
-									"key": "from",
-									"value": "2026-01-29T14:30:00Z"
-								},
-								{
-									"key": "to",
-									"value": "2026-01-29T15:30:00Z"
+									"key": "bars",
+									"value": "15"
 								}
 							]
 						}
@@ -164,12 +180,12 @@
 					"response": []
 				},
 				{
-					"name": "Candles historicos TSLA (H1)",
+					"name": "Barras antes de fecha TSLA (H1)",
 					"request": {
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/historical/TSLA?timeframe=H1&from=2026-01-27T14:30:00Z&to=2026-01-29T21:00:00Z",
+							"raw": "{{baseUrl}}/historical/TSLA?timeframe=H1&endDate=2026-01-30T18:00:00Z&bars=50",
 							"host": [
 								"{{baseUrl}}"
 							],
@@ -183,12 +199,12 @@
 									"value": "H1"
 								},
 								{
-									"key": "from",
-									"value": "2026-01-27T14:30:00Z"
+									"key": "endDate",
+									"value": "2026-01-30T18:00:00Z"
 								},
 								{
-									"key": "to",
-									"value": "2026-01-29T21:00:00Z"
+									"key": "bars",
+									"value": "50"
 								}
 							]
 						}
@@ -196,12 +212,12 @@
 					"response": []
 				},
 				{
-					"name": "Candles historicos MSFT (D1)",
+					"name": "Todas las barras MSFT (D1)",
 					"request": {
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/historical/MSFT?timeframe=D1&from=2026-01-01T00:00:00Z&to=2026-01-30T00:00:00Z",
+							"raw": "{{baseUrl}}/historical/MSFT?timeframe=D1",
 							"host": [
 								"{{baseUrl}}"
 							],
@@ -213,14 +229,6 @@
 								{
 									"key": "timeframe",
 									"value": "D1"
-								},
-								{
-									"key": "from",
-									"value": "2026-01-01T00:00:00Z"
-								},
-								{
-									"key": "to",
-									"value": "2026-01-30T00:00:00Z"
 								}
 							]
 						}

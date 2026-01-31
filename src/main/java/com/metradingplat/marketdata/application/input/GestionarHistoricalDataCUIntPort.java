@@ -7,8 +7,7 @@ import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.Candle;
 
 public interface GestionarHistoricalDataCUIntPort {
-    List<Candle> getHistoricalMarketData(String symbol, EnumTimeframe timeframe, OffsetDateTime from,
-            OffsetDateTime to);
+    List<Candle> getCandles(String symbol, EnumTimeframe timeframe, OffsetDateTime endDate, Integer bars);
 
     Candle getLastCandle(String symbol, EnumTimeframe timeframe);
 }
