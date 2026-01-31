@@ -61,6 +61,14 @@ public class TastyTradeClient {
         }
 
         this.accessToken = (String) response.get("access_token");
+
+        // Guardar el nuevo refresh_token para que no expire
+        if (response.containsKey("refresh_token")) {
+            String newRefreshToken = (String) response.get("refresh_token");
+            config.setRefreshToken(newRefreshToken);
+            log.info("Refresh token updated successfully");
+        }
+
         log.info("Access token obtained, expires in {} seconds", response.get("expires_in"));
         return this.accessToken;
     }
@@ -76,12 +84,28 @@ public class TastyTradeClient {
         }
 
         @SuppressWarnings("unchecked")
-        Map<String, Object> response = tastyTradeRestClient
-                .get()
-                .uri("/api-quote-tokens")
-                .header("Authorization", "Bearer " + accessToken)
-                .retrieve()
-                .body(Map.class);
+        Map<String, Object> response;
+        try {
+            response = tastyTradeRestClient
+                    .get()
+                    .uri("/api-quote-tokens")
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("401")) {
+                log.info("Access token expired while getting quote token, refreshing...");
+                refreshAccessToken();
+                response = tastyTradeRestClient
+                        .get()
+                        .uri("/api-quote-tokens")
+                        .header("Authorization", "Bearer " + accessToken)
+                        .retrieve()
+                        .body(Map.class);
+            } else {
+                throw e;
+            }
+        }
 
         log.info("API quote token response: {}", response);
 
