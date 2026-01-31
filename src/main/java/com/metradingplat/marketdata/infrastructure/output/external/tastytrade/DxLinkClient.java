@@ -70,6 +70,7 @@ public class DxLinkClient {
 
     // Estado del snapshot de candles históricos
     private volatile boolean candleSnapshotComplete = false;
+    private volatile boolean candleSubscriptionActive = false;
     private final AtomicInteger candleSnapshotCount = new AtomicInteger(0);
 
     // Auto-reconexión
@@ -393,6 +394,7 @@ public class DxLinkClient {
 
         // Resetear estado del snapshot
         candleSnapshotComplete = false;
+        candleSubscriptionActive = true;
         candleSnapshotCount.set(0);
 
         // Formato del símbolo de candle: SYMBOL{=TIMEFRAME}
@@ -416,6 +418,7 @@ public class DxLinkClient {
      * Desuscribe de candles de un símbolo.
      */
     public void unsubscribeCandles(String symbol, String timeframe) {
+        candleSubscriptionActive = false;
         String candleSymbol = symbol + "{=" + timeframe + "}";
         sendMessage(Map.of(
             "type", "FEED_SUBSCRIPTION",
@@ -751,7 +754,7 @@ public class DxLinkClient {
                     }
                 }
                 case "Candle" -> {
-                    if (onCandle != null) {
+                    if (onCandle != null && candleSubscriptionActive) {
                         // Formato COMPACT: los datos vienen como array plano con múltiples candles
                         // Cada candle tiene 8 campos: symbol, time, open, high, low, close, volume, eventFlags
                         int fieldsPerCandle = 8;
@@ -846,7 +849,7 @@ public class DxLinkClient {
                     }
                 }
                 case "Candle" -> {
-                    if (onCandle != null) {
+                    if (onCandle != null && candleSubscriptionActive) {
                         String baseSymbol = symbol.contains("{")
                             ? symbol.substring(0, symbol.indexOf("{"))
                             : symbol;
