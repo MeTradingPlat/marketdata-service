@@ -180,6 +180,58 @@
 					"response": []
 				},
 				{
+					"name": "Todas las barras AAPL (M1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/AAPL?timeframe=M1",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"AAPL"
+							],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M1"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Ultimas 15 barras BTC (M1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/BTC?timeframe=M1&bars=15",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"BTC"
+							],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M1"
+								},
+								{
+									"key": "bars",
+									"value": "15"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
 					"name": "Barras antes de fecha TSLA (H1)",
 					"request": {
 						"method": "GET",
