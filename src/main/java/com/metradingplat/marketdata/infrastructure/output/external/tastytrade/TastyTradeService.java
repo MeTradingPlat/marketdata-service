@@ -155,17 +155,12 @@ public class TastyTradeService {
                     waitSeconds, currentCount, snapshotComplete);
 
                 if (snapshotComplete) {
-                    // Esperar a que datos en vuelo terminen de llegar
+                    // Esperar 2 segundos para que batches en vuelo terminen de llegar
                     // (DxLink envia en multiples frames/threads simultaneos)
-                    int stableCount = currentCount;
-                    for (int i = 0; i < 3; i++) {
-                        Thread.sleep(200);
-                        int updated = dxLinkClient.getCandleSnapshotCount();
-                        if (updated == stableCount) break;
-                        stableCount = updated;
-                    }
-                    log.info("Snapshot complete after {}s, {} candles (stabilized from {})",
-                        waitSeconds, dxLinkClient.getCandleSnapshotCount(), currentCount);
+                    log.info("Snapshot signal received at {} candles, waiting 2s for remaining batches...", currentCount);
+                    Thread.sleep(2000);
+                    log.info("Snapshot complete after {}s, {} unique candles (raw events: {})",
+                        waitSeconds, receivedCandles.size(), dxLinkClient.getCandleSnapshotCount());
                     break;
                 }
 
