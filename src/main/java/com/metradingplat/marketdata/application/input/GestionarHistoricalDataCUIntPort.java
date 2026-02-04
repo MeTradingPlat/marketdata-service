@@ -10,4 +10,6 @@ public interface GestionarHistoricalDataCUIntPort {
     List<Candle> getCandles(String symbol, EnumTimeframe timeframe, OffsetDateTime endDate, Integer bars);
 
     Candle getLastCandle(String symbol, EnumTimeframe timeframe);
+
+    Candle getCurrentCandle(String symbol, EnumTimeframe timeframe);
 }

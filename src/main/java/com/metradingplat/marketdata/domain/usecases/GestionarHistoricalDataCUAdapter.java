@@ -57,4 +57,22 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
         List<Candle> candles = getCandles(symbol, timeframe, null, 1);
         return candles.isEmpty() ? null : candles.get(0);
     }
+
+    @Override
+    public Candle getCurrentCandle(String symbol, EnumTimeframe timeframe) {
+        List<Candle> allCandles = this.objExternalCommunicationGateway.getCandles(symbol, timeframe);
+
+        if (allCandles == null || allCandles.isEmpty()) {
+            return null;
+        }
+
+        Instant now = Instant.now();
+        Duration candleDuration = timeframe.getDuration();
+
+        // Filtrar: solo la barra en formacion (cuyo periodo aun no ha cerrado)
+        return allCandles.stream()
+                .filter(c -> c.getTimestamp().plus(candleDuration).isAfter(now))
+                .reduce((first, second) -> second) // la mas reciente
+                .orElse(null);
+    }
 }

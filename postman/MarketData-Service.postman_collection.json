@@ -386,6 +386,106 @@
 						}
 					},
 					"response": []
+				},
+				{
+					"name": "Barra en formacion AAPL (M5)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/AAPL/current?timeframe=M5",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"AAPL",
+								"current"
+							],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M5"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Barra en formacion SPY (M1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/SPY/current?timeframe=M1",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"SPY",
+								"current"
+							],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M1"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Barra en formacion TSLA (H1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/TSLA/current?timeframe=H1",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"TSLA",
+								"current"
+							],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "H1"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Barra en formacion BTC (M1)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/BTC/current?timeframe=M1",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"historical",
+								"BTC",
+								"current"
+							],
+							"query": [
+								{
+									"key": "timeframe",
+									"value": "M1"
+								}
+							]
+						}
+					},
+					"response": []
 				}
 			]
 		},

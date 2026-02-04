@@ -42,6 +42,20 @@ public class HistoricalDataRestController {
         return ResponseEntity.ok(this.objMapper.deDominioARespuestas(candles));
     }
 
+    @GetMapping("/{symbol}/current")
+    public ResponseEntity<CandleDTORespuesta> getCurrentCandle(
+            @PathVariable("symbol") @NotNull String symbol,
+            @RequestParam("timeframe") @NotNull EnumTimeframe timeframe) {
+
+        Candle candle = this.objGestionarHistoricalDataCUInt.getCurrentCandle(symbol, timeframe);
+
+        if (candle == null) {
+            return ResponseEntity.noContent().build();
+        }
+
+        return ResponseEntity.ok(this.objMapper.deDominioARespuesta(candle));
+    }
+
     @GetMapping("/{symbol}/last")
     public ResponseEntity<CandleDTORespuesta> getLastCandle(
             @PathVariable("symbol") @NotNull String symbol,

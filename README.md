@@ -224,7 +224,8 @@ Base path: `/api/marketdata`
 
 | Metodo | Path | Descripcion |
 |---|---|---|
-| `GET` | `/historical/{symbol}` | Obtener candles historicas |
+| `GET` | `/historical/{symbol}` | Obtener candles historicas (solo barras completas) |
+| `GET` | `/historical/{symbol}/current` | Obtener la barra en formacion (periodo aun no cerrado) |
 | `GET` | `/historical/{symbol}/last` | Obtener ultima candle completa |
 
 **Parametros de `/historical/{symbol}`:**
@@ -249,11 +250,70 @@ GET /api/marketdata/historical/TSLA?timeframe=H1&endDate=2026-01-30T16:00:00-05:
 GET /api/marketdata/historical/BTC?timeframe=M1&bars=15
 ```
 
+**Parametros de `/historical/{symbol}/current`:**
+
+| Parametro | Tipo | Requerido | Descripcion |
+|---|---|---|---|
+| `symbol` | String (path) | Si | Simbolo del activo |
+| `timeframe` | Enum (query) | Si | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1` |
+
+**Comportamiento:**
+- Retorna la barra cuyo periodo **aun no ha cerrado** (en formacion)
+- Retorna `204 No Content` si no hay barra en formacion disponible
+- Los valores OHLCV de la barra pueden cambiar hasta que cierre el periodo
+
+**Ejemplos:**
+```
+GET /api/marketdata/historical/AAPL/current?timeframe=M5
+GET /api/marketdata/historical/SPY/current?timeframe=M1
+```
+
+**Parametros de `/historical/{symbol}/last`:**
+
+| Parametro | Tipo | Requerido | Descripcion |
+|---|---|---|---|
+| `symbol` | String (path) | Si | Simbolo del activo |
+| `timeframe` | Enum (query) | Si | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1` |
+
+**Comportamiento:**
+- Retorna la candle completa mas reciente (periodo ya cerrado)
+- Retorna `204 No Content` si no hay candles disponibles
+
+**Ejemplos:**
+```
+GET /api/marketdata/historical/AAPL/last?timeframe=M5
+GET /api/marketdata/historical/SPY/last?timeframe=H1
+```
+
+**Respuesta de candle (aplica a los 3 endpoints):**
+```json
+{
+  "symbol": "AAPL",
+  "timestamp": "2026-01-30T20:55:00Z",
+  "open": 235.50,
+  "high": 236.10,
+  "low": 235.30,
+  "close": 235.90,
+  "volume": 12500.0
+}
+```
+
 ### Quote
 
 | Metodo | Path | Descripcion |
 |---|---|---|
 | `GET` | `/quote/{symbol}` | Obtener quote actual de un simbolo |
+
+**Parametros:**
+
+| Parametro | Tipo | Requerido | Descripcion |
+|---|---|---|---|
+| `symbol` | String (path) | Si | Simbolo del activo (ej: `AAPL`, `SPY`) |
+
+**Ejemplo:**
+```
+GET /api/marketdata/quote/AAPL
+```
 
 ### Earnings
 
@@ -261,12 +321,36 @@ GET /api/marketdata/historical/BTC?timeframe=M1&bars=15
 |---|---|---|
 | `GET` | `/earnings/{symbol}` | Obtener proximo reporte de earnings |
 
+**Parametros:**
+
+| Parametro | Tipo | Requerido | Descripcion |
+|---|---|---|---|
+| `symbol` | String (path) | Si | Simbolo del activo (ej: `AAPL`, `TSLA`) |
+
+**Ejemplo:**
+```
+GET /api/marketdata/earnings/AAPL
+```
+
 ### Mercados y Simbolos
 
 | Metodo | Path | Descripcion |
 |---|---|---|
 | `GET` | `/markets` | Listar mercados disponibles (NYSE, NASDAQ, AMEX, ETF, OTC) |
-| `GET` | `/symbols?markets=NYSE,NASDAQ` | Obtener simbolos filtrados por mercado |
+| `GET` | `/symbols` | Obtener simbolos filtrados por mercado |
+
+**Parametros de `/symbols`:**
+
+| Parametro | Tipo | Requerido | Descripcion |
+|---|---|---|---|
+| `markets` | List\<String\> (query) | Si | Lista de mercados separados por coma: `NYSE`, `NASDAQ`, `AMEX`, `ETF`, `OTC` |
+
+**Ejemplos:**
+```
+GET /api/marketdata/markets
+GET /api/marketdata/symbols?markets=NYSE,NASDAQ
+GET /api/marketdata/symbols?markets=ETF
+```
 
 ### Ordenes
 
@@ -274,6 +358,57 @@ GET /api/marketdata/historical/BTC?timeframe=M1&bars=15
 |---|---|---|
 | `POST` | `/orders` | Colocar orden bracket (OTOCO) |
 | `DELETE` | `/orders/{orderId}` | Cancelar orden |
+
+**Request body de `POST /orders`:**
+
+| Campo | Tipo | Requerido | Descripcion |
+|---|---|---|---|
+| `symbol` | String | Si | Simbolo del activo |
+| `action` | String | Si | Accion: `BUY_TO_OPEN`, `SELL_TO_OPEN`, `BUY_TO_CLOSE`, `SELL_TO_CLOSE` |
+| `quantity` | Integer | Si | Cantidad de acciones (debe ser positivo) |
+| `entryPrice` | BigDecimal | Si | Precio de entrada |
+| `stopLossPrice` | BigDecimal | Si | Precio de stop loss |
+| `takeProfitPrice` | BigDecimal | Si | Precio de take profit |
+| `timeInForce` | String | No | Tiempo en fuerza (ej: `GTC`, `DAY`) |
+
+**Ejemplo request:**
+```json
+POST /api/marketdata/orders
+{
+  "symbol": "AAPL",
+  "action": "BUY_TO_OPEN",
+  "quantity": 10,
+  "entryPrice": 235.00,
+  "stopLossPrice": 230.00,
+  "takeProfitPrice": 245.00,
+  "timeInForce": "GTC"
+}
+```
+
+**Ejemplo response:**
+```json
+{
+  "orderId": "12345",
+  "status": "Received",
+  "receivedAt": "2026-01-30T15:30:00-05:00",
+  "complexOrderId": "67890",
+  "rejectReason": null,
+  "warnings": [],
+  "averageFillPrice": null
+}
+```
+
+**Parametros de `DELETE /orders/{orderId}`:**
+
+| Parametro | Tipo | Requerido | Descripcion |
+|---|---|---|---|
+| `orderId` | String (path) | Si | ID de la orden a cancelar |
+
+**Ejemplo:**
+```
+DELETE /api/marketdata/orders/12345
+```
+Retorna `204 No Content` si la cancelacion fue exitosa.
 
 ### Health
 

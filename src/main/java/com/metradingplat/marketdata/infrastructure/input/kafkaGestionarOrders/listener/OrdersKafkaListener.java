@@ -17,7 +17,7 @@ public class OrdersKafkaListener {
     private final GestionarOrdersCUIntPort objGestionarOrdersCUInt;
     private final OrdersKafkaMapper objMapper;
 
-    @KafkaListener(topics = "orders.commands", groupId = "marketdata-group")
+    @KafkaListener(topics = "order-requests", groupId = "marketdata-group")
     public void recibirComandoOrden(OrderRequestDTO command) {
         log.info("Recibido comando de orden para símbolo: {}", command.getSymbol());
         OrderRequest domainOrder = this.objMapper.deDTOADominio(command);

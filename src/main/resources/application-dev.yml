@@ -7,7 +7,7 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       properties:
-        spring.json.trusted.packages: "*"
+        "[spring.json.trusted.packages]": "*"
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -22,7 +22,7 @@ eureka:
 # Logging para desarrollo
 logging:
   level:
-    com.metradingplat.marketdata: DEBUG
+    "[com.metradingplat.marketdata]": DEBUG
     "[com.metradingplat.marketdata.infrastructure.output.external.tastytrade]": DEBUG
-    org.springframework.kafka: INFO
-    org.springframework.web.socket: DEBUG
+    "[org.springframework.kafka]": INFO
+    "[org.springframework.web.socket]": DEBUG
