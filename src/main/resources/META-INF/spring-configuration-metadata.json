@@ -1,0 +1,43 @@
+{
+  "groups": [
+    {
+      "name": "tastytrade",
+      "type": "com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeConfig",
+      "sourceType": "com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeConfig"
+    }
+  ],
+  "properties": [
+    {
+      "name": "tastytrade.client-id",
+      "type": "java.lang.String",
+      "description": "TastyTrade API client ID"
+    },
+    {
+      "name": "tastytrade.client-secret",
+      "type": "java.lang.String",
+      "description": "TastyTrade API client secret"
+    },
+    {
+      "name": "tastytrade.refresh-token",
+      "type": "java.lang.String",
+      "description": "TastyTrade API refresh token"
+    },
+    {
+      "name": "tastytrade.account-number",
+      "type": "java.lang.String",
+      "description": "TastyTrade account number"
+    },
+    {
+      "name": "tastytrade.api-base-url",
+      "type": "java.lang.String",
+      "description": "TastyTrade API base URL",
+      "defaultValue": "https://api.tastytrade.com"
+    },
+    {
+      "name": "tastytrade.dxlink-url",
+      "type": "java.lang.String",
+      "description": "DxLink WebSocket URL for real-time market data",
+      "defaultValue": "wss://tasty.dxfeed.com/realtime"
+    }
+  ]
+}
