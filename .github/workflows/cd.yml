@@ -16,48 +16,6 @@ jobs:
         run: |
           docker network create metradingplat-network || echo "Network already exists"
 
-      - name: Run Kafka Infrastructure
-        run: |
-          # Zookeeper
-          if [ -z "$(docker ps -a -q -f name=zookeeper)" ]; then
-            echo "Creating and starting zookeeper container..."
-            docker run -d \
-              --name "zookeeper" \
-              --network "metradingplat-network" \
-              --restart "always" \
-              -e ZOOKEEPER_CLIENT_PORT="2181" \
-              -e ZOOKEEPER_TICK_TIME="2000" \
-              -p 2181:2181 \
-              confluentinc/cp-zookeeper:7.5.0
-          else
-            echo "zookeeper container exists, ensuring it is started..."
-            docker start zookeeper
-          fi
-
-          # Wait for Zookeeper
-          sleep 10
-
-          # Kafka
-          if [ -z "$(docker ps -a -q -f name=kafka)" ]; then
-            echo "Creating and starting kafka container..."
-            docker run -d \
-              --name "kafka" \
-              --network "metradingplat-network" \
-              --restart "always" \
-              -e KAFKA_BROKER_ID="1" \
-              -e KAFKA_ZOOKEEPER_CONNECT="zookeeper:2181" \
-              -e KAFKA_ADVERTISED_LISTENERS="PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092" \
-              -e KAFKA_LISTENER_SECURITY_PROTOCOL_MAP="PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT" \
-              -e KAFKA_INTER_BROKER_LISTENER_NAME="PLAINTEXT" \
-              -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR="1" \
-              -e KAFKA_AUTO_CREATE_TOPICS_ENABLE="true" \
-              -p 9092:9092 \
-              confluentinc/cp-kafka:7.5.0
-          else
-            echo "kafka container exists, ensuring it is started..."
-            docker start kafka
-          fi
-
       - name: Run Postgres Container
         run: |
           if [ -z "$(docker ps -a -q -f name=postgres-marketdata)" ]; then
