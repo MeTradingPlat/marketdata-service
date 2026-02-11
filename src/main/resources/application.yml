@@ -13,6 +13,10 @@ spring:
   profiles:
     active: dev
 
+logging:
+  level:
+    "[com.netflix.discovery.shared.resolver.aws.ConfigClusterResolver]": WARN
+
 server:
   port: 8082
 
