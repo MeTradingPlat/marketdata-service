@@ -61,6 +61,12 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
     }
 
     @Override
+    public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        log.info("Gateway: Batch fetching candles for {} symbols, timeframe: {}, bars: {}", symbols.size(), timeframe, bars);
+        return tastyTradeService.getCandlesBatch(symbols, timeframe, bars);
+    }
+
+    @Override
     public List<ActiveEquity> getActiveEquities(int pageOffset, int perPage) {
         log.info("Gateway: Fetching active equities page={} perPage={}", pageOffset, perPage);
         return tastyTradeService.getActiveEquities(pageOffset, perPage);

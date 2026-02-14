@@ -23,6 +23,8 @@ public interface GestionarComunicacionExternalGatewayIntPort {
 
     List<Candle> getCandles(String symbol, EnumTimeframe timeframe);
 
+    Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars);
+
     List<ActiveEquity> getActiveEquities(int pageOffset, int perPage);
 
     Map<String, Object> getMarketDataByType(String symbol);

@@ -432,6 +432,47 @@ public class DxLinkClient {
     }
 
     /**
+     * Suscribe a candles historicos de multiples simbolos en un solo mensaje FEED_SUBSCRIPTION.
+     * Cada item en la lista debe tener: symbol, type ("Candle"), fromTime.
+     */
+    public void subscribeCandlesBatch(List<Map<String, Object>> items) {
+        if (!waitForReady()) {
+            log.warn("Cannot subscribe to candles batch - channel not ready");
+            return;
+        }
+
+        // Resetear estado del snapshot
+        candleSnapshotComplete = false;
+        candleSubscriptionActive = true;
+        candleSnapshotCount.set(0);
+
+        sendMessage(Map.of(
+            "type", "FEED_SUBSCRIPTION",
+            "channel", channelId,
+            "add", items
+        ));
+        log.info("Batch subscribed to {} candle symbols", items.size());
+    }
+
+    /**
+     * Desuscribe de candles de multiples simbolos en un solo mensaje.
+     */
+    public void unsubscribeCandlesBatch(List<String> candleSymbols) {
+        candleSubscriptionActive = false;
+
+        List<Map<String, String>> removeItems = candleSymbols.stream()
+            .map(cs -> Map.of("symbol", cs, "type", "Candle"))
+            .toList();
+
+        sendMessage(Map.of(
+            "type", "FEED_SUBSCRIPTION",
+            "channel", channelId,
+            "remove", removeItems
+        ));
+        log.info("Batch unsubscribed from {} candle symbols", candleSymbols.size());
+    }
+
+    /**
      * Verifica si el snapshot de candles está completo.
      */
     public boolean isCandleSnapshotComplete() {

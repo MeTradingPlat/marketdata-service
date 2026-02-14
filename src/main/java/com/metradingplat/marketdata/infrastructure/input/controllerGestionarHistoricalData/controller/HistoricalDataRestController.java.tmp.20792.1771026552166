@@ -77,27 +77,4 @@ public class HistoricalDataRestController {
 
         return ResponseEntity.ok(this.objMapper.deDominioARespuesta(candle));
     }
-
-    @PostMapping("/batch")
-    public ResponseEntity<BatchCandlesDTORespuesta> getCandlesBatch(
-            @RequestBody @Valid BatchCandlesDTOPeticion peticion) {
-
-        Map<String, List<Candle>> candlesDominio = this.objGestionarHistoricalDataCUInt.getCandlesBatch(
-            peticion.getSymbols(),
-            peticion.getTimeframe(),
-            peticion.getBars() != null ? peticion.getBars() : 700
-        );
-
-        // Convertir dominio a DTO
-        Map<String, List<CandleDTORespuesta>> candlesDTO = new HashMap<>();
-        for (Map.Entry<String, List<Candle>> entry : candlesDominio.entrySet()) {
-            candlesDTO.put(entry.getKey(), this.objMapper.deDominioARespuestas(entry.getValue()));
-        }
-
-        BatchCandlesDTORespuesta respuesta = BatchCandlesDTORespuesta.builder()
-            .candlesPorSimbolo(candlesDTO)
-            .build();
-
-        return ResponseEntity.ok(respuesta);
-    }
 }

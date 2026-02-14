@@ -3,7 +3,9 @@ package com.metradingplat.marketdata.domain.usecases;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import com.metradingplat.marketdata.application.input.GestionarHistoricalDataCUIntPort;
@@ -50,6 +52,46 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
         }
 
         return completed;
+    }
+
+    @Override
+    public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        log.info("Batch fetching {} symbols, timeframe={}, bars={}", symbols.size(), timeframe, bars);
+
+        // Obtener datos brutos del gateway
+        Map<String, List<Candle>> rawData = this.objExternalCommunicationGateway.getCandlesBatch(symbols, timeframe, bars);
+
+        // Filtrar y procesar cada simbolo
+        Map<String, List<Candle>> resultado = new HashMap<>();
+        Instant now = Instant.now();
+        Duration candleDuration = timeframe.getDuration();
+
+        for (Map.Entry<String, List<Candle>> entry : rawData.entrySet()) {
+            String symbol = entry.getKey();
+            List<Candle> allCandles = entry.getValue();
+
+            if (allCandles == null || allCandles.isEmpty()) {
+                resultado.put(symbol, List.of());
+                continue;
+            }
+
+            // Filtrar solo barras completas
+            List<Candle> completed = allCandles.stream()
+                .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
+                .collect(Collectors.toList());
+
+            // Truncar a las ultimas N barras si es necesario
+            if (bars > 0 && bars < completed.size()) {
+                completed = completed.subList(completed.size() - bars, completed.size());
+            }
+
+            resultado.put(symbol, completed);
+        }
+
+        log.info("Batch complete: {} simbolos procesados, {} con datos",
+            resultado.size(), resultado.values().stream().filter(l -> !l.isEmpty()).count());
+
+        return resultado;
     }
 
     @Override
