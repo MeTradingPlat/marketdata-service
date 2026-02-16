@@ -1,5 +1,6 @@
 package com.metradingplat.marketdata.infrastructure.input.controllerGestionarHistoricalData.controller;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -96,6 +97,7 @@ public class HistoricalDataRestController {
 
         BatchCandlesDTORespuesta respuesta = BatchCandlesDTORespuesta.builder()
             .candlesPorSimbolo(candlesDTO)
+            .serverTimestamp(Instant.now())
             .build();
 
         return ResponseEntity.ok(respuesta);

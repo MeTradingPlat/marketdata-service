@@ -590,7 +590,11 @@ public class DxLinkClient {
                 return;
             }
             String json = objectMapper.writeValueAsString(message);
-            log.info(">>> Sending: {}", json);
+            if (json.contains("KEEPALIVE")) {
+                log.trace(">>> Sending: {}", json);
+            } else {
+                log.info(">>> Sending: {}", json);
+            }
             synchronized (sendLock) {
                 session.sendMessage(new TextMessage(json));
             }
@@ -612,8 +616,19 @@ public class DxLinkClient {
                 case "FEED_CONFIG" -> handleFeedConfig(msg);
                 case "FEED_DATA" -> handleFeedData(msg);
                 case "KEEPALIVE" -> {
-                    // Responder al keepalive del servidor
-                    sendMessage(Map.of("type", "KEEPALIVE", "channel", 0));
+                    // Responder al keepalive del servidor (sin log, es rutina)
+                    try {
+                        if (session != null && session.isOpen()) {
+                            String keepaliveJson = objectMapper.writeValueAsString(
+                                Map.of("type", "KEEPALIVE", "channel", 0));
+                            log.trace(">>> Sending keepalive echo");
+                            synchronized (sendLock) {
+                                session.sendMessage(new TextMessage(keepaliveJson));
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.error("Failed to send keepalive echo", e);
+                    }
                 }
                 case "ERROR" -> {
                     log.error("DxLink error: {}", msg.path("error").asText());
@@ -715,8 +730,17 @@ public class DxLinkClient {
         }
         keepaliveTask = scheduler.scheduleAtFixedRate(
             () -> {
-                if (session != null && session.isOpen()) {
-                    sendMessage(Map.of("type", "KEEPALIVE", "channel", 0));
+                try {
+                    if (session != null && session.isOpen()) {
+                        String keepaliveJson = objectMapper.writeValueAsString(
+                            Map.of("type", "KEEPALIVE", "channel", 0));
+                        log.trace(">>> Sending scheduled keepalive");
+                        synchronized (sendLock) {
+                            session.sendMessage(new TextMessage(keepaliveJson));
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to send keepalive", e);
                 }
             },
             30, 30, TimeUnit.SECONDS
@@ -768,7 +792,7 @@ public class DxLinkClient {
                 case "Quote" -> {
                     double bid = data.path(1).asDouble();
                     double ask = data.path(2).asDouble();
-                    log.info("Quote received for {}: bid={}, ask={}", symbol, bid, ask);
+                    log.debug("Quote: {} bid={}, ask={}", symbol, bid, ask);
                     if (onMarketData != null) {
                         MarketDataStreamDTO dto = MarketDataStreamDTO.builder()
                             .symbol(symbol)
@@ -785,7 +809,7 @@ public class DxLinkClient {
                     double price = data.path(1).asDouble();
                     long volume = data.path(2).asLong();
                     long time = data.path(3).asLong();
-                    log.info("Trade received for {}: price={}, volume={}, time={}", symbol, price, volume, time);
+                    log.debug("Trade: {} price={}, vol={}", symbol, price, volume);
                     if (onMarketData != null) {
                         MarketDataStreamDTO dto = MarketDataStreamDTO.builder()
                             .symbol(symbol)
@@ -805,7 +829,7 @@ public class DxLinkClient {
                         int fieldsPerCandle = 8;
                         int totalCandles = data.size() / fieldsPerCandle;
 
-                        log.info("Processing {} candles from COMPACT array (size={})", totalCandles, data.size());
+                        log.debug("Processing {} candles from COMPACT array (size={})", totalCandles, data.size());
 
                         boolean lastCandleTxPending = false;
 
@@ -844,10 +868,10 @@ public class DxLinkClient {
 
                             candleSnapshotCount.incrementAndGet();
 
-                            log.info("Received candle #{}: {} at {} O={} H={} L={} C={} V={} flags={} txPending={}",
+                            log.debug("Candle #{}: {} at {} O={} H={} L={} C={} V={} flags={}",
                                 candleSnapshotCount.get(), baseSymbol, candle.getTimestamp(),
                                 candle.getOpen(), candle.getHigh(), candle.getLow(), candle.getClose(),
-                                candle.getVolume(), eventFlags, isTxPending);
+                                candle.getVolume(), eventFlags);
 
                             onCandle.accept(baseSymbol, candle);
                         }
@@ -915,10 +939,10 @@ public class DxLinkClient {
 
                         candleSnapshotCount.incrementAndGet();
 
-                        log.info("Received candle #{}: {} at {} O={} H={} L={} C={} flags={} txPending={}",
+                        log.debug("Candle #{}: {} at {} O={} H={} L={} C={} flags={}",
                             candleSnapshotCount.get(), baseSymbol, candle.getTimestamp(),
                             candle.getOpen(), candle.getHigh(), candle.getLow(), candle.getClose(),
-                            eventFlags, isTxPending);
+                            eventFlags);
 
                         onCandle.accept(baseSymbol, candle);
 
@@ -965,8 +989,14 @@ public class DxLinkClient {
         @Override
         protected void handleTextMessage(WebSocketSession session, TextMessage message) {
             String payload = message.getPayload();
-            log.info("<<< Received message ({}B): {}", payload.length(),
-                payload.length() > 500 ? payload.substring(0, 500) + "..." : payload);
+            if (payload.contains("KEEPALIVE")) {
+                log.trace("<<< Received message ({}B): {}", payload.length(), payload);
+            } else if (payload.contains("FEED_DATA")) {
+                log.debug("<<< Received FEED_DATA ({}B)", payload.length());
+            } else {
+                log.info("<<< Received message ({}B): {}", payload.length(),
+                    payload.length() > 500 ? payload.substring(0, 500) + "..." : payload);
+            }
             DxLinkClient.this.handleMessage(payload);
         }
 
