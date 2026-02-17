@@ -29,11 +29,13 @@ import com.metradingplat.marketdata.infrastructure.input.controllerGestionarHist
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 @RestController
 @RequestMapping("/api/marketdata/historical")
 @RequiredArgsConstructor
 @Validated
+@Slf4j
 public class HistoricalDataRestController {
 
     private final GestionarHistoricalDataCUIntPort objGestionarHistoricalDataCUInt;
@@ -47,7 +49,9 @@ public class HistoricalDataRestController {
                 @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime endDate,
             @RequestParam(value = "bars", required = false) Integer bars) {
 
+        log.info("GET /historical/{} timeframe={} endDate={} bars={}", symbol, timeframe, endDate, bars);
         List<Candle> candles = this.objGestionarHistoricalDataCUInt.getCandles(symbol, timeframe, endDate, bars);
+        log.info("GET /historical/{} -> {} candles", symbol, candles.size());
         return ResponseEntity.ok(this.objMapper.deDominioARespuestas(candles));
     }
 
@@ -56,12 +60,15 @@ public class HistoricalDataRestController {
             @PathVariable("symbol") @NotNull String symbol,
             @RequestParam("timeframe") @NotNull EnumTimeframe timeframe) {
 
+        log.info("GET /historical/{}/current timeframe={}", symbol, timeframe);
         Candle candle = this.objGestionarHistoricalDataCUInt.getCurrentCandle(symbol, timeframe);
 
         if (candle == null) {
+            log.info("GET /historical/{}/current -> sin datos", symbol);
             return ResponseEntity.noContent().build();
         }
 
+        log.info("GET /historical/{}/current -> candle at {}", symbol, candle.getTimestamp());
         return ResponseEntity.ok(this.objMapper.deDominioARespuesta(candle));
     }
 
@@ -70,12 +77,15 @@ public class HistoricalDataRestController {
             @PathVariable("symbol") @NotNull String symbol,
             @RequestParam("timeframe") @NotNull EnumTimeframe timeframe) {
 
+        log.info("GET /historical/{}/last timeframe={}", symbol, timeframe);
         Candle candle = this.objGestionarHistoricalDataCUInt.getLastCandle(symbol, timeframe);
 
         if (candle == null) {
+            log.info("GET /historical/{}/last -> sin datos", symbol);
             return ResponseEntity.noContent().build();
         }
 
+        log.info("GET /historical/{}/last -> candle at {}", symbol, candle.getTimestamp());
         return ResponseEntity.ok(this.objMapper.deDominioARespuesta(candle));
     }
 
@@ -83,10 +93,14 @@ public class HistoricalDataRestController {
     public ResponseEntity<BatchCandlesDTORespuesta> getCandlesBatch(
             @RequestBody @Valid BatchCandlesDTOPeticion peticion) {
 
+        int barsReq = peticion.getBars() != null ? peticion.getBars() : 700;
+        log.info("POST /historical/batch symbols={} timeframe={} bars={}",
+            peticion.getSymbols(), peticion.getTimeframe(), barsReq);
+
         Map<String, List<Candle>> candlesDominio = this.objGestionarHistoricalDataCUInt.getCandlesBatch(
             peticion.getSymbols(),
             peticion.getTimeframe(),
-            peticion.getBars() != null ? peticion.getBars() : 700
+            barsReq
         );
 
         // Convertir dominio a DTO
@@ -99,6 +113,9 @@ public class HistoricalDataRestController {
             .candlesPorSimbolo(candlesDTO)
             .serverTimestamp(Instant.now())
             .build();
+
+        log.info("POST /historical/batch -> {} simbolos, {} candles totales",
+            candlesDTO.size(), candlesDTO.values().stream().mapToInt(List::size).sum());
 
         return ResponseEntity.ok(respuesta);
     }

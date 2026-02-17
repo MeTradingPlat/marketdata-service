@@ -115,8 +115,8 @@ public class DxLinkClient {
         this.feedConfigured = false;
         this.reconnectAttempts.set(0);
 
-        log.info("Connecting to DxLink: {}", url);
-        log.info("Token prefix: {}", token != null ? token.substring(0, Math.min(10, token.length())) + "..." : "NULL");
+        log.debug("Connecting to DxLink: {}", url);
+        log.debug("Token prefix: {}", token != null ? token.substring(0, Math.min(10, token.length())) + "..." : "NULL");
 
         try {
             // Configurar WebSocket container con timeouts extendidos
@@ -130,10 +130,10 @@ public class DxLinkClient {
             WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
             headers.add("User-Agent", "metradingplat/1.0");
 
-            log.info("Initiating WebSocket connection...");
+            log.debug("Initiating WebSocket connection...");
             // La sesión se guarda en afterConnectionEstablished del handler
             client.execute(new DxLinkHandler(), headers, java.net.URI.create(url)).get(30, TimeUnit.SECONDS);
-            log.info("WebSocket connection initiated, waiting for handshake to complete...");
+            log.debug("WebSocket connection initiated, waiting for handshake to complete...");
 
             // Esperar hasta que el canal esté listo (máximo 30 segundos)
             int waitCount = 0;
@@ -142,14 +142,13 @@ public class DxLinkClient {
                 waitCount++;
                 // Log progress cada 5 segundos
                 if (waitCount % 50 == 0) {
-                    log.info("Waiting for handshake... auth={}, channel={}, feed={} ({}s elapsed)",
+                    log.debug("Waiting for handshake... auth={}, channel={}, feed={} ({}s elapsed)",
                         authenticated, channelReady, feedConfigured, waitCount / 10);
                 }
             }
 
             if (channelReady) {
-                log.info("DxLink fully connected and ready (auth={}, channel={}, feed={})",
-                    authenticated, channelReady, feedConfigured);
+                log.info("DxLink conectado y listo (url={})", url);
                 // Iniciar health check periódico
                 startHealthCheck();
             } else {
@@ -157,7 +156,7 @@ public class DxLinkClient {
                     authenticated, channelReady, feedConfigured);
                 // Intentar cerrar la conexión y reportar el estado
                 if (session != null && session.isOpen()) {
-                    log.info("Session is still open but no SETUP received. Remote address: {}",
+                    log.debug("Session is still open but no SETUP received. Remote address: {}",
                         session.getRemoteAddress());
                 }
                 // Programar reconexión
@@ -193,7 +192,7 @@ public class DxLinkClient {
             MAX_RECONNECT_DELAY_SECONDS
         );
 
-        log.info("Scheduling reconnection attempt {}/{} in {} seconds...",
+        log.debug("Scheduling reconnection attempt {}/{} in {} seconds...",
             attempts, MAX_RECONNECT_ATTEMPTS, delaySeconds);
 
         scheduler.schedule(() -> {
@@ -209,7 +208,7 @@ public class DxLinkClient {
      * Ejecuta la reconexión real.
      */
     private void performReconnect() {
-        log.info("Attempting to reconnect to DxLink...");
+        log.debug("Attempting to reconnect to DxLink...");
 
         // Limpiar estado anterior
         cleanupConnection();
@@ -219,7 +218,7 @@ public class DxLinkClient {
         if (tokenRefresher != null) {
             try {
                 freshToken = tokenRefresher.get();
-                log.info("Obtained fresh token for reconnection");
+                log.debug("Obtained fresh token for reconnection");
             } catch (Exception e) {
                 log.error("Failed to refresh token: {}", e.getMessage());
                 scheduleReconnect();
@@ -232,7 +231,7 @@ public class DxLinkClient {
             connect(dxLinkUrl, freshToken);
 
             if (channelReady) {
-                log.info("Reconnection successful! Re-subscribing to {} symbols...", subscribedSymbols.size());
+                log.info("DxLink reconectado exitosamente. Re-suscribiendo {} simbolos...", subscribedSymbols.size());
                 reconnectAttempts.set(0);
 
                 // Re-suscribir a todos los símbolos anteriores
@@ -252,7 +251,7 @@ public class DxLinkClient {
             return;
         }
 
-        log.info("Re-subscribing to {} symbols: {}", subscribedSymbols.size(), subscribedSymbols);
+        log.debug("Re-subscribing to {} symbols: {}", subscribedSymbols.size(), subscribedSymbols);
 
         // Crear copia para evitar ConcurrentModificationException
         Set<String> symbolsToResubscribe = Set.copyOf(subscribedSymbols);
@@ -273,7 +272,7 @@ public class DxLinkClient {
             }
         }
 
-        log.info("Re-subscription complete");
+        log.debug("Re-subscription complete");
     }
 
     /**
@@ -315,7 +314,7 @@ public class DxLinkClient {
             }
         }, HEALTH_CHECK_INTERVAL_SECONDS, HEALTH_CHECK_INTERVAL_SECONDS, TimeUnit.SECONDS);
 
-        log.info("Health check started (interval: {}s)", HEALTH_CHECK_INTERVAL_SECONDS);
+        log.debug("Health check started (interval: {}s)", HEALTH_CHECK_INTERVAL_SECONDS);
     }
 
     /**
@@ -592,8 +591,10 @@ public class DxLinkClient {
             String json = objectMapper.writeValueAsString(message);
             if (json.contains("KEEPALIVE")) {
                 log.trace(">>> Sending: {}", json);
-            } else {
+            } else if (json.contains("FEED_SUBSCRIPTION")) {
                 log.info(">>> Sending: {}", json);
+            } else {
+                log.debug(">>> Sending: {}", json);
             }
             synchronized (sendLock) {
                 session.sendMessage(new TextMessage(json));
@@ -645,11 +646,11 @@ public class DxLinkClient {
      * Ahora enviamos AUTH con el token.
      */
     private void handleSetup(JsonNode msg) {
-        log.info("Received SETUP from server: version={}, keepaliveTimeout={}",
+        log.debug("Received SETUP from server: version={}, keepaliveTimeout={}",
             msg.path("version").asText(), msg.path("keepaliveTimeout").asInt());
 
         // Enviar AUTH con el token
-        log.info("Sending AUTH with token...");
+        log.debug("Sending AUTH with token...");
         sendMessage(Map.of(
             "type", "AUTH",
             "channel", 0,
@@ -659,11 +660,11 @@ public class DxLinkClient {
 
     private void handleAuthState(JsonNode msg) {
         String state = msg.path("state").asText();
-        log.info("AUTH_STATE received: {}", state);
+        log.debug("AUTH_STATE received: {}", state);
 
         if ("AUTHORIZED".equals(state)) {
             authenticated = true;
-            log.info("DxLink authenticated successfully");
+            log.debug("DxLink authenticated successfully");
 
             // Solicitar canal FEED
             sendMessage(Map.of(
@@ -681,7 +682,7 @@ public class DxLinkClient {
     private void handleChannelOpened(JsonNode msg) {
         int openedChannel = msg.path("channel").asInt();
         String service = msg.path("service").asText();
-        log.info("Channel {} opened for service: {}", openedChannel, service);
+        log.debug("Channel {} opened for service: {}", openedChannel, service);
 
         if (openedChannel == channelId && "FEED".equals(service)) {
             // Configurar el feed - incluir eventFlags para detectar fin de snapshot
@@ -704,7 +705,7 @@ public class DxLinkClient {
 
             // Suscribir símbolos pendientes
             if (!subscribedSymbols.isEmpty()) {
-                log.info("Subscribing to pending symbols: {}", subscribedSymbols);
+                log.debug("Subscribing to pending symbols: {}", subscribedSymbols);
                 for (String symbol : subscribedSymbols) {
                     sendMessage(Map.of(
                         "type", "FEED_SUBSCRIPTION",
@@ -720,7 +721,7 @@ public class DxLinkClient {
     }
 
     private void handleFeedConfig(JsonNode msg) {
-        log.info("FEED_CONFIG received: dataFormat={}", msg.path("dataFormat").asText());
+        log.debug("FEED_CONFIG received: dataFormat={}", msg.path("dataFormat").asText());
         feedConfigured = true;
     }
 
@@ -962,15 +963,15 @@ public class DxLinkClient {
     private class DxLinkHandler extends TextWebSocketHandler {
         @Override
         public void afterConnectionEstablished(WebSocketSession wsSession) {
-            log.info("WebSocket connection established - local: {}, remote: {}, protocol: {}",
+            log.debug("WebSocket connection established - local: {}, remote: {}, protocol: {}",
                 wsSession.getLocalAddress(), wsSession.getRemoteAddress(), wsSession.getAcceptedProtocol());
-            log.info("WebSocket attributes: {}", wsSession.getAttributes());
+            log.debug("WebSocket attributes: {}", wsSession.getAttributes());
 
             // Guardar la sesión y enviar SETUP directamente usando la sesión local
             DxLinkClient.this.session = wsSession;
 
             // El CLIENTE debe enviar SETUP primero según el protocolo dxLink
-            log.info("Sending initial SETUP message to server...");
+            log.debug("Sending initial SETUP message to server...");
             try {
                 String setupJson = objectMapper.writeValueAsString(Map.of(
                     "type", "SETUP",
@@ -979,7 +980,7 @@ public class DxLinkClient {
                     "keepaliveTimeout", 60,
                     "acceptKeepaliveTimeout", 60
                 ));
-                log.info(">>> Sending: {}", setupJson);
+                log.debug(">>> Sending: {}", setupJson);
                 wsSession.sendMessage(new TextMessage(setupJson));
             } catch (Exception e) {
                 log.error("Failed to send initial SETUP", e);
@@ -994,7 +995,7 @@ public class DxLinkClient {
             } else if (payload.contains("FEED_DATA")) {
                 log.debug("<<< Received FEED_DATA ({}B)", payload.length());
             } else {
-                log.info("<<< Received message ({}B): {}", payload.length(),
+                log.debug("<<< Received message ({}B): {}", payload.length(),
                     payload.length() > 500 ? payload.substring(0, 500) + "..." : payload);
             }
             DxLinkClient.this.handleMessage(payload);
@@ -1007,15 +1008,17 @@ public class DxLinkClient {
 
         @Override
         public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-            log.warn("WebSocket closed - code: {}, reason: '{}'", status.getCode(), status.getReason());
             authenticated = false;
             channelReady = false;
             feedConfigured = false;
 
             // Disparar reconexión automática (excepto si fue un cierre intencional)
             if (status.getCode() != CloseStatus.NORMAL.getCode()) {
-                log.info("Connection lost unexpectedly. Initiating auto-reconnect...");
+                log.warn("DxLink desconectado inesperadamente (code={}, reason='{}'). Reconectando...",
+                    status.getCode(), status.getReason());
                 scheduleReconnect();
+            } else {
+                log.info("DxLink desconectado (cierre normal)");
             }
         }
     }

@@ -56,13 +56,13 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
 
     @Override
     public List<Candle> getCandles(String symbol, EnumTimeframe timeframe) {
-        log.info("Gateway: Fetching candles for symbol: {} timeframe: {}", symbol, timeframe);
+        log.debug("Gateway: Fetching candles for symbol: {} timeframe: {}", symbol, timeframe);
         return tastyTradeService.getCandles(symbol, timeframe);
     }
 
     @Override
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Gateway: Batch fetching candles for {} symbols, timeframe: {}, bars: {}", symbols.size(), timeframe, bars);
+        log.debug("Gateway: Batch fetching candles for {} symbols, timeframe: {}, bars: {}", symbols.size(), timeframe, bars);
         return tastyTradeService.getCandlesBatch(symbols, timeframe, bars);
     }
 

@@ -78,15 +78,13 @@ public class TastyTradeService {
 
         // Conectar a DxLink
         try {
-            log.info("Obtaining API quote token from TastyTrade...");
+            log.debug("Obtaining API quote token from TastyTrade...");
             String token = tastyTradeClient.getApiQuoteToken();
             String url = tastyTradeClient.getDxlinkUrl();
-            log.info("Got token and URL. Connecting to DxLink at: {}", url);
+            log.debug("Got token and URL. Connecting to DxLink at: {}", url);
             dxLinkClient.connect(url, token);
-            log.info("TastyTrade service initialized successfully");
         } catch (Exception e) {
             log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
-            log.info("DxLinkClient will attempt auto-reconnection");
         }
     }
 
@@ -111,7 +109,7 @@ public class TastyTradeService {
      * Obtiene candles historicos de un solo simbolo. Delega al metodo batch.
      */
     public List<Candle> getCandles(String symbol, EnumTimeframe timeframe) {
-        log.info("Fetching candles for {} {}", symbol, timeframe);
+        log.debug("Fetching candles for {} {}", symbol, timeframe);
         Map<String, List<Candle>> result = getCandlesBatch(List.of(symbol), timeframe, 700);
         return result.getOrDefault(symbol, List.of());
     }
@@ -126,7 +124,7 @@ public class TastyTradeService {
      * @return mapa de simbolo -> lista de candles ordenadas por timestamp asc
      */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Batch fetch: {} symbols, timeframe={}, bars={}", symbols.size(), timeframe, bars);
+        log.debug("Batch fetch: {} symbols, timeframe={}, bars={}", symbols.size(), timeframe, bars);
 
         // Separar simbolos con cache valido de los que necesitan fetch
         Map<String, List<Candle>> resultado = new HashMap<>();
@@ -142,7 +140,7 @@ public class TastyTradeService {
             }
         }
 
-        log.info("Batch: {} cache hits, {} cache misses", resultado.size(), cacheMiss.size());
+        log.debug("Batch: {} cache hits, {} cache misses", resultado.size(), cacheMiss.size());
 
         if (cacheMiss.isEmpty()) {
             return resultado;
@@ -167,7 +165,7 @@ public class TastyTradeService {
             }
         }
 
-        log.info("Batch complete: {} symbols total, {} con datos", resultado.size(),
+        log.debug("Batch complete: {} symbols total, {} con datos", resultado.size(),
             resultado.values().stream().filter(l -> !l.isEmpty()).count());
 
         return resultado;
@@ -317,7 +315,7 @@ public class TastyTradeService {
 
     private void ensureConnected() {
         if (!dxLinkClient.isConnected()) {
-            log.info("Reconnecting to DxLink");
+            log.debug("Reconnecting to DxLink");
             String token = tastyTradeClient.getApiQuoteToken();
             String url = tastyTradeClient.getDxlinkUrl();
             dxLinkClient.connect(url, token);
