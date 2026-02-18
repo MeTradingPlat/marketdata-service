@@ -329,7 +329,7 @@ public class DxLinkClient {
                 sessionOpen, authenticated, channelReady);
             scheduleReconnect();
         } else {
-            log.debug("Connection health check passed");
+            log.trace("Connection health check passed");
         }
     }
 
@@ -606,7 +606,6 @@ public class DxLinkClient {
 
     private void handleMessage(String payload) {
         try {
-            log.debug("Received: {}", payload);
             JsonNode msg = objectMapper.readTree(payload);
             String type = msg.path("type").asText();
 
