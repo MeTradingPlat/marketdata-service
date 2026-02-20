@@ -138,16 +138,16 @@ sequenceDiagram
 
 ## Tecnologias
 
-| Tecnologia | Version | Proposito |
-|---|---|---|
-| Java | 21 | Lenguaje principal |
-| Spring Boot | 3.5.9 | Framework |
-| Spring Cloud | 2025.0.0 | Eureka, Gateway |
-| Spring Kafka | - | Mensajeria asincrona |
-| WebSocket | - | Conexion DxLink |
-| MapStruct | - | Mapeo DTO <-> Dominio |
-| Lombok | - | Reduccion de boilerplate |
-| Docker | Multi-stage | Contenedorizacion |
+| Tecnologia   | Version     | Proposito                |
+| ------------ | ----------- | ------------------------ |
+| Java         | 21          | Lenguaje principal       |
+| Spring Boot  | 3.5.9       | Framework                |
+| Spring Cloud | 2025.0.0    | Eureka, Gateway          |
+| Spring Kafka | -           | Mensajeria asincrona     |
+| WebSocket    | -           | Conexion DxLink          |
+| MapStruct    | -           | Mapeo DTO <-> Dominio    |
+| Lombok       | -           | Reduccion de boilerplate |
+| Docker       | Multi-stage | Contenedorizacion        |
 
 ## Estructura del Proyecto
 
@@ -222,27 +222,32 @@ Base path: `/api/marketdata`
 
 ### Historical Data
 
-| Metodo | Path | Descripcion |
-|---|---|---|
-| `GET` | `/historical/{symbol}` | Obtener candles historicas (solo barras completas) |
-| `GET` | `/historical/{symbol}/current` | Obtener la barra en formacion (periodo aun no cerrado) |
-| `GET` | `/historical/{symbol}/last` | Obtener ultima candle completa |
+| Metodo | Path                           | Descripcion                                            |
+| ------ | ------------------------------ | ------------------------------------------------------ |
+| `GET`  | `/historical/{symbol}`         | Obtener candles historicas (solo barras completas)     |
+| `GET`  | `/historical/{symbol}/current` | Obtener la barra en formacion (periodo aun no cerrado) |
+| `GET`  | `/historical/{symbol}/last`    | Obtener ultima candle completa                         |
+| `POST` | `/historical/batch`            | Consulta masiva de candles (listas)                    |
+| `POST` | `/historical/batch/last`       | Consulta masiva de ultima candle cerrada               |
+| `POST` | `/historical/batch/current`    | Consulta masiva de barra en formacion                  |
 
 **Parametros de `/historical/{symbol}`:**
 
-| Parametro | Tipo | Requerido | Descripcion |
-|---|---|---|---|
-| `symbol` | String (path) | Si | Simbolo del activo (ej: `AAPL`, `SPY`, `BTC`) |
-| `timeframe` | Enum (query) | Si | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1` |
-| `endDate` | ISO DateTime (query) | No | Fecha limite. Si se omite, usa la hora actual |
-| `bars` | Integer (query) | No | Numero de barras a retornar. Si se omite, retorna todas las disponibles |
+| Parametro   | Tipo                 | Requerido | Descripcion                                                             |
+| ----------- | -------------------- | --------- | ----------------------------------------------------------------------- |
+| `symbol`    | String (path)        | Si        | Simbolo del activo (ej: `AAPL`, `SPY`, `BTC`)                           |
+| `timeframe` | Enum (query)         | Si        | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1`                       |
+| `endDate`   | ISO DateTime (query) | No        | Fecha limite. Si se omite, usa la hora actual                           |
+| `bars`      | Integer (query)      | No        | Numero de barras a retornar. Si se omite, retorna todas las disponibles |
 
 **Comportamiento:**
+
 - Nunca retorna la barra en formacion (la barra cuyo periodo aun no ha cerrado)
 - Si `bars` se especifica, retorna las N barras mas recientes
 - DxLink entrega ~400-420 candles unicas por consulta (limite del servidor)
 
 **Ejemplos:**
+
 ```
 GET /api/marketdata/historical/AAPL?timeframe=M5
 GET /api/marketdata/historical/SPY?timeframe=M1&bars=15
@@ -252,17 +257,19 @@ GET /api/marketdata/historical/BTC?timeframe=M1&bars=15
 
 **Parametros de `/historical/{symbol}/current`:**
 
-| Parametro | Tipo | Requerido | Descripcion |
-|---|---|---|---|
-| `symbol` | String (path) | Si | Simbolo del activo |
-| `timeframe` | Enum (query) | Si | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1` |
+| Parametro   | Tipo          | Requerido | Descripcion                                       |
+| ----------- | ------------- | --------- | ------------------------------------------------- |
+| `symbol`    | String (path) | Si        | Simbolo del activo                                |
+| `timeframe` | Enum (query)  | Si        | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1` |
 
 **Comportamiento:**
+
 - Retorna la barra cuyo periodo **aun no ha cerrado** (en formacion)
 - Retorna `204 No Content` si no hay barra en formacion disponible
 - Los valores OHLCV de la barra pueden cambiar hasta que cierre el periodo
 
 **Ejemplos:**
+
 ```
 GET /api/marketdata/historical/AAPL/current?timeframe=M5
 GET /api/marketdata/historical/SPY/current?timeframe=M1
@@ -270,108 +277,220 @@ GET /api/marketdata/historical/SPY/current?timeframe=M1
 
 **Parametros de `/historical/{symbol}/last`:**
 
-| Parametro | Tipo | Requerido | Descripcion |
-|---|---|---|---|
-| `symbol` | String (path) | Si | Simbolo del activo |
-| `timeframe` | Enum (query) | Si | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1` |
+| Parametro   | Tipo          | Requerido | Descripcion                                       |
+| ----------- | ------------- | --------- | ------------------------------------------------- |
+| `symbol`    | String (path) | Si        | Simbolo del activo                                |
+| `timeframe` | Enum (query)  | Si        | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1` |
 
 **Comportamiento:**
+
 - Retorna la candle completa mas reciente (periodo ya cerrado)
 - Retorna `204 No Content` si no hay candles disponibles
 
 **Ejemplos:**
+
 ```
 GET /api/marketdata/historical/AAPL/last?timeframe=M5
 GET /api/marketdata/historical/SPY/last?timeframe=H1
 ```
 
-**Respuesta de candle (aplica a los 3 endpoints):**
+**Parametros de `POST /historical/batch`, `/batch/last` y `/batch/current`:**
+
+| Campo       | Tipo           | Requerido | Descripcion                                       |
+| ----------- | -------------- | --------- | ------------------------------------------------- |
+| `symbols`   | List\<String\> | Si        | Lista de simbolos (ej: `["AAPL", "TSLA"]`)        |
+| `timeframe` | Enum           | Si        | `M1`, `M5`, `M15`, `M30`, `H1`, `D1`, `W1`, `MO1` |
+| `bars`      | Integer        | No        | Solo para `/batch`: Numero de barras (def: 100)   |
+
+**Comportamiento:**
+
+- `/batch`: Retorna un mapa `candlesPorSimbolo` con **listas** de candles.
+- `/batch/last`: Retorna un mapa `candlePorSimbolo` con la **única** última candle cerrada.
+- `/batch/current`: Retorna un mapa `candlePorSimbolo` con la **única** barra en formación.
+- Ideal para scanners y sincronización de multiples activos en una sola petición.
+
+**Ejemplo Batch Histórico:**
+
+```json
+POST /api/marketdata/historical/batch
+{
+  "symbols": ["AAPL", "MSFT", "GOOGL"],
+  "timeframe": "M5",
+  "bars": 100
+}
+```
+
+**Ejemplo Batch Last/Current:**
+
+```json
+POST /api/marketdata/historical/batch/last
+{
+  "symbols": ["AAPL", "TSLA", "NVDA"],
+  "timeframe": "M1"
+}
+```
+
+**Esquema de Respuesta Batch (Varios):**
+
+```json
+// POST /batch
+{
+  "candlesPorSimbolo": {
+    "AAPL": [ { "symbol": "AAPL", "timestamp": "...", ... }, ... ]
+  },
+  "serverTimestamp": "2026-01-30T21:00:00Z"
+}
+
+// POST /batch/last o /batch/current
+{
+  "candlePorSimbolo": {
+    "AAPL": { "symbol": "AAPL", "timestamp": "...", ... }
+  },
+  "serverTimestamp": "2026-01-30T21:00:00Z"
+}
+```
+
+**Respuesta de candle (aplica a todos los endpoints de Historical):**
+
 ```json
 {
   "symbol": "AAPL",
   "timestamp": "2026-01-30T20:55:00Z",
-  "open": 235.50,
-  "high": 236.10,
-  "low": 235.30,
-  "close": 235.90,
+  "open": 235.5,
+  "high": 236.1,
+  "low": 235.3,
+  "close": 235.9,
   "volume": 12500.0
 }
 ```
 
 ### Quote
 
-| Metodo | Path | Descripcion |
-|---|---|---|
-| `GET` | `/quote/{symbol}` | Obtener quote actual de un simbolo |
+| Metodo | Path              | Descripcion                        |
+| ------ | ----------------- | ---------------------------------- |
+| `GET`  | `/quote/{symbol}` | Obtener quote actual de un simbolo |
 
 **Parametros:**
 
-| Parametro | Tipo | Requerido | Descripcion |
-|---|---|---|---|
-| `symbol` | String (path) | Si | Simbolo del activo (ej: `AAPL`, `SPY`) |
+| Parametro | Tipo          | Requerido | Descripcion                            |
+| --------- | ------------- | --------- | -------------------------------------- |
+| `symbol`  | String (path) | Si        | Simbolo del activo (ej: `AAPL`, `SPY`) |
 
 **Ejemplo:**
+
 ```
 GET /api/marketdata/quote/AAPL
 ```
 
+**Respuesta:**
+
+```json
+{
+  "symbol": "AAPL",
+  "bid": 235.45,
+  "ask": 235.55,
+  "last": 235.50,
+  "volume": 1500000,
+  "tradingHalted": false,
+  "beta": 1.1,
+  ...
+}
+```
+
 ### Earnings
 
-| Metodo | Path | Descripcion |
-|---|---|---|
-| `GET` | `/earnings/{symbol}` | Obtener proximo reporte de earnings |
+| Metodo | Path                 | Descripcion                         |
+| ------ | -------------------- | ----------------------------------- |
+| `GET`  | `/earnings/{symbol}` | Obtener proximo reporte de earnings |
 
 **Parametros:**
 
-| Parametro | Tipo | Requerido | Descripcion |
-|---|---|---|---|
-| `symbol` | String (path) | Si | Simbolo del activo (ej: `AAPL`, `TSLA`) |
+| Parametro | Tipo          | Requerido | Descripcion                             |
+| --------- | ------------- | --------- | --------------------------------------- |
+| `symbol`  | String (path) | Si        | Simbolo del activo (ej: `AAPL`, `TSLA`) |
 
 **Ejemplo:**
+
 ```
 GET /api/marketdata/earnings/AAPL
 ```
 
+**Respuesta:**
+
+```json
+{
+  "symbol": "AAPL",
+  "occurredDate": "2026-02-01",
+  "eps": 1.5,
+  "daysUntilEarnings": 12
+}
+```
+
 ### Mercados y Simbolos
 
-| Metodo | Path | Descripcion |
-|---|---|---|
-| `GET` | `/markets` | Listar mercados disponibles (NYSE, NASDAQ, AMEX, ETF, OTC) |
-| `GET` | `/symbols` | Obtener simbolos filtrados por mercado |
+| Metodo | Path       | Descripcion                                                |
+| ------ | ---------- | ---------------------------------------------------------- |
+| `GET`  | `/markets` | Listar mercados disponibles (NYSE, NASDAQ, AMEX, ETF, OTC) |
+| `GET`  | `/symbols` | Obtener simbolos filtrados por mercado                     |
 
 **Parametros de `/symbols`:**
 
-| Parametro | Tipo | Requerido | Descripcion |
-|---|---|---|---|
-| `markets` | List\<String\> (query) | Si | Lista de mercados separados por coma: `NYSE`, `NASDAQ`, `AMEX`, `ETF`, `OTC` |
+| Parametro | Tipo                   | Requerido | Descripcion                                                                  |
+| --------- | ---------------------- | --------- | ---------------------------------------------------------------------------- |
+| `markets` | List\<String\> (query) | Si        | Lista de mercados separados por coma: `NYSE`, `NASDAQ`, `AMEX`, `ETF`, `OTC` |
 
 **Ejemplos:**
+
 ```
 GET /api/marketdata/markets
 GET /api/marketdata/symbols?markets=NYSE,NASDAQ
-GET /api/marketdata/symbols?markets=ETF
+```
+
+**Respuestas:**
+
+**GET /markets**
+
+```json
+[
+  { "code": "NYSE", "name": "New York Stock Exchange" },
+  { "code": "NASDAQ", "name": "NASDAQ Stock Market" }
+]
+```
+
+**GET /symbols?markets=ETF**
+
+```json
+[
+  {
+    "symbol": "SPY",
+    "description": "SPDR S&P 500 ETF Trust",
+    "listedMarket": "ARCA"
+  },
+  ...
+]
 ```
 
 ### Ordenes
 
-| Metodo | Path | Descripcion |
-|---|---|---|
-| `POST` | `/orders` | Colocar orden bracket (OTOCO) |
-| `DELETE` | `/orders/{orderId}` | Cancelar orden |
+| Metodo   | Path                | Descripcion                   |
+| -------- | ------------------- | ----------------------------- |
+| `POST`   | `/orders`           | Colocar orden bracket (OTOCO) |
+| `DELETE` | `/orders/{orderId}` | Cancelar orden                |
 
 **Request body de `POST /orders`:**
 
-| Campo | Tipo | Requerido | Descripcion |
-|---|---|---|---|
-| `symbol` | String | Si | Simbolo del activo |
-| `action` | String | Si | Accion: `BUY_TO_OPEN`, `SELL_TO_OPEN`, `BUY_TO_CLOSE`, `SELL_TO_CLOSE` |
-| `quantity` | Integer | Si | Cantidad de acciones (debe ser positivo) |
-| `entryPrice` | BigDecimal | Si | Precio de entrada |
-| `stopLossPrice` | BigDecimal | Si | Precio de stop loss |
-| `takeProfitPrice` | BigDecimal | Si | Precio de take profit |
-| `timeInForce` | String | No | Tiempo en fuerza (ej: `GTC`, `DAY`) |
+| Campo             | Tipo       | Requerido | Descripcion                                                            |
+| ----------------- | ---------- | --------- | ---------------------------------------------------------------------- |
+| `symbol`          | String     | Si        | Simbolo del activo                                                     |
+| `action`          | String     | Si        | Accion: `BUY_TO_OPEN`, `SELL_TO_OPEN`, `BUY_TO_CLOSE`, `SELL_TO_CLOSE` |
+| `quantity`        | Integer    | Si        | Cantidad de acciones (debe ser positivo)                               |
+| `entryPrice`      | BigDecimal | Si        | Precio de entrada                                                      |
+| `stopLossPrice`   | BigDecimal | Si        | Precio de stop loss                                                    |
+| `takeProfitPrice` | BigDecimal | Si        | Precio de take profit                                                  |
+| `timeInForce`     | String     | No        | Tiempo en fuerza (ej: `GTC`, `DAY`)                                    |
 
 **Ejemplo request:**
+
 ```json
 POST /api/marketdata/orders
 {
@@ -386,6 +505,7 @@ POST /api/marketdata/orders
 ```
 
 **Ejemplo response:**
+
 ```json
 {
   "orderId": "12345",
@@ -400,21 +520,23 @@ POST /api/marketdata/orders
 
 **Parametros de `DELETE /orders/{orderId}`:**
 
-| Parametro | Tipo | Requerido | Descripcion |
-|---|---|---|---|
-| `orderId` | String (path) | Si | ID de la orden a cancelar |
+| Parametro | Tipo          | Requerido | Descripcion               |
+| --------- | ------------- | --------- | ------------------------- |
+| `orderId` | String (path) | Si        | ID de la orden a cancelar |
 
 **Ejemplo:**
+
 ```
 DELETE /api/marketdata/orders/12345
 ```
+
 Retorna `204 No Content` si la cancelacion fue exitosa.
 
 ### Health
 
-| Metodo | Path | Descripcion |
-|---|---|---|
-| `GET` | `/api/health/dxlink/status` | Estado de conexion DxLink |
+| Metodo | Path                           | Descripcion                |
+| ------ | ------------------------------ | -------------------------- |
+| `GET`  | `/api/health/dxlink/status`    | Estado de conexion DxLink  |
 | `POST` | `/api/health/dxlink/reconnect` | Forzar reconexion a DxLink |
 
 ## Integraciones Externas
@@ -424,6 +546,7 @@ Retorna `204 No Content` si la cancelacion fue exitosa.
 Autenticacion OAuth 2.0 con refresh token. El servicio renueva automaticamente el access token cada 23 horas y guarda el nuevo refresh token en memoria para evitar expiracion.
 
 Endpoints consumidos:
+
 - `POST /oauth/token` - Autenticacion
 - `GET /api-quote-tokens` - Token para DxLink
 - `GET /instruments/equities/active` - Listado de simbolos
@@ -444,6 +567,7 @@ Conexion WebSocket persistente para datos de mercado en tiempo real y candles hi
 - **Keepalive**: Cada 30 segundos
 
 **Flujo de conexion:**
+
 1. SETUP -> AUTH (con token OAuth) -> CHANNEL FEED -> FEED_SETUP -> FEED_SUBSCRIPTION
 2. El servidor envia candles en batches via FEED_DATA
 3. `eventFlags & 0x01` (TX_PENDING) indica si el snapshot sigue activo
@@ -453,29 +577,29 @@ Conexion WebSocket persistente para datos de mercado en tiempo real y candles hi
 
 ### Entrada (consumidos)
 
-| Topic | Descripcion |
-|---|---|
-| `orders.commands` | Comandos de ordenes desde otros servicios |
+| Topic                 | Descripcion                                     |
+| --------------------- | ----------------------------------------------- |
+| `orders.commands`     | Comandos de ordenes desde otros servicios       |
 | `marketdata.commands` | Comandos de suscripcion/desuscripcion real-time |
 
 ### Salida (publicados)
 
-| Topic | Key | Descripcion |
-|---|---|---|
-| `orders.updates` | orderId | Actualizaciones de estado de ordenes |
-| `marketdata.stream` | symbol | Stream de datos de mercado en tiempo real |
+| Topic               | Key     | Descripcion                               |
+| ------------------- | ------- | ----------------------------------------- |
+| `orders.updates`    | orderId | Actualizaciones de estado de ordenes      |
+| `marketdata.stream` | symbol  | Stream de datos de mercado en tiempo real |
 
 ## Configuracion
 
 ### Variables de Entorno Requeridas
 
-| Variable | Descripcion |
-|---|---|
-| `TT_CLIENT_ID` | Client ID de TastyTrade OAuth |
-| `TT_CLIENT_SECRET` | Client Secret de TastyTrade OAuth |
-| `TT_REFRESH_TOKEN` | Refresh token de TastyTrade (se renueva automaticamente en runtime) |
-| `TASTYTRADE_ACCOUNT_NUMBER` | Numero de cuenta TastyTrade |
-| `DXLINK_URL` | URL del WebSocket DxLink (default: `wss://tasty.dxfeed.com/realtime`) |
+| Variable                    | Descripcion                                                           |
+| --------------------------- | --------------------------------------------------------------------- |
+| `TT_CLIENT_ID`              | Client ID de TastyTrade OAuth                                         |
+| `TT_CLIENT_SECRET`          | Client Secret de TastyTrade OAuth                                     |
+| `TT_REFRESH_TOKEN`          | Refresh token de TastyTrade (se renueva automaticamente en runtime)   |
+| `TASTYTRADE_ACCOUNT_NUMBER` | Numero de cuenta TastyTrade                                           |
+| `DXLINK_URL`                | URL del WebSocket DxLink (default: `wss://tasty.dxfeed.com/realtime`) |
 
 ### Perfiles de Spring
 
@@ -493,7 +617,7 @@ spring:
     name: marketdata-service
   threads:
     virtual:
-      enabled: true    # Virtual threads de Java 21
+      enabled: true # Virtual threads de Java 21
 
 tastytrade:
   api-base-url: https://api.tastytrade.com
@@ -503,7 +627,7 @@ tastytrade:
     accept-data-format: COMPACT
   token-refresh:
     enabled: true
-    fixed-rate-hours: 23    # Renueva token antes de las 24h de expiracion
+    fixed-rate-hours: 23 # Renueva token antes de las 24h de expiracion
 ```
 
 ## Ejecucion
@@ -539,20 +663,42 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 ### Servicios del Docker Compose
 
-| Servicio | Puerto | Descripcion |
-|---|---|---|
-| Zookeeper | 2181 | Coordinador Kafka |
-| Kafka | 9092 | Message broker |
-| PostgreSQL (marketdata) | 5432 | Base de datos |
-| PostgreSQL (scanners) | 5433 | Base de datos |
-| Directory (Eureka) | 8761 | Service registry |
-| Gateway | 8080 | API Gateway |
-| scanner-management-service | 8081 | Servicio de scanners |
-| **marketdata-service** | **8082** | **Este servicio** |
+| Servicio                   | Puerto   | Descripcion          |
+| -------------------------- | -------- | -------------------- |
+| Zookeeper                  | 2181     | Coordinador Kafka    |
+| Kafka                      | 9092     | Message broker       |
+| PostgreSQL (marketdata)    | 5432     | Base de datos        |
+| PostgreSQL (scanners)      | 5433     | Base de datos        |
+| Directory (Eureka)         | 8761     | Service registry     |
+| Gateway                    | 8080     | API Gateway          |
+| scanner-management-service | 8081     | Servicio de scanners |
+| **marketdata-service**     | **8082** | **Este servicio**    |
 
 ## Limitaciones Conocidas
 
 - **~400-420 candles por consulta**: DxLink entrega ~700 eventos raw que despues de deduplicacion quedan ~400-420 candles unicas. Es una limitacion del servidor.
 - **Refresh token**: TastyTrade expira el refresh token cada 24 horas. El servicio lo renueva automaticamente en runtime, pero si el servicio se reinicia despues de 24h sin actividad, se necesita un refresh token nuevo en la variable de entorno.
 - **Mercado cerrado**: En fines de semana y feriados no hay candles nuevas de equities. La API responde normalmente pero con datos del ultimo dia de trading.
+
 - **BTC**: El simbolo en TastyTrade/DxLink es simplemente `BTC` (no `BTC/USD`). Tiene menor liquidez que equities, las candles de minuto pueden tener gaps.
+
+## Arquitectura de Multiplexación DxLink
+
+Para optimizar el rendimiento y permitir la concurrencia real en solicitudes de datos históricos (especialmente para scanners con múltiples símbolos), se implementó una arquitectura de multiplexación sobre la conexión WebSocket de DxLink.
+
+### Conceptos Clave
+
+1.  **Conexión Única (Single Socket)**:
+    - Existe **una sola** conexión física persistente (TCP/WebSocket) hacia los servidores de DxLink (`wss://tasty.dxfeed.com/realtime`).
+    - Esta conexión maneja la autenticación, los "keepalives" y el "heartbeat".
+
+2.  **Canal Default (ID 1)**:
+    - Se crea automáticamente al conectar.
+    - Es persistente y se reconecta automáticamente si la conexión WebSocket se cae.
+    - Se utiliza para suscripciones de streaming en tiempo real (Quotes, Trades) que deben permanecer activas indefinidamente.
+
+3.  **Canales Efímeros (On-Demand)**:
+    - Se crean dinámicamente (`dxLinkClient.openNewChannel()`) para tareas específicas, como una solicitud batch de candles históricas.
+    - **Aislamiento**: Cada solicitud tiene su propio `channelId`. Los mensajes del servidor vienen etiquetados con este ID, permitiendo enrutar las respuestas exactamente al hilo que hizo la solicitud.
+    - **Ciclo de Vida Corto**: Estos canales se abren, se utilizan para la suscripción, se recibe la data, y **se cierran inmediatamente** una vez completada la tarea o tras un timeout.
+    - **Sin Reconexión**: A diferencia del canal default, estos canales no se reconectan automáticamente. Si la conexión global se cae durante una solicitud batch, esa solicitud fallará y deberá ser reintentada por el cliente.
