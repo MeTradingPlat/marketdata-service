@@ -14,5 +14,10 @@ public interface GestionarHistoricalDataCUIntPort {
 
     Candle getLastCandle(String symbol, EnumTimeframe timeframe);
 
+    // Batch methods for single candle
+    Map<String, Candle> getLastCandleBatch(List<String> symbols, EnumTimeframe timeframe);
+
     Candle getCurrentCandle(String symbol, EnumTimeframe timeframe);
+
+    Map<String, Candle> getCurrentCandleBatch(List<String> symbols, EnumTimeframe timeframe);
 }

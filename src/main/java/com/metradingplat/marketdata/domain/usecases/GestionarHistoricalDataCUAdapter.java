@@ -38,7 +38,7 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
         List<Candle> completed = allCandles.stream()
                 .filter(c -> {
                     Instant candleEnd = c.getTimestamp().plus(candleDuration);
-                    return !candleEnd.isAfter(now)             // la barra ya cerro
+                    return !candleEnd.isAfter(now) // la barra ya cerro
                             && !candleEnd.isAfter(effectiveEnd); // antes del endDate
                 })
                 .collect(Collectors.toList());
@@ -59,7 +59,8 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
         log.info("Batch fetching {} symbols, timeframe={}, bars={}", symbols.size(), timeframe, bars);
 
         // Obtener datos brutos del gateway
-        Map<String, List<Candle>> rawData = this.objExternalCommunicationGateway.getCandlesBatch(symbols, timeframe, bars);
+        Map<String, List<Candle>> rawData = this.objExternalCommunicationGateway.getCandlesBatch(symbols, timeframe,
+                bars);
 
         // Filtrar y procesar cada simbolo
         Map<String, List<Candle>> resultado = new HashMap<>();
@@ -77,8 +78,8 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
 
             // Filtrar solo barras completas
             List<Candle> completed = allCandles.stream()
-                .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
-                .collect(Collectors.toList());
+                    .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
+                    .collect(Collectors.toList());
 
             // Truncar a las ultimas N barras si es necesario
             if (bars > 0 && bars < completed.size()) {
@@ -89,7 +90,7 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
         }
 
         log.info("Batch complete: {} simbolos procesados, {} con datos",
-            resultado.size(), resultado.values().stream().filter(l -> !l.isEmpty()).count());
+                resultado.size(), resultado.values().stream().filter(l -> !l.isEmpty()).count());
 
         return resultado;
     }
@@ -98,6 +99,37 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
     public Candle getLastCandle(String symbol, EnumTimeframe timeframe) {
         List<Candle> candles = getCandles(symbol, timeframe, null, 1);
         return candles.isEmpty() ? null : candles.get(0);
+    }
+
+    @Override
+    public Map<String, Candle> getLastCandleBatch(List<String> symbols, EnumTimeframe timeframe) {
+        log.info("Batch Last Candle fetching {} symbols, timeframe={}", symbols.size(), timeframe);
+
+        // Obtener datos (se piden 50 barras para asegurar tener la ultima cerrada)
+        Map<String, List<Candle>> rawData = this.objExternalCommunicationGateway.getLastCandleBatch(symbols, timeframe);
+
+        Map<String, Candle> resultado = new HashMap<>();
+        Instant now = Instant.now();
+        Duration candleDuration = timeframe.getDuration();
+
+        for (Map.Entry<String, List<Candle>> entry : rawData.entrySet()) {
+            List<Candle> allCandles = entry.getValue();
+            if (allCandles == null || allCandles.isEmpty()) {
+                continue; // no data for this symbol
+            }
+
+            // Filtrar: ultima barra completada
+            Candle lastCompleted = allCandles.stream()
+                    .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
+                    .reduce((first, second) -> second) // la mas reciente
+                    .orElse(null);
+
+            if (lastCompleted != null) {
+                resultado.put(entry.getKey(), lastCompleted);
+            }
+        }
+
+        return resultado;
     }
 
     @Override
@@ -116,5 +148,35 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
                 .filter(c -> c.getTimestamp().plus(candleDuration).isAfter(now))
                 .reduce((first, second) -> second) // la mas reciente
                 .orElse(null);
+    }
+
+    @Override
+    public Map<String, Candle> getCurrentCandleBatch(List<String> symbols, EnumTimeframe timeframe) {
+        log.info("Batch Current Candle fetching {} symbols, timeframe={}", symbols.size(), timeframe);
+
+        Map<String, List<Candle>> rawData = this.objExternalCommunicationGateway.getCurrentCandleBatch(symbols,
+                timeframe);
+
+        Map<String, Candle> resultado = new HashMap<>();
+        Instant now = Instant.now();
+        Duration candleDuration = timeframe.getDuration();
+
+        for (Map.Entry<String, List<Candle>> entry : rawData.entrySet()) {
+            List<Candle> allCandles = entry.getValue();
+            if (allCandles == null || allCandles.isEmpty())
+                continue;
+
+            // Filtrar: barra en formacion
+            Candle current = allCandles.stream()
+                    .filter(c -> c.getTimestamp().plus(candleDuration).isAfter(now))
+                    .reduce((first, second) -> second)
+                    .orElse(null);
+
+            if (current != null) {
+                resultado.put(entry.getKey(), current);
+            }
+        }
+
+        return resultado;
     }
 }

@@ -22,6 +22,7 @@ import com.metradingplat.marketdata.application.input.GestionarHistoricalDataCUI
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarHistoricalData.DTOAnswer.BatchCandlesDTORespuesta;
+import com.metradingplat.marketdata.infrastructure.input.controllerGestionarHistoricalData.DTOAnswer.BatchSingleCandleDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarHistoricalData.DTOAnswer.CandleDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarHistoricalData.DTOPetition.BatchCandlesDTOPeticion;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarHistoricalData.mapper.HistoricalDataMapper;
@@ -45,8 +46,7 @@ public class HistoricalDataRestController {
     public ResponseEntity<List<CandleDTORespuesta>> getCandles(
             @PathVariable("symbol") @NotNull String symbol,
             @RequestParam("timeframe") @NotNull EnumTimeframe timeframe,
-            @RequestParam(value = "endDate", required = false)
-                @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime endDate,
+            @RequestParam(value = "endDate", required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) OffsetDateTime endDate,
             @RequestParam(value = "bars", required = false) Integer bars) {
 
         log.info("GET /historical/{} timeframe={} endDate={} bars={}", symbol, timeframe, endDate, bars);
@@ -93,15 +93,15 @@ public class HistoricalDataRestController {
     public ResponseEntity<BatchCandlesDTORespuesta> getCandlesBatch(
             @RequestBody @Valid BatchCandlesDTOPeticion peticion) {
 
-        int barsReq = peticion.getBars() != null ? peticion.getBars() : 700;
+        int barsReq = peticion.getBars() != null ? peticion.getBars() : 100; // Limite default mas bajo
+
         log.info("POST /historical/batch symbols={} timeframe={} bars={}",
-            peticion.getSymbols(), peticion.getTimeframe(), barsReq);
+                peticion.getSymbols().size(), peticion.getTimeframe(), barsReq);
 
         Map<String, List<Candle>> candlesDominio = this.objGestionarHistoricalDataCUInt.getCandlesBatch(
-            peticion.getSymbols(),
-            peticion.getTimeframe(),
-            barsReq
-        );
+                peticion.getSymbols(),
+                peticion.getTimeframe(),
+                barsReq);
 
         // Convertir dominio a DTO
         Map<String, List<CandleDTORespuesta>> candlesDTO = new HashMap<>();
@@ -110,12 +110,66 @@ public class HistoricalDataRestController {
         }
 
         BatchCandlesDTORespuesta respuesta = BatchCandlesDTORespuesta.builder()
-            .candlesPorSimbolo(candlesDTO)
-            .serverTimestamp(Instant.now())
-            .build();
+                .candlesPorSimbolo(candlesDTO)
+                .serverTimestamp(Instant.now())
+                .build();
 
         log.info("POST /historical/batch -> {} simbolos, {} candles totales",
-            candlesDTO.size(), candlesDTO.values().stream().mapToInt(List::size).sum());
+                candlesDTO.size(), candlesDTO.values().stream().mapToInt(List::size).sum());
+
+        return ResponseEntity.ok(respuesta);
+    }
+
+    @PostMapping("/batch/last")
+    public ResponseEntity<BatchSingleCandleDTORespuesta> getLastCandlesBatch(
+            @RequestBody @Valid BatchCandlesDTOPeticion peticion) {
+
+        log.info("POST /historical/batch/last symbols={} timeframe={}",
+                peticion.getSymbols().size(), peticion.getTimeframe());
+
+        Map<String, Candle> candlesDominio = this.objGestionarHistoricalDataCUInt.getLastCandleBatch(
+                peticion.getSymbols(),
+                peticion.getTimeframe());
+
+        // Convertir dominio a DTO
+        Map<String, CandleDTORespuesta> candlesDTO = new HashMap<>();
+        for (Map.Entry<String, Candle> entry : candlesDominio.entrySet()) {
+            candlesDTO.put(entry.getKey(), this.objMapper.deDominioARespuesta(entry.getValue()));
+        }
+
+        BatchSingleCandleDTORespuesta respuesta = BatchSingleCandleDTORespuesta.builder()
+                .candlePorSimbolo(candlesDTO)
+                .serverTimestamp(Instant.now())
+                .build();
+
+        log.info("POST /historical/batch/last -> {} simbolos con datos", candlesDTO.size());
+
+        return ResponseEntity.ok(respuesta);
+    }
+
+    @PostMapping("/batch/current")
+    public ResponseEntity<BatchSingleCandleDTORespuesta> getCurrentCandlesBatch(
+            @RequestBody @Valid BatchCandlesDTOPeticion peticion) {
+
+        log.info("POST /historical/batch/current symbols={} timeframe={}",
+                peticion.getSymbols().size(), peticion.getTimeframe());
+
+        Map<String, Candle> candlesDominio = this.objGestionarHistoricalDataCUInt.getCurrentCandleBatch(
+                peticion.getSymbols(),
+                peticion.getTimeframe());
+
+        // Convertir dominio a DTO
+        Map<String, CandleDTORespuesta> candlesDTO = new HashMap<>();
+        for (Map.Entry<String, Candle> entry : candlesDominio.entrySet()) {
+            candlesDTO.put(entry.getKey(), this.objMapper.deDominioARespuesta(entry.getValue()));
+        }
+
+        BatchSingleCandleDTORespuesta respuesta = BatchSingleCandleDTORespuesta.builder()
+                .candlePorSimbolo(candlesDTO)
+                .serverTimestamp(Instant.now())
+                .build();
+
+        log.info("POST /historical/batch/current -> {} simbolos con datos", candlesDTO.size());
 
         return ResponseEntity.ok(respuesta);
     }

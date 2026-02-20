@@ -62,8 +62,23 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
 
     @Override
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.debug("Gateway: Batch fetching candles for {} symbols, timeframe: {}, bars: {}", symbols.size(), timeframe, bars);
+        log.debug("Gateway: Batch fetching candles for {} symbols, timeframe: {}, bars: {}", symbols.size(), timeframe,
+                bars);
         return tastyTradeService.getCandlesBatch(symbols, timeframe, bars);
+    }
+
+    @Override
+    public Map<String, List<Candle>> getLastCandleBatch(List<String> symbols, EnumTimeframe timeframe) {
+        log.debug("Gateway: Batch fetching LAST candle for {} symbols, timeframe: {}", symbols.size(), timeframe);
+        // Pedimos 50 barras sin cache para asegurar tener la ultima cerrada
+        return tastyTradeService.getCandlesBatchNoCache(symbols, timeframe, 50);
+    }
+
+    @Override
+    public Map<String, List<Candle>> getCurrentCandleBatch(List<String> symbols, EnumTimeframe timeframe) {
+        log.debug("Gateway: Batch fetching CURRENT candle for {} symbols, timeframe: {}", symbols.size(), timeframe);
+        // Pedimos 10 barras sin cache para tener la barra en formacion
+        return tastyTradeService.getCandlesBatchNoCache(symbols, timeframe, 10);
     }
 
     @Override

@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.Collectors;
+// import java.util.concurrent.locks.ReentrantLock; removed
+// import java.util.stream.Collectors; removed
 
 import org.springframework.stereotype.Service;
 
@@ -39,8 +39,8 @@ public class TastyTradeService {
     private final DxLinkClient dxLinkClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
 
-    // Lock para serializar acceso a DxLink (evita bug de callback global)
-    private final ReentrantLock dxLinkLock = new ReentrantLock();
+    // Lock eliminado: ya no es necesario con multiplexación de canales
+    // private final ReentrantLock dxLinkLock = new ReentrantLock();
 
     // Cache en memoria con TTL de 55 segundos
     private final ConcurrentHashMap<String, CacheEntry> candleCache = new ConcurrentHashMap<>();
@@ -64,10 +64,10 @@ public class TastyTradeService {
         });
 
         // Configurar callback para candles (solo logging, no se guarda en BD)
-        dxLinkClient.setOnCandle((symbol, candle) -> {
-            log.debug("Candle received for {}: {} O={} H={} L={} C={}",
+        dxLinkClient.setOnCandle((symbol, candle, isComplete) -> {
+            log.debug("Candle received for {}: {} O={} H={} L={} C={} complete={}",
                     symbol, candle.getTimestamp(), candle.getOpen(),
-                    candle.getHigh(), candle.getLow(), candle.getClose());
+                    candle.getHigh(), candle.getLow(), candle.getClose(), isComplete);
         });
 
         // Configurar token refresher para auto-reconexión
@@ -116,11 +116,12 @@ public class TastyTradeService {
 
     /**
      * Obtiene candles historicos de multiples simbolos en un solo fetch batch.
-     * Usa lock para evitar el bug del callback global y cache para evitar requests redundantes.
+     * Usa lock para evitar el bug del callback global y cache para evitar requests
+     * redundantes.
      *
-     * @param symbols lista de simbolos
+     * @param symbols   lista de simbolos
      * @param timeframe timeframe de las candles
-     * @param bars cantidad maxima de barras por simbolo
+     * @param bars      cantidad maxima de barras por simbolo
      * @return mapa de simbolo -> lista de candles ordenadas por timestamp asc
      */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
@@ -166,7 +167,7 @@ public class TastyTradeService {
         }
 
         log.debug("Batch complete: {} symbols total, {} con datos", resultado.size(),
-            resultado.values().stream().filter(l -> !l.isEmpty()).count());
+                resultado.values().stream().filter(l -> !l.isEmpty()).count());
 
         return resultado;
     }
@@ -174,124 +175,109 @@ public class TastyTradeService {
     private Map<String, List<Candle>> fetchCandlesBatchFromDxLink(
             List<String> symbols, EnumTimeframe timeframe, int bars) {
 
-        dxLinkLock.lock();
+        ensureConnected(); // Asegura que el cliente principal esté conectado
+
+        DxLinkClient.DxLinkChannel channel = null;
         try {
-            ensureConnected();
+            // 1. Abrir un canal dedicado para este batch
+            try {
+                channel = dxLinkClient.openNewChannel().get(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception e) {
+                log.error("Failed to open dedicated channel for batch", e);
+                return new HashMap<>();
+            }
 
             String tf = timeframe.getLabel();
             long fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(bars + 100)).toEpochMilli();
 
-            // Mapa concurrente para agrupar candles por simbolo
-            ConcurrentHashMap<String, Set<CandleKey>> seenKeys = new ConcurrentHashMap<>();
+            // Estructuras thread-safe para recolectar datos del canal
             ConcurrentHashMap<String, List<Candle>> candlesPorSimbolo = new ConcurrentHashMap<>();
+            Set<String> completedSymbols = ConcurrentHashMap.newKeySet();
 
-            // Configurar callback batch
-            dxLinkClient.setOnCandle((sym, candle) -> {
-                // sym viene como baseSymbol (extraido del candleSymbol en DxLinkClient)
-                if (!symbols.contains(sym)) {
+            // 2. Configurar callback en EL CANAL
+            channel.setOnCandle((sym, candle, isComplete) -> {
+                if (!symbols.contains(sym))
                     return;
-                }
-                candle.setSymbol(sym);
-                candle.setTimeframe(timeframe);
 
-                CandleKey key = new CandleKey(sym, timeframe, candle.getTimestamp());
-                seenKeys.computeIfAbsent(sym, k -> ConcurrentHashMap.newKeySet());
-                if (seenKeys.get(sym).add(key)) {
-                    candlesPorSimbolo.computeIfAbsent(sym, k -> new ArrayList<>());
-                    synchronized (candlesPorSimbolo.get(sym)) {
-                        candlesPorSimbolo.get(sym).add(candle);
-                    }
+                candle.setTimeframe(timeframe); // Asignar timeframe que falta
+
+                candlesPorSimbolo.computeIfAbsent(sym, k -> new ArrayList<>());
+                synchronized (candlesPorSimbolo.get(sym)) {
+                    candlesPorSimbolo.get(sym).add(candle);
+                }
+
+                if (isComplete) {
+                    completedSymbols.add(sym);
                 }
             });
 
-            // Construir items de suscripcion batch
+            // 3. Preparar items de suscripción
             List<Map<String, Object>> subscriptionItems = symbols.stream()
-                .map(symbol -> {
-                    String candleSymbol = symbol + "{=" + tf + "}";
-                    return Map.<String, Object>of(
-                        "symbol", candleSymbol,
-                        "type", "Candle",
-                        "fromTime", fromTime
-                    );
-                })
-                .toList();
+                    .map(symbol -> {
+                        String candleSymbol = symbol + "{=" + tf + "}";
+                        return Map.<String, Object>of(
+                                "symbol", candleSymbol,
+                                "type", "Candle",
+                                "fromTime", fromTime);
+                    })
+                    .toList();
 
-            // Suscribir en batch
-            dxLinkClient.resetCandleSnapshot();
-            dxLinkClient.subscribeCandlesBatch(subscriptionItems);
+            // 4. Suscribir usando el canal dedicado
+            log.debug("Batch subscribing {} symbols on channel {}", symbols.size(), channel.getId());
+            channel.subscribeCandlesBatch(subscriptionItems);
 
-            // Esperar estabilizacion: sin nuevas candles por 3s, con timeout escalado
+            // 5. Esperar resultados
             int maxWaitSeconds = Math.min(10 + symbols.size() / 20, 60);
-            int noNewDataCount = 0;
-            int lastTotalCount = 0;
+            long startTime = System.currentTimeMillis();
 
-            for (int elapsed = 0; elapsed < maxWaitSeconds; elapsed++) {
+            while (System.currentTimeMillis() - startTime < maxWaitSeconds * 1000) {
+                if (completedSymbols.containsAll(symbols)) {
+                    log.debug("Batch complete on channel {} in {}ms", channel.getId(),
+                            System.currentTimeMillis() - startTime);
+                    break;
+                }
                 try {
-                    Thread.sleep(1000);
+                    Thread.sleep(50);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
                 }
-
-                int totalCount = candlesPorSimbolo.values().stream().mapToInt(List::size).sum();
-
-                if (elapsed % 5 == 0 || totalCount != lastTotalCount) {
-                    log.info("Batch waiting... {}s/{}, {} candles totales, {} simbolos con datos",
-                        elapsed + 1, maxWaitSeconds, totalCount, candlesPorSimbolo.size());
-                }
-
-                if (totalCount > 0 && totalCount == lastTotalCount) {
-                    noNewDataCount++;
-                    if (noNewDataCount >= 3) {
-                        log.info("Batch estabilizado despues de {}s (sin datos nuevos por 3s)", elapsed + 1);
-                        break;
-                    }
-                } else {
-                    noNewDataCount = 0;
-                }
-                lastTotalCount = totalCount;
             }
 
-            // Desuscribir en batch
-            List<String> candleSymbols = symbols.stream()
-                .map(s -> s + "{=" + tf + "}")
-                .toList();
-            dxLinkClient.unsubscribeCandlesBatch(candleSymbols);
-
-            // Restaurar callback por defecto
-            dxLinkClient.setOnCandle((sym, candle) -> {
-                log.debug("Candle received for {}: {} O={} H={} L={} C={}",
-                    sym, candle.getTimestamp(), candle.getOpen(),
-                    candle.getHigh(), candle.getLow(), candle.getClose());
-            });
-
-            // Ordenar y truncar resultados
+            // 6. Procesar resultados
             Map<String, List<Candle>> resultado = new HashMap<>();
             for (Map.Entry<String, List<Candle>> entry : candlesPorSimbolo.entrySet()) {
                 List<Candle> sorted;
                 synchronized (entry.getValue()) {
                     sorted = entry.getValue().stream()
-                        .sorted(Comparator.comparing(Candle::getTimestamp))
-                        .collect(Collectors.toList());
+                            .sorted(Comparator.comparing(Candle::getTimestamp))
+                            .toList();
                 }
-                // Truncar a las ultimas N barras
-                if (sorted.size() > bars) {
+                // Truncar
+                if (sorted.size() > bars && bars > 0) {
                     sorted = sorted.subList(sorted.size() - bars, sorted.size());
                 }
                 resultado.put(entry.getKey(), sorted);
             }
 
-            log.info("Batch fetch complete: {} simbolos con datos de {} solicitados",
-                resultado.size(), symbols.size());
-
             return resultado;
 
         } finally {
-            dxLinkLock.unlock();
+            // 7. Cerrar canal para liberar recursos
+            if (channel != null) {
+                channel.close();
+            }
         }
     }
 
-    private record CandleKey(String symbol, EnumTimeframe timeframe, Instant timestamp) {}
+    /**
+     * Obtiene candles actuales (in-formation y recientes) sin caché.
+     */
+    public Map<String, List<Candle>> getCandlesBatchNoCache(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        return fetchCandlesBatchFromDxLink(symbols, timeframe, bars);
+    }
+
+    // CandleKey record removed
 
     public List<ActiveEquity> getActiveEquities(int pageOffset, int perPage) {
         return tastyTradeClient.getActiveEquities(pageOffset, perPage);
