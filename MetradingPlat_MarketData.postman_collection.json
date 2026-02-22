@@ -197,13 +197,45 @@
 			]
 		},
 		{
-			"name": "Mercados y Simbolos",
+			"name": "Metadata",
 			"item": [
 				{
-					"name": "GET Lista de Mercados",
+					"name": "GET Timeframes (ES)",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "Accept-Language", "value": "es" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/timeframes",
+							"host": ["{{baseUrl}}"],
+							"path": ["timeframes"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Timeframes (EN)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept-Language", "value": "en" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/timeframes",
+							"host": ["{{baseUrl}}"],
+							"path": ["timeframes"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Markets (ES)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept-Language", "value": "es" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/markets",
 							"host": ["{{baseUrl}}"],
@@ -213,7 +245,7 @@
 					"response": []
 				},
 				{
-					"name": "GET Simbolos NYSE y NASDAQ",
+					"name": "GET Symbols by Markets (US Equities)",
 					"request": {
 						"method": "GET",
 						"header": [],
@@ -229,7 +261,7 @@
 					"response": []
 				},
 				{
-					"name": "GET Simbolos ETF",
+					"name": "GET Symbols by Markets (ETF)",
 					"request": {
 						"method": "GET",
 						"header": [],
@@ -240,56 +272,6 @@
 							"query": [
 								{ "key": "markets", "value": "ETF" }
 							]
-						}
-					},
-					"response": []
-				}
-			]
-		},
-		{
-			"name": "Metadatos (Nuevo)",
-			"item": [
-				{
-					"name": "GET Timeframes en Espanol",
-					"request": {
-						"method": "GET",
-						"header": [
-							{ "key": "Accept-Language", "value": "es" }
-						],
-						"url": {
-							"raw": "{{baseUrl}}/timeframes",
-							"host": ["{{baseUrl}}"],
-							"path": ["timeframes"]
-						}
-					},
-					"response": []
-				},
-				{
-					"name": "GET Timeframes en Ingles",
-					"request": {
-						"method": "GET",
-						"header": [
-							{ "key": "Accept-Language", "value": "en" }
-						],
-						"url": {
-							"raw": "{{baseUrl}}/timeframes",
-							"host": ["{{baseUrl}}"],
-							"path": ["timeframes"]
-						}
-					},
-					"response": []
-				},
-				{
-					"name": "GET Mercados Internacionalizados (ES)",
-					"request": {
-						"method": "GET",
-						"header": [
-							{ "key": "Accept-Language", "value": "es" }
-						],
-						"url": {
-							"raw": "{{baseUrl}}/markets",
-							"host": ["{{baseUrl}}"],
-							"path": ["markets"]
 						}
 					},
 					"response": []

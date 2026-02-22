@@ -1,4 +1,4 @@
-package com.metradingplat.marketdata.infrastructure.input.controllerGestionarMercados.DTOAnswer;
+package com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -10,6 +10,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class MercadoDTORespuesta {
-    private String code;
-    private String name;
+    private String id;
+    private String nombre;
 }

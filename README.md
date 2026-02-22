@@ -23,10 +23,7 @@ El servicio implementa **Arquitectura Hexagonal** (Puertos y Adaptadores), separ
 ```mermaid
 graph TB
     subgraph "Capa Infraestructura - Input"
-        RC_HD["REST Controller<br/>Historical Data"]
-        RC_Q["REST Controller<br/>Quote"]
-        RC_E["REST Controller<br/>Earnings"]
-        RC_M["REST Controller<br/>Mercados"]
+        RC_MET["REST Controller<br/>Metadata"]
         RC_O["REST Controller<br/>Orders"]
         RC_H["REST Controller<br/>Health"]
         KL_O["Kafka Listener<br/>Orders"]
@@ -34,7 +31,7 @@ graph TB
         MP_HD["Mapper DTO<br/>Historical Data"]
         MP_Q["Mapper DTO<br/>Quote"]
         MP_E["Mapper DTO<br/>Earnings"]
-        MP_M["Mapper DTO<br/>Mercados"]
+        MP_MET["Mapper DTO<br/>Metadata"]
         MP_O["Mapper DTO<br/>Orders"]
     end
 
@@ -78,7 +75,7 @@ graph TB
     RC_HD --> MP_HD --> IP_HD
     RC_Q --> MP_Q --> IP_Q
     RC_E --> MP_E --> IP_E
-    RC_M --> MP_M --> IP_M
+    RC_MET --> MP_MET --> IP_M
     RC_O --> MP_O --> IP_O
     KL_O --> IP_O
     KL_RT --> IP_RT
@@ -186,8 +183,9 @@ src/main/java/com/metradingplat/marketdata/
     │   ├── controllerGestionarHistoricalData/
     │   ├── controllerGestionarQuote/
     │   ├── controllerGestionarEarnings/
-    │   ├── controllerGestionarMercados/
-    │   ├── controllerGestionarMetadatos/            # NUEVO: Timeframes y Markets API
+    │   ├── controllerGestionarMetadatos/            # Timeframes, Markets & Symbols API
+    │   │   ├── DTOAnswer/                           # DTOs específicos (Timeframe, Mercado, ActiveEquity)
+    │   │   ├── mapper/                              # MetadataMapper (MapStruct)
     │   │   └── MetadataController.java
     │   ├── controllerGestionarOrders/
     │   ├── scheduler/
@@ -418,12 +416,16 @@ GET /api/marketdata/earnings/AAPL
 }
 ```
 
-### Mercados y Simbolos
+### Metadatos y Simbolos
 
-| Metodo | Path       | Descripcion                                                |
-| ------ | ---------- | ---------------------------------------------------------- |
-| `GET`  | `/markets` | Listar mercados disponibles (NYSE, NASDAQ, AMEX, ETF, OTC) |
-| `GET`  | `/symbols` | Obtener simbolos filtrados por mercado                     |
+Endpoints para obtener informacion sobre la configuracion del sistema, mercados disponibles y simbolos activos. Soporta internacionalizacion (i18n) via el header `Accept-Language`.
+
+| Metodo | Path | Descripcion |
+
+- | ------ | ------------- | ---------------------------------------------------- |
+  | `GET` | `/timeframes` | Lista de timeframes soportados (id, codigo, nombre) |
+  | `GET` | `/markets` | Lista de mercados (id, nombre) |
+  | `GET` | `/symbols` | Obtener simbolos filtrados por mercados (List\<DTO\>) |
 
 **Parametros de `/symbols`:**
 
@@ -434,52 +436,30 @@ GET /api/marketdata/earnings/AAPL
 **Ejemplos:**
 
 ```
+GET /api/marketdata/timeframes
 GET /api/marketdata/markets
 GET /api/marketdata/symbols?markets=NYSE,NASDAQ
 ```
 
-### Metadatos (Nuevo)
-
-| Metodo | Path          | Descripcion                               |
-| ------ | ------------- | ----------------------------------------- |
-| `GET`  | `/timeframes` | Lista de timeframes soportados (con i18n) |
-| `GET`  | `/markets`    | Lista de mercados (con i18n)              |
-
-Estos endpoints devuelven nombres legibles e internacionalizados segun el header `Accept-Language`. Intendidos para ser consumidos por `scanner-management-service` y `signal-processing-service` en lugar de asumir valores fijos.
-
-**Ejemplo `GET /api/marketdata/timeframes`:**
-
-```json
-[
-  { "id": "M1", "codigo": "1m", "nombre": "1 Minuto" },
-  { "id": "M5", "codigo": "5m", "nombre": "5 Minutos" },
-  { "id": "M15", "codigo": "15m", "nombre": "15 Minutos" },
-  { "id": "H1", "codigo": "1h", "nombre": "1 Hora" },
-  { "id": "D1", "codigo": "1d", "nombre": "1 Dia" }
-]
-```
-
-**Respuestas:**
-
-**GET /markets**
-
-```json
-[
-  { "code": "NYSE", "name": "New York Stock Exchange" },
-  { "code": "NASDAQ", "name": "NASDAQ Stock Market" }
-]
-```
-
-**GET /symbols?markets=ETF**
+**Esquema de Respuesta - Symbols:**
 
 ```json
 [
   {
-    "symbol": "SPY",
-    "description": "SPDR S&P 500 ETF Trust",
-    "listedMarket": "ARCA"
+    "symbol": "AAPL",
+    "description": "Apple Inc.",
+    "listedMarket": "NASDAQ"
   },
   ...
+]
+```
+
+**Esquema de Respuesta - Timeframes:**
+
+```json
+[
+  { "id": "M1", "codigo": "1m", "nombre": "1 Minuto" },
+  { "id": "M5", "codigo": "5m", "nombre": "5 Minutos" }
 ]
 ```
 

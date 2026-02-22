@@ -1,4 +1,4 @@
-package com.metradingplat.marketdata.infrastructure.input.controllerGestionarMercados.DTOAnswer;
+package com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
