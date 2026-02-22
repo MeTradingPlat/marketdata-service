@@ -203,21 +203,19 @@ public class TastyTradeService {
 
         ensureConnected();
 
-        DxLinkClient.DxLinkChannel channel = null;
-        try {
-            try {
-                channel = dxLinkClient.openNewChannel().get(5, java.util.concurrent.TimeUnit.SECONDS);
-            } catch (Exception e) {
-                log.error("Failed to open dedicated channel for batch", e);
-                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink connection failed", e);
-            }
+        DxLinkClient.DxLinkChannel channel = dxLinkClient.getDefaultChannel();
+        if (channel == null || !channel.isReady()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink default channel not ready");
+        }
 
+        DxLinkClient.CandleCallback batchListener = null;
+        try {
             String tf = timeframe.getLabel();
             ConcurrentHashMap<String, List<Candle>> candlesPorSimbolo = new ConcurrentHashMap<>();
             Set<String> completedSymbols = ConcurrentHashMap.newKeySet();
             CompletableFuture<Void> allCompleted = new CompletableFuture<>();
 
-            channel.setOnCandle((sym, candle, isComplete) -> {
+            batchListener = (sym, candle, isComplete) -> {
                 if (!symbols.contains(sym))
                     return;
 
@@ -233,7 +231,9 @@ public class TastyTradeService {
                         allCompleted.complete(null);
                     }
                 }
-            });
+            };
+
+            channel.addCandleListener(batchListener);
 
             List<Map<String, Object>> subscriptionItems = symbols.stream()
                     .map(symbol -> {
@@ -245,21 +245,25 @@ public class TastyTradeService {
                     })
                     .toList();
 
-            log.debug("Batch subscribing {} symbols on channel {}", symbols.size(), channel.getId());
+            log.debug("Batch subscribing {} symbols on shared channel {}", symbols.size(), channel.getId());
             channel.subscribeCandlesBatch(subscriptionItems);
 
-            int maxWaitSeconds = Math.min(10 + symbols.size() / 20, 60);
+            int maxWaitSeconds = Math.min(15 + symbols.size() / 10, 60);
 
             try {
-                // Eliminamos Thread.sleep, usamos CompletableFuture puro reactivo
                 allCompleted.get(maxWaitSeconds, TimeUnit.SECONDS);
-                log.debug("Batch complete on channel {} successfully", channel.getId());
+                log.debug("Batch complete on shared channel {} successfully", channel.getId());
             } catch (TimeoutException e) {
-                log.warn("Batch timed out after {}s for channel {}. Missing symbols: {}",
+                log.warn("Batch timed out after {}s on shared channel {}. Missing symbols: {}",
                         maxWaitSeconds, channel.getId(),
                         symbols.stream().filter(s -> !completedSymbols.contains(s)).toList());
+                // No lanzamos excepcion aqui si ya tenemos ALGUNAS velas, para ser mas
+                // resilientes.
+                // Pero segun la logica anterior, si lanzamos. Mantengamos consistencia.
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                        "DxLink batch timed out. Cannot guarantee complete data for all symbols.", e);
+                        "DxLink batch timed out. Missing: "
+                                + symbols.stream().filter(s -> !completedSymbols.contains(s)).toList(),
+                        e);
             } catch (Exception e) {
                 log.error("Batch interrupted", e);
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink batch failed", e);
@@ -279,8 +283,18 @@ public class TastyTradeService {
             return resultado;
 
         } finally {
-            if (channel != null) {
-                channel.close();
+            if (channel != null && batchListener != null) {
+                channel.removeCandleListener(batchListener);
+                // Opcional: Desuscribir estos simbolos para no seguir recibiendo updates en el
+                // canal compartido si no son real-time
+                // Pero ojo, si son simbolos que estan en live-streaming no queremos quitarlos.
+                // En esta arquitectura, el live streaming usa simbolos sin el {=tf}.
+                // Las velas historicas usan {=tf}. Asi que es seguro desuscribir.
+                final DxLinkClient.DxLinkChannel finalChannel = channel;
+                symbols.forEach(s -> {
+                    String candleSymbol = s + "{=" + timeframe.getLabel() + "}";
+                    finalChannel.unsubscribe(candleSymbol); // Unsubscribe uses generic removal
+                });
             }
         }
     }

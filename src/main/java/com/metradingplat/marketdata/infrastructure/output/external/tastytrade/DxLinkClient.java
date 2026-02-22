@@ -53,8 +53,12 @@ public class DxLinkClient {
 
     // Gestión de Canales
     private final Map<Integer, DxLinkChannel> channels = new ConcurrentHashMap<>();
-    private final AtomicInteger nextChannelId = new AtomicInteger(1);
+    private final AtomicInteger nextChannelId = new AtomicInteger(0);
     private DxLinkChannel defaultChannel; // Canal por defecto para streaming continuo
+
+    public DxLinkChannel getDefaultChannel() {
+        return defaultChannel;
+    }
 
     // Estados de conexión (Nivel Socket)
     private volatile boolean authenticated = false;
@@ -423,11 +427,26 @@ public class DxLinkClient {
         private final CompletableFuture<DxLinkChannel> initFuture = new CompletableFuture<>();
         private volatile boolean ready = false;
 
-        private CandleCallback onCandle;
-        private BiConsumer<String, MarketDataStreamDTO> onMarketData;
-
         // Estado Snapshot Local
         private final AtomicInteger snapshotCandleCount = new AtomicInteger(0);
+        private final Set<CandleCallback> candleListeners = ConcurrentHashMap.newKeySet();
+        private final Set<BiConsumer<String, MarketDataStreamDTO>> marketDataListeners = ConcurrentHashMap.newKeySet();
+
+        public void addCandleListener(CandleCallback listener) {
+            candleListeners.add(listener);
+        }
+
+        public void removeCandleListener(CandleCallback listener) {
+            candleListeners.remove(listener);
+        }
+
+        public void addMarketDataListener(BiConsumer<String, MarketDataStreamDTO> listener) {
+            marketDataListeners.add(listener);
+        }
+
+        public void removeMarketDataListener(BiConsumer<String, MarketDataStreamDTO> listener) {
+            marketDataListeners.remove(listener);
+        }
 
         public DxLinkChannel(int id) {
             this.id = id;
@@ -442,11 +461,13 @@ public class DxLinkClient {
         }
 
         public void setOnCandle(CandleCallback cb) {
-            this.onCandle = cb;
+            candleListeners.clear();
+            candleListeners.add(cb);
         }
 
         public void setOnMarketData(BiConsumer<String, MarketDataStreamDTO> cb) {
-            this.onMarketData = cb;
+            marketDataListeners.clear();
+            marketDataListeners.add(cb);
         }
 
         public CompletableFuture<DxLinkChannel> initialize() {
@@ -527,61 +548,69 @@ public class DxLinkClient {
                 switch (eventType) {
                     case "Quote" -> {
                         String symbol = data.path(0).asText();
-                        if (onMarketData != null) {
-                            onMarketData.accept(symbol, MarketDataStreamDTO.builder()
-                                    .symbol(symbol)
-                                    .bid(data.path(1).asDouble())
-                                    .ask(data.path(2).asDouble())
-                                    .timestamp(Instant.now())
-                                    .build());
+                        MarketDataStreamDTO streamData = MarketDataStreamDTO.builder()
+                                .symbol(symbol)
+                                .bid(data.path(1).asDouble())
+                                .ask(data.path(2).asDouble())
+                                .timestamp(Instant.now())
+                                .build();
+                        for (BiConsumer<String, MarketDataStreamDTO> listener : marketDataListeners) {
+                            try {
+                                listener.accept(symbol, streamData);
+                            } catch (Exception e) {
+                                log.error("Error in market data listener (Quote)", e);
+                            }
                         }
                     }
                     case "Trade" -> {
                         String symbol = data.path(0).asText();
-                        if (onMarketData != null) {
-                            onMarketData.accept(symbol, MarketDataStreamDTO.builder()
-                                    .symbol(symbol)
-                                    .lastPrice(data.path(1).asDouble())
-                                    .volume(data.path(2).asLong())
-                                    .timestamp(Instant.ofEpochMilli(data.path(3).asLong()))
-                                    .build());
+                        MarketDataStreamDTO streamData = MarketDataStreamDTO.builder()
+                                .symbol(symbol)
+                                .lastPrice(data.path(1).asDouble())
+                                .volume(data.path(2).asLong())
+                                .timestamp(Instant.ofEpochMilli(data.path(3).asLong()))
+                                .build();
+                        for (BiConsumer<String, MarketDataStreamDTO> listener : marketDataListeners) {
+                            try {
+                                listener.accept(symbol, streamData);
+                            } catch (Exception e) {
+                                log.error("Error in market data listener (Trade)", e);
+                            }
                         }
                     }
                     case "Candle" -> {
-                        if (onCandle != null) {
-                            int fieldsPerCandle = 8;
-                            // boolean lastCandleTxPending removed
+                        int fieldsPerCandle = 8;
+                        for (int idx = 0; idx < data.size(); idx += fieldsPerCandle) {
+                            String candleSymbol = data.path(idx).asText();
+                            String baseSymbol = candleSymbol.contains("{")
+                                    ? candleSymbol.substring(0, candleSymbol.indexOf("{"))
+                                    : candleSymbol;
 
-                            for (int idx = 0; idx < data.size(); idx += fieldsPerCandle) {
-                                String candleSymbol = data.path(idx).asText();
-                                String baseSymbol = candleSymbol.contains("{")
-                                        ? candleSymbol.substring(0, candleSymbol.indexOf("{"))
-                                        : candleSymbol;
+                            long timestamp = data.path(idx + 1).asLong();
+                            double open = data.path(idx + 2).asDouble();
+                            double high = data.path(idx + 3).asDouble();
+                            double low = data.path(idx + 4).asDouble();
+                            double close = data.path(idx + 5).asDouble();
+                            double volume = data.path(idx + 6).asDouble();
+                            int eventFlags = data.path(idx + 7).asInt(0);
 
-                                long timestamp = data.path(idx + 1).asLong();
-                                double open = data.path(idx + 2).asDouble();
-                                double high = data.path(idx + 3).asDouble();
-                                double low = data.path(idx + 4).asDouble();
-                                double close = data.path(idx + 5).asDouble();
-                                double volume = data.path(idx + 6).asDouble();
-                                int eventFlags = data.path(idx + 7).asInt(0);
+                            if (Double.isNaN(open))
+                                continue;
 
-                                if (Double.isNaN(open))
-                                    continue;
+                            boolean isTxPending = (eventFlags & 0x01) != 0;
+                            Candle candle = Candle.builder().symbol(baseSymbol)
+                                    .timestamp(Instant.ofEpochMilli(timestamp))
+                                    .open(open).high(high).low(low).close(close).volume(volume).build();
 
-                                boolean isTxPending = (eventFlags & 0x01) != 0;
-                                // lastCandleTxPending logic removed as unused
+                            snapshotCandleCount.incrementAndGet();
+                            boolean isSnapshotComplete = !isTxPending;
 
-                                Candle candle = Candle.builder().symbol(baseSymbol)
-                                        .timestamp(Instant.ofEpochMilli(timestamp))
-                                        .open(open).high(high).low(low).close(close).volume(volume).build();
-
-                                snapshotCandleCount.incrementAndGet();
-
-                                // Snapshot complete for THIS symbol if not pending and we are processing the
-                                // last chunk or simple heuristic
-                                boolean isSnapshotComplete = !isTxPending;
-                                onCandle.onCandle(baseSymbol, candle, isSnapshotComplete);
+                            for (CandleCallback listener : candleListeners) {
+                                try {
+                                    listener.onCandle(baseSymbol, candle, isSnapshotComplete);
+                                } catch (Exception e) {
+                                    log.error("Error in candle listener", e);
+                                }
                             }
                         }
                     }
