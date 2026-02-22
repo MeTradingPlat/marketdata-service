@@ -14,6 +14,8 @@ Microservicio de datos de mercado para la plataforma **MeTradingPlat**. Provee d
 - [Ejecucion](#ejecucion)
 - [Limitaciones Conocidas](#limitaciones-conocidas)
 
+> **Actualizacion v2.0 – Persistencia Hibrida con PostgreSQL**: El servicio ahora almacena velas historicas en una base de datos PostgreSQL (`marketdata_db`). El sistema detecta automaticamente los huecos de datos y solo pide a DxLink las velas que realmente faltan, eliminando el limite practico de ~400 velas por consulta y reduciendo la latencia drasticamente.
+
 ## Arquitectura
 
 El servicio implementa **Arquitectura Hexagonal** (Puertos y Adaptadores), separando claramente las capas de dominio, aplicacion e infraestructura.
@@ -138,16 +140,18 @@ sequenceDiagram
 
 ## Tecnologias
 
-| Tecnologia   | Version     | Proposito                |
-| ------------ | ----------- | ------------------------ |
-| Java         | 21          | Lenguaje principal       |
-| Spring Boot  | 3.5.9       | Framework                |
-| Spring Cloud | 2025.0.0    | Eureka, Gateway          |
-| Spring Kafka | -           | Mensajeria asincrona     |
-| WebSocket    | -           | Conexion DxLink          |
-| MapStruct    | -           | Mapeo DTO <-> Dominio    |
-| Lombok       | -           | Reduccion de boilerplate |
-| Docker       | Multi-stage | Contenedorizacion        |
+| Tecnologia      | Version     | Proposito                         |
+| --------------- | ----------- | --------------------------------- |
+| Java            | 21          | Lenguaje principal                |
+| Spring Boot     | 3.5.10      | Framework                         |
+| Spring Cloud    | 2025.0.0    | Eureka, Gateway                   |
+| Spring Data JPA | -           | Persistencia (PostgreSQL)         |
+| PostgreSQL      | -           | Base de datos de velas historicas |
+| Spring Kafka    | -           | Mensajeria asincrona              |
+| WebSocket       | -           | Conexion DxLink                   |
+| MapStruct       | -           | Mapeo DTO <-> Dominio / Entity    |
+| Lombok          | -           | Reduccion de boilerplate          |
+| Docker          | Multi-stage | Contenedorizacion                 |
 
 ## Estructura del Proyecto
 
@@ -163,57 +167,45 @@ src/main/java/com/metradingplat/marketdata/
 │   │   └── GestionarRealTimeCUIntPort.java
 │   └── output/                   # Puertos de salida (interfaces)
 │       ├── GestionarComunicacionExternalGatewayIntPort.java
+│       ├── GestionarCandleRepositoryIntPort.java    # NUEVO: Puerto de persistencia
 │       ├── GestionarChangeNotificationsProducerIntPort.java
 │       └── FormateadorResultadosIntPort.java
 ├── domain/
-│   ├── enums/                    # Enumeraciones del dominio
+│   ├── enums/
 │   │   ├── EnumTimeframe.java    # M1, M5, M15, M30, H1, D1, W1, MO1
-│   │   ├── EnumMercado.java      # NYSE, NASDAQ, AMEX, ETF, OTC
-│   │   ├── EnumOrderAction.java  # BUY_TO_OPEN, SELL_TO_CLOSE, ...
-│   │   └── EnumOrderType.java    # MARKET, LIMIT, STOP, STOP_LIMIT
+│   │   ├── EnumMercado.java
+│   │   ├── EnumOrderAction.java
+│   │   └── EnumOrderType.java
 │   ├── models/                   # Modelos de dominio
-│   │   ├── Candle.java
-│   │   ├── Quote.java
-│   │   ├── EarningsReport.java
-│   │   ├── ActiveEquity.java
-│   │   ├── BracketOrder.java
-│   │   ├── OrderRequest.java
-│   │   └── OrderResponse.java
 │   └── usecases/                 # Implementacion de casos de uso
-│       ├── GestionarHistoricalDataCUAdapter.java
-│       ├── GestionarQuoteCUAdapter.java
-│       ├── GestionarEarningsCUAdapter.java
-│       ├── GestionarMercadosCUAdapter.java
-│       ├── GestionarOrdersCUAdapter.java
-│       └── GestionarRealTimeCUAdapter.java
 └── infrastructure/
-    ├── configuration/            # Beans y configuracion Spring
-    │   └── BeanConfigurations.java
+    ├── configuration/
+    │   ├── BeanConfigurations.java
+    │   └── I18NConfig.java                          # NUEVO: Internacionalizacion
     ├── input/
     │   ├── controllerGestionarHistoricalData/
-    │   │   ├── controller/       # REST Controller
-    │   │   ├── DTOAnswer/        # DTOs de respuesta
-    │   │   ├── DTORequest/       # DTOs de peticion
-    │   │   └── mapper/           # MapStruct mappers
     │   ├── controllerGestionarQuote/
     │   ├── controllerGestionarEarnings/
     │   ├── controllerGestionarMercados/
+    │   ├── controllerGestionarMetadatos/            # NUEVO: Timeframes y Markets API
+    │   │   └── MetadataController.java
     │   ├── controllerGestionarOrders/
-    │   ├── filter/               # GatewayHeaderFilter
-    │   ├── health/               # HealthController (DxLink status)
-    │   ├── kafkaGestionarOrders/
-    │   └── kafkaGestionarRealTime/
+    │   ├── scheduler/
+    │   │   └── HistoricalDataRefillScheduler.java   # NUEVO: Cron de fin de semana
+    │   ├── filter/
+    │   └── health/
+    │       ├── HealthController.java
+    │       └── DxLinkHealthIndicator.java           # NUEVO: Actuator WebSocket health
     └── output/
-        ├── exceptionsController/ # Manejo global de errores
-        ├── external/
-        │   ├── gateway/          # Adapter del gateway externo
-        │   └── tastytrade/       # Clientes TastyTrade y DxLink
-        │       ├── TastyTradeConfig.java
-        │       ├── TastyTradeClient.java  # REST (OAuth, ordenes, quotes)
-        │       ├── DxLinkClient.java      # WebSocket (candles, streaming)
-        │       └── TastyTradeService.java # Orquestador
-        └── kafka/
-            └── producer/         # KafkaProducerAdapter
+        ├── external/tastytrade/
+        │   ├── TastyTradeService.java               # ACTUALIZADO: Gap-Filling + Fail-Fast
+        │   ├── TastyTradeClient.java
+        │   └── DxLinkClient.java
+        └── persistence/                            # NUEVO: Capa de persistencia
+            ├── entities/CandleEntity.java
+            ├── repositories/CandleRepository.java
+            ├── mappers/CandlePersistenceMapper.java
+            └── gateway/CandleRepositoryGatewayImplAdapter.java
 ```
 
 ## API Endpoints
@@ -446,6 +438,27 @@ GET /api/marketdata/markets
 GET /api/marketdata/symbols?markets=NYSE,NASDAQ
 ```
 
+### Metadatos (Nuevo)
+
+| Metodo | Path          | Descripcion                               |
+| ------ | ------------- | ----------------------------------------- |
+| `GET`  | `/timeframes` | Lista de timeframes soportados (con i18n) |
+| `GET`  | `/markets`    | Lista de mercados (con i18n)              |
+
+Estos endpoints devuelven nombres legibles e internacionalizados segun el header `Accept-Language`. Intendidos para ser consumidos por `scanner-management-service` y `signal-processing-service` en lugar de asumir valores fijos.
+
+**Ejemplo `GET /api/marketdata/timeframes`:**
+
+```json
+[
+  { "id": "M1", "codigo": "1m", "nombre": "1 Minuto" },
+  { "id": "M5", "codigo": "5m", "nombre": "5 Minutos" },
+  { "id": "M15", "codigo": "15m", "nombre": "15 Minutos" },
+  { "id": "H1", "codigo": "1h", "nombre": "1 Hora" },
+  { "id": "D1", "codigo": "1d", "nombre": "1 Dia" }
+]
+```
+
 **Respuestas:**
 
 **GET /markets**
@@ -600,6 +613,11 @@ Conexion WebSocket persistente para datos de mercado en tiempo real y candles hi
 | `TT_REFRESH_TOKEN`          | Refresh token de TastyTrade (se renueva automaticamente en runtime)   |
 | `TASTYTRADE_ACCOUNT_NUMBER` | Numero de cuenta TastyTrade                                           |
 | `DXLINK_URL`                | URL del WebSocket DxLink (default: `wss://tasty.dxfeed.com/realtime`) |
+| `DB_HOST`                   | Host de PostgreSQL (default: `localhost`)                             |
+| `DB_PORT`                   | Puerto de PostgreSQL (default: `5432`)                                |
+| `DB_NAME`                   | Nombre de la BD (default: `marketdata_db`)                            |
+| `DB_USER`                   | Usuario de PostgreSQL (default: `postgres`)                           |
+| `DB_PASSWORD`               | Password de PostgreSQL                                                |
 
 ### Perfiles de Spring
 
@@ -676,11 +694,11 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 ## Limitaciones Conocidas
 
-- **~400-420 candles por consulta**: DxLink entrega ~700 eventos raw que despues de deduplicacion quedan ~400-420 candles unicas. Es una limitacion del servidor.
 - **Refresh token**: TastyTrade expira el refresh token cada 24 horas. El servicio lo renueva automaticamente en runtime, pero si el servicio se reinicia despues de 24h sin actividad, se necesita un refresh token nuevo en la variable de entorno.
-- **Mercado cerrado**: En fines de semana y feriados no hay candles nuevas de equities. La API responde normalmente pero con datos del ultimo dia de trading.
-
-- **BTC**: El simbolo en TastyTrade/DxLink es simplemente `BTC` (no `BTC/USD`). Tiene menor liquidez que equities, las candles de minuto pueden tener gaps.
+- **Mercado cerrado**: En fines de semana y feriados no hay candles nuevas de equities. El cron de llenado masivo (`HistoricalDataRefillScheduler`) aprovecha este tiempo para poblar la BD sin riesgo de interferir con el mercado activo.
+- **BTC**: El simbolo en TastyTrade/DxLink es simplemente `BTC` (no `BTC/USD`). Las candles de minuto pueden tener gaps.
+- **Primer arranque en simbolo nuevo**: Un simbolo sin historial previo en BD disparara una descarga inicial completa desde DxLink (~400 velas del pasado reciente). Las velas mas antiguas se iran acumulando con el tiempo a traves del cron de fin de semana.
+- **503 Service Unavailable**: Si DxLink no puede completar un batch de velas en el tiempo maximo configurado, el endpoint retorna HTTP 503. El `signal-processing-service` debe capturar este error, detener el escaner y reprogramarlo para el proximo ciclo habil.
 
 ## Arquitectura de Multiplexación DxLink
 

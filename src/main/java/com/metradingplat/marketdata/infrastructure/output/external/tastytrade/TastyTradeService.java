@@ -8,12 +8,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-// import java.util.concurrent.locks.ReentrantLock; removed
-// import java.util.stream.Collectors; removed
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.metradingplat.marketdata.application.output.GestionarChangeNotificationsProducerIntPort;
+import com.metradingplat.marketdata.application.output.GestionarCandleRepositoryIntPort;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.BracketOrder;
@@ -38,19 +42,9 @@ public class TastyTradeService {
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
+    private final GestionarCandleRepositoryIntPort candlePort;
 
-    // Lock eliminado: ya no es necesario con multiplexación de canales
-    // private final ReentrantLock dxLinkLock = new ReentrantLock();
-
-    // Cache en memoria con TTL de 55 segundos
-    private final ConcurrentHashMap<String, CacheEntry> candleCache = new ConcurrentHashMap<>();
     private static final long CACHE_TTL_MS = 55_000;
-
-    private record CacheEntry(List<Candle> candles, long timestamp) {
-        boolean isExpired() {
-            return System.currentTimeMillis() - timestamp > CACHE_TTL_MS;
-        }
-    }
 
     @PostConstruct
     public void init() {
@@ -116,91 +110,118 @@ public class TastyTradeService {
 
     /**
      * Obtiene candles historicos de multiples simbolos en un solo fetch batch.
-     * Usa lock para evitar el bug del callback global y cache para evitar requests
-     * redundantes.
-     *
-     * @param symbols   lista de simbolos
-     * @param timeframe timeframe de las candles
-     * @param bars      cantidad maxima de barras por simbolo
-     * @return mapa de simbolo -> lista de candles ordenadas por timestamp asc
+     * Utiliza PostgreSQL como caché y rellena los huecos con DxLink.
      */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
         log.debug("Batch fetch: {} symbols, timeframe={}, bars={}", symbols.size(), timeframe, bars);
 
-        // Separar simbolos con cache valido de los que necesitan fetch
         Map<String, List<Candle>> resultado = new HashMap<>();
         List<String> cacheMiss = new ArrayList<>();
+        Map<String, Long> symbolToFromTime = new HashMap<>();
 
         for (String symbol : symbols) {
-            String cacheKey = symbol + ":" + timeframe.name() + ":" + bars;
-            CacheEntry entry = candleCache.get(cacheKey);
-            if (entry != null && !entry.isExpired()) {
-                resultado.put(symbol, entry.candles());
+            Candle latest = candlePort.findMostRecent(symbol, timeframe);
+            long fromTime = 0L;
+            boolean needsFetch = false;
+
+            if (latest == null) {
+                // No hay nada en BD, pedimos desde el origen + un pequeño buffer
+                needsFetch = true;
+                fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
             } else {
+                long ageMs = System.currentTimeMillis() - latest.getTimestamp().toEpochMilli();
+                if (ageMs > CACHE_TTL_MS) {
+                    // Hay gap o datos antiguos, pedimos desde la ultima vela - 10 velas de margen
+                    needsFetch = true;
+                    fromTime = latest.getTimestamp().toEpochMilli() - (timeframe.getDuration().toMillis() * 10);
+                }
+            }
+
+            if (needsFetch) {
                 cacheMiss.add(symbol);
+                symbolToFromTime.put(symbol, fromTime);
             }
         }
 
-        log.debug("Batch: {} cache hits, {} cache misses", resultado.size(), cacheMiss.size());
+        log.debug("Batch: {} symbols need fetch", cacheMiss.size());
 
-        if (cacheMiss.isEmpty()) {
-            return resultado;
-        }
+        if (!cacheMiss.isEmpty()) {
+            Map<String, List<Candle>> fetched = fetchCandlesBatchFromDxLink(cacheMiss, timeframe, symbolToFromTime);
 
-        // Fetch de los cache-miss con lock para serializar acceso a DxLink
-        Map<String, List<Candle>> fetched = fetchCandlesBatchFromDxLink(cacheMiss, timeframe, bars);
-
-        // Guardar en cache y agregar al resultado
-        for (Map.Entry<String, List<Candle>> entry : fetched.entrySet()) {
-            String cacheKey = entry.getKey() + ":" + timeframe.name() + ":" + bars;
-            candleCache.put(cacheKey, new CacheEntry(entry.getValue(), System.currentTimeMillis()));
-            resultado.put(entry.getKey(), entry.getValue());
-        }
-
-        // Simbolos sin datos tambien se registran como lista vacia en cache
-        for (String symbol : cacheMiss) {
-            if (!fetched.containsKey(symbol)) {
-                String cacheKey = symbol + ":" + timeframe.name() + ":" + bars;
-                candleCache.put(cacheKey, new CacheEntry(List.of(), System.currentTimeMillis()));
-                resultado.put(symbol, List.of());
+            // Guardar asíncronamente en BD usando Virtual Threads
+            Thread.startVirtualThread(() -> {
+                try {
+                    for (List<Candle> list : fetched.values()) {
+                        for (Candle c : list) {
+                            candlePort.upsert(c);
+                        }
+                    }
+                    log.debug("Saved {} fetched candles to DB", fetched.values().stream().mapToInt(List::size).sum());
+                } catch (Exception e) {
+                    log.error("Error saving candles to DB", e);
+                }
+            });
+            // Hacemos una breve pausa asumiendo que el VT escribirá rapidísimo
+            // antes de hacer el read. En sistemas criticos seria un join(), pero las
+            // velas que acabamos de bajar ya las tenemos en memoria ('fetched').
+            // Por simplicidad, agregamos las bajadas directamente al resultado:
+            for (Map.Entry<String, List<Candle>> entry : fetched.entrySet()) {
+                resultado.put(entry.getKey(), entry.getValue());
             }
         }
 
-        log.debug("Batch complete: {} symbols total, {} con datos", resultado.size(),
-                resultado.values().stream().filter(l -> !l.isEmpty()).count());
+        // Consultar la BD para obtener las velas finales ordenadas y truncadas a 'bars'
+        for (String symbol : symbols) {
+            List<Candle> sortedAsc = candlePort.findLatest(symbol, timeframe, bars);
+
+            // Si el canal websocket trajo velas nuevas este milisegundo que no se han
+            // comiteado al disco por el virtual thread aun, mergeamos la lista de memoria.
+            if (cacheMiss.contains(symbol) && resultado.containsKey(symbol)) {
+                List<Candle> memoryCandles = resultado.get(symbol);
+                // Merge asegurando integridad usando Hash
+                Map<Instant, Candle> merged = new HashMap<>();
+                sortedAsc.forEach(c -> merged.put(c.getTimestamp(), c));
+                memoryCandles.forEach(c -> merged.put(c.getTimestamp(), c));
+
+                sortedAsc = merged.values().stream()
+                        .sorted(Comparator.comparing(Candle::getTimestamp))
+                        .toList();
+
+                if (sortedAsc.size() > bars) {
+                    sortedAsc = sortedAsc.subList(sortedAsc.size() - bars, sortedAsc.size());
+                }
+            }
+
+            resultado.put(symbol, sortedAsc);
+        }
 
         return resultado;
     }
 
     private Map<String, List<Candle>> fetchCandlesBatchFromDxLink(
-            List<String> symbols, EnumTimeframe timeframe, int bars) {
+            List<String> symbols, EnumTimeframe timeframe, Map<String, Long> symbolToFromTime) {
 
-        ensureConnected(); // Asegura que el cliente principal esté conectado
+        ensureConnected();
 
         DxLinkClient.DxLinkChannel channel = null;
         try {
-            // 1. Abrir un canal dedicado para este batch
             try {
                 channel = dxLinkClient.openNewChannel().get(5, java.util.concurrent.TimeUnit.SECONDS);
             } catch (Exception e) {
                 log.error("Failed to open dedicated channel for batch", e);
-                return new HashMap<>();
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink connection failed", e);
             }
 
             String tf = timeframe.getLabel();
-            long fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(bars + 100)).toEpochMilli();
-
-            // Estructuras thread-safe para recolectar datos del canal
             ConcurrentHashMap<String, List<Candle>> candlesPorSimbolo = new ConcurrentHashMap<>();
             Set<String> completedSymbols = ConcurrentHashMap.newKeySet();
+            CompletableFuture<Void> allCompleted = new CompletableFuture<>();
 
-            // 2. Configurar callback en EL CANAL
             channel.setOnCandle((sym, candle, isComplete) -> {
                 if (!symbols.contains(sym))
                     return;
 
-                candle.setTimeframe(timeframe); // Asignar timeframe que falta
-
+                candle.setTimeframe(timeframe);
                 candlesPorSimbolo.computeIfAbsent(sym, k -> new ArrayList<>());
                 synchronized (candlesPorSimbolo.get(sym)) {
                     candlesPorSimbolo.get(sym).add(candle);
@@ -208,43 +229,42 @@ public class TastyTradeService {
 
                 if (isComplete) {
                     completedSymbols.add(sym);
+                    if (completedSymbols.containsAll(symbols)) {
+                        allCompleted.complete(null);
+                    }
                 }
             });
 
-            // 3. Preparar items de suscripción
             List<Map<String, Object>> subscriptionItems = symbols.stream()
                     .map(symbol -> {
                         String candleSymbol = symbol + "{=" + tf + "}";
                         return Map.<String, Object>of(
                                 "symbol", candleSymbol,
                                 "type", "Candle",
-                                "fromTime", fromTime);
+                                "fromTime", symbolToFromTime.get(symbol));
                     })
                     .toList();
 
-            // 4. Suscribir usando el canal dedicado
             log.debug("Batch subscribing {} symbols on channel {}", symbols.size(), channel.getId());
             channel.subscribeCandlesBatch(subscriptionItems);
 
-            // 5. Esperar resultados
             int maxWaitSeconds = Math.min(10 + symbols.size() / 20, 60);
-            long startTime = System.currentTimeMillis();
 
-            while (System.currentTimeMillis() - startTime < maxWaitSeconds * 1000) {
-                if (completedSymbols.containsAll(symbols)) {
-                    log.debug("Batch complete on channel {} in {}ms", channel.getId(),
-                            System.currentTimeMillis() - startTime);
-                    break;
-                }
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+            try {
+                // Eliminamos Thread.sleep, usamos CompletableFuture puro reactivo
+                allCompleted.get(maxWaitSeconds, TimeUnit.SECONDS);
+                log.debug("Batch complete on channel {} successfully", channel.getId());
+            } catch (TimeoutException e) {
+                log.warn("Batch timed out after {}s for channel {}. Missing symbols: {}",
+                        maxWaitSeconds, channel.getId(),
+                        symbols.stream().filter(s -> !completedSymbols.contains(s)).toList());
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "DxLink batch timed out. Cannot guarantee complete data for all symbols.", e);
+            } catch (Exception e) {
+                log.error("Batch interrupted", e);
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink batch failed", e);
             }
 
-            // 6. Procesar resultados
             Map<String, List<Candle>> resultado = new HashMap<>();
             for (Map.Entry<String, List<Candle>> entry : candlesPorSimbolo.entrySet()) {
                 List<Candle> sorted;
@@ -253,17 +273,12 @@ public class TastyTradeService {
                             .sorted(Comparator.comparing(Candle::getTimestamp))
                             .toList();
                 }
-                // Truncar
-                if (sorted.size() > bars && bars > 0) {
-                    sorted = sorted.subList(sorted.size() - bars, sorted.size());
-                }
                 resultado.put(entry.getKey(), sorted);
             }
 
             return resultado;
 
         } finally {
-            // 7. Cerrar canal para liberar recursos
             if (channel != null) {
                 channel.close();
             }
@@ -271,10 +286,13 @@ public class TastyTradeService {
     }
 
     /**
-     * Obtiene candles actuales (in-formation y recientes) sin caché.
+     * Obtiene candles actuales sin cache (Bypass Db)
      */
     public Map<String, List<Candle>> getCandlesBatchNoCache(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        return fetchCandlesBatchFromDxLink(symbols, timeframe, bars);
+        Map<String, Long> symbolToFromTime = new HashMap<>();
+        long fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
+        symbols.forEach(s -> symbolToFromTime.put(s, fromTime));
+        return fetchCandlesBatchFromDxLink(symbols, timeframe, symbolToFromTime);
     }
 
     // CandleKey record removed

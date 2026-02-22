@@ -1,0 +1,391 @@
+{
+	"info": {
+		"_postman_id": "c3a1b2d4-e5f6-7890-abcd-ef1234567891",
+		"name": "MeTradingPlat – MarketData Service (v2)",
+		"description": "Coleccion completa de pruebas para el MarketData Service via metradingplat.com",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Historical Data",
+			"item": [
+				{
+					"name": "GET Candles AAPL M5 (100 barras)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/AAPL?timeframe=M5&bars=100",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "AAPL"],
+							"query": [
+								{ "key": "timeframe", "value": "M5" },
+								{ "key": "bars", "value": "100" }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Candles SPY H1 (50 barras)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/SPY?timeframe=H1&bars=50",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "SPY"],
+							"query": [
+								{ "key": "timeframe", "value": "H1" },
+								{ "key": "bars", "value": "50" }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Barra en Formacion AAPL M5",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/AAPL/current?timeframe=M5",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "AAPL", "current"],
+							"query": [
+								{ "key": "timeframe", "value": "M5" }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Ultima Candle Cerrada TSLA M15",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/historical/TSLA/last?timeframe=M15",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "TSLA", "last"],
+							"query": [
+								{ "key": "timeframe", "value": "M15" }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "POST Batch Historico (AAPL, MSFT, GOOGL)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbols\": [\"AAPL\", \"MSFT\", \"GOOGL\"],\n  \"timeframe\": \"M5\",\n  \"bars\": 100\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/historical/batch",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "batch"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "POST Batch Ultima Candle (AAPL, TSLA, NVDA)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbols\": [\"AAPL\", \"TSLA\", \"NVDA\"],\n  \"timeframe\": \"M1\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/historical/batch/last",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "batch", "last"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "POST Batch Barra en Formacion (SPY, QQQ)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbols\": [\"SPY\", \"QQQ\"],\n  \"timeframe\": \"M5\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/historical/batch/current",
+							"host": ["{{baseUrl}}"],
+							"path": ["historical", "batch", "current"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Quote",
+			"item": [
+				{
+					"name": "GET Quote AAPL",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/quote/AAPL",
+							"host": ["{{baseUrl}}"],
+							"path": ["quote", "AAPL"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Quote SPY",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/quote/SPY",
+							"host": ["{{baseUrl}}"],
+							"path": ["quote", "SPY"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Earnings",
+			"item": [
+				{
+					"name": "GET Earnings AAPL",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/earnings/AAPL",
+							"host": ["{{baseUrl}}"],
+							"path": ["earnings", "AAPL"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Earnings TSLA",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/earnings/TSLA",
+							"host": ["{{baseUrl}}"],
+							"path": ["earnings", "TSLA"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Mercados y Simbolos",
+			"item": [
+				{
+					"name": "GET Lista de Mercados",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/markets",
+							"host": ["{{baseUrl}}"],
+							"path": ["markets"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Simbolos NYSE y NASDAQ",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/symbols?markets=NYSE,NASDAQ",
+							"host": ["{{baseUrl}}"],
+							"path": ["symbols"],
+							"query": [
+								{ "key": "markets", "value": "NYSE,NASDAQ" }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Simbolos ETF",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/symbols?markets=ETF",
+							"host": ["{{baseUrl}}"],
+							"path": ["symbols"],
+							"query": [
+								{ "key": "markets", "value": "ETF" }
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Metadatos (Nuevo)",
+			"item": [
+				{
+					"name": "GET Timeframes en Espanol",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept-Language", "value": "es" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/timeframes",
+							"host": ["{{baseUrl}}"],
+							"path": ["timeframes"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Timeframes en Ingles",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept-Language", "value": "en" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/timeframes",
+							"host": ["{{baseUrl}}"],
+							"path": ["timeframes"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Mercados Internacionalizados (ES)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Accept-Language", "value": "es" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/markets",
+							"host": ["{{baseUrl}}"],
+							"path": ["markets"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Ordenes",
+			"item": [
+				{
+					"name": "POST Colocar Orden Bracket AAPL",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"symbol\": \"AAPL\",\n  \"action\": \"BUY_TO_OPEN\",\n  \"quantity\": 1,\n  \"entryPrice\": 235.00,\n  \"stopLossPrice\": 230.00,\n  \"takeProfitPrice\": 245.00,\n  \"timeInForce\": \"GTC\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/orders",
+							"host": ["{{baseUrl}}"],
+							"path": ["orders"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "DELETE Cancelar Orden",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/orders/{{orderId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["orders", "{{orderId}}"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "GET Estado DxLink WebSocket",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/health/dxlink/status",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "health", "dxlink", "status"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Spring Actuator Health",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/actuator/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "actuator", "health"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "POST Forzar Reconexion DxLink",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/health/dxlink/reconnect",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "health", "dxlink", "reconnect"]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://metradingplat.com/api/marketdata"
+		},
+		{
+			"key": "orderId",
+			"value": "12345"
+		}
+	]
+}

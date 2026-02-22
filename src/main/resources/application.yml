@@ -13,6 +13,20 @@ spring:
   profiles:
     active: dev
 
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketdata_db}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
 logging:
   level:
     "[com.netflix.discovery.shared.resolver.aws.ConfigClusterResolver]": WARN
