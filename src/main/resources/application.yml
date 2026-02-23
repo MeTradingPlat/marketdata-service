@@ -30,6 +30,9 @@ spring:
 logging:
   level:
     "[com.netflix.discovery.shared.resolver.aws.ConfigClusterResolver]": WARN
+    "[com.metradingplat.marketdata]": INFO
+    "[com.metradingplat.marketdata.infrastructure.output.external]": WARN
+    "[com.metradingplat.marketdata.infrastructure.input]": INFO
 
 server:
   port: 8082
