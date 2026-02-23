@@ -151,12 +151,25 @@ public class TastyTradeService {
             // Guardar asíncronamente en BD usando Virtual Threads
             Thread.startVirtualThread(() -> {
                 try {
+                    int totalProcessed = 0;
                     for (List<Candle> list : fetched.values()) {
+                        // Agrupar por timestamp para asegurar que si el WS nos envia
+                        // la misma barra en el mismo paquete, solo guardamos una.
+                        Map<Instant, Candle> uniqueBatch = new HashMap<>();
                         for (Candle c : list) {
+                            uniqueBatch.put(c.getTimestamp(), c);
+                        }
+
+                        for (Candle c : uniqueBatch.values()) {
+                            // La DB tiene un Unique Constraint por (symbol, timeframe, timestamp)
+                            // y el upsert usa ON CONFLICT para actualizar.
                             candlePort.upsert(c);
+                            totalProcessed++;
                         }
                     }
-                    log.debug("Saved {} fetched candles to DB", fetched.values().stream().mapToInt(List::size).sum());
+                    if (totalProcessed > 0) {
+                        log.debug("Processed {} unique candles to DB", totalProcessed);
+                    }
                 } catch (Exception e) {
                     log.error("Error saving candles to DB", e);
                 }
