@@ -17,7 +17,7 @@ import lombok.extern.slf4j.Slf4j;
  * Expone endpoints para verificar el estado de las conexiones externas.
  */
 @RestController
-@RequestMapping("/api/health")
+@RequestMapping("/api/marketdata/api/health")
 @RequiredArgsConstructor
 @Slf4j
 public class HealthController {
@@ -47,8 +47,7 @@ public class HealthController {
         log.info("Forcing DxLink reconnection");
         dxLinkClient.forceReconnect();
         return Map.of(
-            "message", "Reconnection initiated",
-            "status", dxLinkClient.getConnectionStats()
-        );
+                "message", "Reconnection initiated",
+                "status", dxLinkClient.getConnectionStats());
     }
 }
