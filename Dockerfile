@@ -16,4 +16,4 @@ RUN addgroup -S spring && adduser -S spring -G spring
 USER spring:spring
 COPY --from=build /app/target/*.jar app.jar
 EXPOSE 8082
-ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-Xms64m", "-Xmx256m", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=200", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-Xms64m", "-Xmx256m", "-XX:+UseG1GC", "-XX:ParallelGCThreads=1", "-XX:ConcGCThreads=1", "-jar", "app.jar"]
