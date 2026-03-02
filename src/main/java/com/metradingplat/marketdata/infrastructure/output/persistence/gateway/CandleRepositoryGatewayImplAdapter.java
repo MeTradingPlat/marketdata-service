@@ -39,4 +39,9 @@ public class CandleRepositoryGatewayImplAdapter implements GestionarCandleReposi
         result.sort((a, b) -> a.getTimestamp().compareTo(b.getTimestamp()));
         return result;
     }
+
+    @Override
+    public void deleteByTimeframesNotIn(List<EnumTimeframe> timeframes) {
+        candleRepository.deleteByTimeframeNotIn(timeframes);
+    }
 }

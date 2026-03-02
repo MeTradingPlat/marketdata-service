@@ -9,8 +9,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -44,7 +48,8 @@ public class TastyTradeService {
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
     private final GestionarCandleRepositoryIntPort candlePort;
 
-    private static final long CACHE_TTL_MS = 55_000;
+    private static final Set<EnumTimeframe> PERMANENTES = Set.of(
+            EnumTimeframe.H1, EnumTimeframe.W1, EnumTimeframe.MO1);
 
     @PostConstruct
     public void init() {
@@ -119,21 +124,28 @@ public class TastyTradeService {
         List<String> cacheMiss = new ArrayList<>();
         Map<String, Long> symbolToFromTime = new HashMap<>();
 
+        Instant now = Instant.now();
         for (String symbol : symbols) {
-            Candle latest = candlePort.findMostRecent(symbol, timeframe);
             long fromTime = 0L;
             boolean needsFetch = false;
 
-            if (latest == null) {
-                // No hay nada en BD, pedimos desde el origen + un pequeño buffer
+            if (!PERMANENTES.contains(timeframe)) {
+                // Efímero (M1/M5/M15/M30/D1): siempre pedir a DxLink, nunca usar DB
                 needsFetch = true;
-                fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
+                fromTime = now.minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
             } else {
-                long ageMs = System.currentTimeMillis() - latest.getTimestamp().toEpochMilli();
-                if (ageMs > CACHE_TTL_MS) {
-                    // Hay gap o datos antiguos, pedimos desde la ultima vela - 10 velas de margen
+                // Permanente (H1/W1/MO1): usar DB como cache con TTL = duración del timeframe
+                Candle latest = candlePort.findMostRecent(symbol, timeframe);
+                if (latest == null) {
                     needsFetch = true;
-                    fromTime = latest.getTimestamp().toEpochMilli() - (timeframe.getDuration().toMillis() * 10);
+                    fromTime = now.minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
+                } else {
+                    long ageMs = System.currentTimeMillis() - latest.getTimestamp().toEpochMilli();
+                    long cacheTtl = timeframe.getDuration().toMillis(); // H1→1h, W1→7d, MO1→30d
+                    if (ageMs > cacheTtl) {
+                        needsFetch = true;
+                        fromTime = now.minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
+                    }
                 }
             }
 
@@ -148,8 +160,9 @@ public class TastyTradeService {
         if (!cacheMiss.isEmpty()) {
             Map<String, List<Candle>> fetched = fetchCandlesBatchFromDxLink(cacheMiss, timeframe, symbolToFromTime);
 
-            // Guardar asíncronamente en BD usando Virtual Threads
+            // Guardar asíncronamente en BD solo timeframes permanentes
             Thread.startVirtualThread(() -> {
+                if (!PERMANENTES.contains(timeframe)) return;
                 try {
                     int totalProcessed = 0;
                     for (List<Candle> list : fetched.values()) {
@@ -222,11 +235,12 @@ public class TastyTradeService {
         }
 
         DxLinkClient.CandleCallback batchListener = null;
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         try {
             String tf = timeframe.getLabel();
             ConcurrentHashMap<String, List<Candle>> candlesPorSimbolo = new ConcurrentHashMap<>();
-            Set<String> completedSymbols = ConcurrentHashMap.newKeySet();
             CompletableFuture<Void> allCompleted = new CompletableFuture<>();
+            AtomicReference<ScheduledFuture<?>> settleTask = new AtomicReference<>();
 
             batchListener = (sym, candle, isComplete) -> {
                 if (!symbols.contains(sym))
@@ -239,10 +253,16 @@ public class TastyTradeService {
                 }
 
                 if (isComplete) {
-                    completedSymbols.add(sym);
-                    if (completedSymbols.containsAll(symbols)) {
-                        allCompleted.complete(null);
-                    }
+                    // TX_PENDING=0: fin del lote actual. Si no llegan más candles en
+                    // 300ms, el snapshot está completo.
+                    ScheduledFuture<?> prev = settleTask.getAndSet(
+                        scheduler.schedule(() -> allCompleted.complete(null), 300, TimeUnit.MILLISECONDS)
+                    );
+                    if (prev != null) prev.cancel(false);
+                } else {
+                    // TX_PENDING=1: más candles vienen → cancelar timer pendiente
+                    ScheduledFuture<?> pending = settleTask.get();
+                    if (pending != null) pending.cancel(false);
                 }
             };
 
@@ -267,16 +287,10 @@ public class TastyTradeService {
                 allCompleted.get(maxWaitSeconds, TimeUnit.SECONDS);
                 log.debug("Batch complete on shared channel {} successfully", channel.getId());
             } catch (TimeoutException e) {
-                log.warn("Batch timed out after {}s on shared channel {}. Missing symbols: {}",
-                        maxWaitSeconds, channel.getId(),
-                        symbols.stream().filter(s -> !completedSymbols.contains(s)).toList());
-                // No lanzamos excepcion aqui si ya tenemos ALGUNAS velas, para ser mas
-                // resilientes.
-                // Pero segun la logica anterior, si lanzamos. Mantengamos consistencia.
+                log.warn("Batch timed out after {}s on shared channel {}. Symbols: {}",
+                        maxWaitSeconds, channel.getId(), symbols);
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                        "DxLink batch timed out. Missing: "
-                                + symbols.stream().filter(s -> !completedSymbols.contains(s)).toList(),
-                        e);
+                        "DxLink batch timed out. Symbols: " + symbols, e);
             } catch (Exception e) {
                 log.error("Batch interrupted", e);
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink batch failed", e);
@@ -296,6 +310,7 @@ public class TastyTradeService {
             return resultado;
 
         } finally {
+            scheduler.shutdownNow();
             if (channel != null && batchListener != null) {
                 channel.removeCandleListener(batchListener);
                 // Opcional: Desuscribir estos simbolos para no seguir recibiendo updates en el
@@ -342,6 +357,70 @@ public class TastyTradeService {
 
     public void cancelOrder(String orderId) {
         tastyTradeClient.cancelOrder(orderId);
+    }
+
+    /**
+     * Actualiza candles para una lista de símbolos. Primera vez: obtiene todo el histórico.
+     * Ejecuciones posteriores: solo desde la última barra almacenada. Solo guarda barras completas.
+     * Usado por el cron de mantenimiento.
+     */
+    public Map<String, List<Candle>> refreshCandles(List<String> symbols, EnumTimeframe timeframe, int barsHistoricoInicial) {
+        Map<String, Long> symbolToFromTime = new HashMap<>();
+        Instant now = Instant.now();
+        for (String symbol : symbols) {
+            Candle latest = candlePort.findMostRecent(symbol, timeframe);
+            long fromTime = (latest == null)
+                    ? now.minus(timeframe.getDuration().multipliedBy(barsHistoricoInicial)).toEpochMilli()
+                    : latest.getTimestamp().toEpochMilli();
+            symbolToFromTime.put(symbol, fromTime);
+        }
+        Map<String, List<Candle>> fetched = fetchCandlesBatchFromDxLink(symbols, timeframe, symbolToFromTime);
+        Thread.startVirtualThread(() -> {
+            int saved = 0;
+            try {
+                for (Map.Entry<String, List<Candle>> entry : fetched.entrySet()) {
+                    for (Candle c : entry.getValue()) {
+                        if (c.getTimestamp().plus(timeframe.getDuration()).isBefore(now)) {
+                            candlePort.upsert(c);
+                            saved++;
+                        }
+                    }
+                }
+                log.info("refreshCandles {}: {} barras completas guardadas ({} simbolos)",
+                        timeframe, saved, symbols.size());
+            } catch (Exception e) {
+                log.error("Error guardando candles en refreshCandles {}", timeframe, e);
+            }
+        });
+        return fetched;
+    }
+
+    /**
+     * Comprueba si existe una nueva barra completada en DxLink respecto a lo que hay en DB.
+     * Usado como probe rápido antes de lanzar la actualización masiva del cron.
+     */
+    public boolean hayNuevaBarraCompletada(String simbolo, EnumTimeframe timeframe) {
+        try {
+            Candle latest = candlePort.findMostRecent(simbolo, timeframe);
+            Map<String, List<Candle>> fetched = getCandlesBatchNoCache(List.of(simbolo), timeframe, 1);
+            List<Candle> bars = fetched.getOrDefault(simbolo, List.of());
+            Instant now = Instant.now();
+            return bars.stream()
+                    .filter(c -> c.getTimestamp().plus(timeframe.getDuration()).isBefore(now))
+                    .anyMatch(c -> latest == null || c.getTimestamp().isAfter(latest.getTimestamp()));
+        } catch (Exception e) {
+            log.warn("Probe {} {} falló: {}", simbolo, timeframe, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Elimina de la DB los timeframes no permanentes (M1, M5, M15, M30, D1).
+     * Usado por la limpieza diaria del cron.
+     */
+    public void limpiarTimeframesObsoletos() {
+        candlePort.deleteByTimeframesNotIn(new ArrayList<>(PERMANENTES));
+        log.info("Limpieza: eliminados timeframes no permanentes (se conservan H1, W1, MO1)");
     }
 
     private void ensureConnected() {

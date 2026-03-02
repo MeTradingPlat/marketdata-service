@@ -31,6 +31,11 @@ public interface CandleRepository extends JpaRepository<CandleEntity, Long> {
 
         @Modifying
         @Transactional
+        @Query("DELETE FROM CandleEntity c WHERE c.timeframe NOT IN :timeframes")
+        void deleteByTimeframeNotIn(@Param("timeframes") List<EnumTimeframe> timeframes);
+
+        @Modifying
+        @Transactional
         @Query(value = "INSERT INTO candles_historicas (symbol, timeframe, timestamp, open, high, low, close, volume) "
                         +
                         "VALUES (:#{#c.symbol}, :#{#c.timeframe.name()}, :#{#c.timestamp}, :#{#c.open}, :#{#c.high}, :#{#c.low}, :#{#c.close}, :#{#c.volume}) "

@@ -24,4 +24,10 @@ public interface GestionarCandleRepositoryIntPort {
      * ascending.
      */
     List<Candle> findLatest(String symbol, EnumTimeframe timeframe, int limit);
+
+    /**
+     * Elimina todas las candles cuyos timeframes NO estén en la lista indicada.
+     * Usado para la limpieza diaria de timeframes efímeros.
+     */
+    void deleteByTimeframesNotIn(List<EnumTimeframe> timeframes);
 }
