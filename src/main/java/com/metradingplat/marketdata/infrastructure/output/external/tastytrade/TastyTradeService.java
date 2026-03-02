@@ -239,6 +239,7 @@ public class TastyTradeService {
         try {
             String tf = timeframe.getLabel();
             ConcurrentHashMap<String, List<Candle>> candlesPorSimbolo = new ConcurrentHashMap<>();
+            Set<String> simbolosConDatos = ConcurrentHashMap.newKeySet();
             CompletableFuture<Void> allCompleted = new CompletableFuture<>();
             AtomicReference<ScheduledFuture<?>> settleTask = new AtomicReference<>();
 
@@ -251,14 +252,18 @@ public class TastyTradeService {
                 synchronized (candlesPorSimbolo.get(sym)) {
                     candlesPorSimbolo.get(sym).add(candle);
                 }
+                simbolosConDatos.add(sym);
 
                 if (isComplete) {
-                    // TX_PENDING=0: fin del lote actual. Si no llegan más candles en
-                    // 300ms, el snapshot está completo.
-                    ScheduledFuture<?> prev = settleTask.getAndSet(
-                        scheduler.schedule(() -> allCompleted.complete(null), 300, TimeUnit.MILLISECONDS)
-                    );
-                    if (prev != null) prev.cancel(false);
+                    // TX_PENDING=0: solo arrancar el settle timer cuando TODOS los símbolos
+                    // pedidos enviaron al menos 1 candle. Evita que un símbolo lento (SPY)
+                    // sea cortado por uno rápido (QQQ).
+                    if (simbolosConDatos.containsAll(symbols)) {
+                        ScheduledFuture<?> prev = settleTask.getAndSet(
+                            scheduler.schedule(() -> allCompleted.complete(null), 300, TimeUnit.MILLISECONDS)
+                        );
+                        if (prev != null) prev.cancel(false);
+                    }
                 } else {
                     // TX_PENDING=1: más candles vienen → cancelar timer pendiente
                     ScheduledFuture<?> pending = settleTask.get();
