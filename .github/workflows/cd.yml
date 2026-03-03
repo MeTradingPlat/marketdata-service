@@ -16,27 +16,6 @@ jobs:
         run: |
           docker network create metradingplat-network || echo "Network already exists"
 
-      - name: Run Postgres Container
-        run: |
-          if [ -z "$(docker ps -a -q -f name=postgres-marketdata)" ]; then
-            echo "Creating and starting postgres-marketdata container..."
-            docker run -d \
-              --name "postgres-marketdata" \
-              --network "metradingplat-network" \
-              --restart "always" \
-              --memory "256m" \
-              --memory-swap "256m" \
-              -e POSTGRES_DB="marketdata_db" \
-              -e POSTGRES_USER="user_marketdata" \
-              -e POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
-              -p 127.0.0.1:5434:5432 \
-              -v postgres_marketdata_data:/var/lib/postgresql/data \
-              postgres:15-alpine
-          else
-            echo "postgres-marketdata container exists, ensuring it is started..."
-            docker start postgres-marketdata
-          fi
-
       - name: Infrastructure Diagnosis & Cleanup
         run: |
           echo "--- DISK SPACE CHECK ---"
@@ -69,11 +48,6 @@ jobs:
             --label project="metradingplat" \
             --label service="marketdata-service" \
             -e SPRING_PROFILES_ACTIVE="prod" \
-            -e DB_HOST="postgres-marketdata" \
-            -e DB_PORT="5432" \
-            -e DB_NAME="marketdata_db" \
-            -e DB_USER="user_marketdata" \
-            -e DB_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
             -e KAFKA_BOOTSTRAP_SERVERS="kafka:29092" \
             -e EUREKA_HOST="directory" \
             -e TT_CLIENT_ID="${{ secrets.TT_CLIENT_ID }}" \
