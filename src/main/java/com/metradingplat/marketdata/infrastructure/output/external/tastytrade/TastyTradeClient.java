@@ -126,6 +126,10 @@ public class TastyTradeClient {
      * Envía una orden a TastyTrade.
      */
     public OrderResponse submitOrder(OrderRequest order) {
+        return submitOrderInternal(order, false);
+    }
+
+    private OrderResponse submitOrderInternal(OrderRequest order, boolean isRetry) {
         log.info("Submitting order: {} {} {} @ {}",
                 order.getAction(), order.getQuantity(), order.getSymbol(), order.getPrice());
 
@@ -173,11 +177,10 @@ public class TastyTradeClient {
 
         } catch (Exception e) {
             log.error("Order submission failed", e);
-            // Si es 401, renovar token y reintentar
-            if (e.getMessage() != null && e.getMessage().contains("401")) {
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
                 log.info("Token expired, refreshing and retrying");
                 refreshAccessToken();
-                return submitOrder(order);
+                return submitOrderInternal(order, true);
             }
             throw new RuntimeException("Order submission failed: " + e.getMessage(), e);
         }
@@ -207,8 +210,12 @@ public class TastyTradeClient {
      * Obtiene equities activos (paginado) desde TastyTrade.
      * GET /instruments/equities/active?per-page={perPage}&page-offset={pageOffset}
      */
-    @SuppressWarnings("unchecked")
     public List<ActiveEquity> getActiveEquities(int pageOffset, int perPage) {
+        return getActiveEquitiesInternal(pageOffset, perPage, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ActiveEquity> getActiveEquitiesInternal(int pageOffset, int perPage, boolean isRetry) {
         if (accessToken == null)
             refreshAccessToken();
 
@@ -245,9 +252,9 @@ public class TastyTradeClient {
 
         } catch (Exception e) {
             log.error("Failed to get active equities: {}", e.getMessage());
-            if (e.getMessage() != null && e.getMessage().contains("401")) {
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
                 refreshAccessToken();
-                return getActiveEquities(pageOffset, perPage);
+                return getActiveEquitiesInternal(pageOffset, perPage, true);
             }
             return List.of();
         }
@@ -257,8 +264,12 @@ public class TastyTradeClient {
      * Obtiene quote actual via TastyTrade market data.
      * GET /market-data/by-type?equity={symbol}
      */
-    @SuppressWarnings("unchecked")
     public Map<String, Object> getMarketDataByType(String symbol) {
+        return getMarketDataByTypeInternal(symbol, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> getMarketDataByTypeInternal(String symbol, boolean isRetry) {
         if (accessToken == null)
             refreshAccessToken();
 
@@ -280,9 +291,9 @@ public class TastyTradeClient {
 
         } catch (Exception e) {
             log.error("Failed to get market data for {}: {}", symbol, e.getMessage());
-            if (e.getMessage() != null && e.getMessage().contains("401")) {
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
                 refreshAccessToken();
-                return getMarketDataByType(symbol);
+                return getMarketDataByTypeInternal(symbol, true);
             }
             return Map.of();
         }
@@ -293,8 +304,12 @@ public class TastyTradeClient {
      * GET
      * /market-metrics/historic-corporate-events/earnings-reports/{symbol}?start-date={startDate}
      */
-    @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getEarningsReports(String symbol, String startDate) {
+        return getEarningsReportsInternal(symbol, startDate, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> getEarningsReportsInternal(String symbol, String startDate, boolean isRetry) {
         if (accessToken == null)
             refreshAccessToken();
 
@@ -319,9 +334,9 @@ public class TastyTradeClient {
 
         } catch (Exception e) {
             log.error("Failed to get earnings for {}: {}", symbol, e.getMessage());
-            if (e.getMessage() != null && e.getMessage().contains("401")) {
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
                 refreshAccessToken();
-                return getEarningsReports(symbol, startDate);
+                return getEarningsReportsInternal(symbol, startDate, true);
             }
             return List.of();
         }
@@ -332,6 +347,10 @@ public class TastyTradeClient {
      * POST /accounts/{accountNumber}/orders
      */
     public OrderResponse submitBracketOrder(BracketOrder order) {
+        return submitBracketOrderInternal(order, false);
+    }
+
+    private OrderResponse submitBracketOrderInternal(BracketOrder order, boolean isRetry) {
         log.info("Submitting bracket order: {} {} {} @ entry={} SL={} TP={}",
                 order.getAction(), order.getQuantity(), order.getSymbol(),
                 order.getEntryPrice(), order.getStopLossPrice(), order.getTakeProfitPrice());
@@ -415,9 +434,9 @@ public class TastyTradeClient {
 
         } catch (Exception e) {
             log.error("Bracket order submission failed", e);
-            if (e.getMessage() != null && e.getMessage().contains("401")) {
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
                 refreshAccessToken();
-                return submitBracketOrder(order);
+                return submitBracketOrderInternal(order, true);
             }
             throw new RuntimeException("Bracket order failed: " + e.getMessage(), e);
         }
@@ -428,6 +447,10 @@ public class TastyTradeClient {
      * DELETE /accounts/{accountNumber}/orders/{orderId}
      */
     public void cancelOrder(String orderId) {
+        cancelOrderInternal(orderId, false);
+    }
+
+    private void cancelOrderInternal(String orderId, boolean isRetry) {
         log.info("Cancelling order: {}", orderId);
 
         if (accessToken == null)
@@ -446,9 +469,9 @@ public class TastyTradeClient {
 
         } catch (Exception e) {
             log.error("Failed to cancel order {}: {}", orderId, e.getMessage());
-            if (e.getMessage() != null && e.getMessage().contains("401")) {
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
                 refreshAccessToken();
-                cancelOrder(orderId);
+                cancelOrderInternal(orderId, true);
                 return;
             }
             throw new RuntimeException("Cancel order failed: " + e.getMessage(), e);

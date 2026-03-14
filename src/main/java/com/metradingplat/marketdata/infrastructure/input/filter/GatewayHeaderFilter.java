@@ -22,6 +22,12 @@ public class GatewayHeaderFilter extends OncePerRequestFilter {
     private static final String GATEWAY_HEADER_VALUE = "true";
 
     @Override
+    protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
+        String path = request.getRequestURI();
+        return path.contains("/actuator") || path.contains("/api/health");
+    }
+
+    @Override
     protected void doFilterInternal(@NonNull HttpServletRequest request, @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain)
             throws ServletException, IOException {

@@ -1,0 +1,52 @@
+spring:
+  application:
+    name: marketdata-service
+
+  cloud:
+    compatibility-verifier:
+      enabled: false
+
+  threads:
+    virtual:
+      enabled: false
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+      - org.springframework.cloud.netflix.eureka.EurekaClientAutoConfiguration
+      - org.springframework.cloud.netflix.eureka.loadbalancer.LoadBalancerEurekaAutoConfiguration
+
+eureka:
+  client:
+    enabled: false
+
+logging:
+  level:
+    root: WARN
+    "[com.metradingplat.marketdata]": DEBUG
+
+server:
+  port: 0
+
+# Dummy values for TastyTrade config
+tastytrade:
+  client-id: test-client-id
+  client-secret: test-client-secret
+  refresh-token: test-refresh-token
+  account-number: test-account
+  api-base-url: http://localhost:9999
+  dxlink-url: ws://localhost:9999/dxlink
+  dxlink:
+    keepalive-interval: 30000
+    connection-timeout: 10000
+    accept-data-format: COMPACT
+  token-refresh:
+    enabled: false
+    fixed-rate-hours: 23
+
+management:
+  endpoints:
+    web:
+      base-path: /api/marketdata/api/actuator
+      exposure:
+        include: health,info
