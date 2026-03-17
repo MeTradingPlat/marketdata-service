@@ -50,27 +50,13 @@ public class TastyTradeService {
     public void init() {
         log.info("Initializing TastyTrade service");
 
-        // Configurar callback para datos de mercado → Kafka
-        dxLinkClient.setOnMarketData((symbol, data) -> {
-            log.debug("Market data received for {}: bid={}, ask={}, last={}",
-                    symbol, data.getBid(), data.getAsk(), data.getLastPrice());
-            kafkaProducer.publishMarketData(data);
-        });
-
-        // Configurar callback para candles (solo logging, no se guarda en BD)
-        dxLinkClient.setOnCandle((symbol, candle, isComplete) -> {
-            log.debug("Candle received for {}: {} O={} H={} L={} C={} complete={}",
-                    symbol, candle.getTimestamp(), candle.getOpen(),
-                    candle.getHigh(), candle.getLow(), candle.getClose(), isComplete);
-        });
-
-        // Configurar token refresher para auto-reconexión
+        // Configurar token refresher para auto-reconexión (before connect, does not need defaultChannel)
         dxLinkClient.setTokenRefresher(() -> {
             log.info("Token refresher called - obtaining fresh API quote token");
             return tastyTradeClient.getApiQuoteToken();
         });
 
-        // Conectar a DxLink
+        // Conectar a DxLink (this creates defaultChannel)
         try {
             log.debug("Obtaining API quote token from TastyTrade...");
             String token = tastyTradeClient.getApiQuoteToken();
@@ -80,6 +66,19 @@ public class TastyTradeService {
         } catch (Exception e) {
             log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
         }
+
+        // Configurar callbacks AFTER connect() so defaultChannel exists
+        dxLinkClient.setOnMarketData((symbol, data) -> {
+            log.debug("Market data received for {}: bid={}, ask={}, last={}",
+                    symbol, data.getBid(), data.getAsk(), data.getLastPrice());
+            kafkaProducer.publishMarketData(data);
+        });
+
+        dxLinkClient.setOnCandle((symbol, candle, isComplete) -> {
+            log.debug("Candle received for {}: {} O={} H={} L={} C={} complete={}",
+                    symbol, candle.getTimestamp(), candle.getOpen(),
+                    candle.getHigh(), candle.getLow(), candle.getClose(), isComplete);
+        });
     }
 
     public void sendOrder(OrderRequest request) {
@@ -143,6 +142,10 @@ public class TastyTradeService {
             CompletableFuture<Void> allCompleted = new CompletableFuture<>();
             AtomicReference<ScheduledFuture<?>> settleTask = new AtomicReference<>();
 
+            // Track when the first data arrives so we can start a settle timer
+            // even if not all symbols respond (some may be delisted/invalid)
+            AtomicReference<Instant> firstDataTime = new AtomicReference<>();
+
             batchListener = (sym, candle, isComplete) -> {
                 if (!symbols.contains(sym))
                     return;
@@ -153,14 +156,22 @@ public class TastyTradeService {
                     candlesPorSimbolo.get(sym).add(candle);
                 }
                 simbolosConDatos.add(sym);
+                firstDataTime.compareAndSet(null, Instant.now());
 
                 if (isComplete) {
-                    // TX_PENDING=0: solo arrancar el settle timer cuando TODOS los símbolos
-                    // pedidos enviaron al menos 1 candle. Evita que un símbolo lento (SPY)
-                    // sea cortado por uno rápido (QQQ).
-                    if (simbolosConDatos.containsAll(symbols)) {
+                    // TX_PENDING=0: start settle timer when all symbols responded,
+                    // OR when we've been receiving data for a while (some symbols may never respond)
+                    boolean allResponded = simbolosConDatos.containsAll(symbols);
+                    if (allResponded) {
                         ScheduledFuture<?> prev = settleTask.getAndSet(
                             scheduler.schedule(() -> allCompleted.complete(null), 300, TimeUnit.MILLISECONDS)
+                        );
+                        if (prev != null) prev.cancel(false);
+                    } else {
+                        // Even if not all symbols responded, start a longer settle timer
+                        // so we don't wait forever for symbols that will never respond
+                        ScheduledFuture<?> prev = settleTask.getAndSet(
+                            scheduler.schedule(() -> allCompleted.complete(null), 2000, TimeUnit.MILLISECONDS)
                         );
                         if (prev != null) prev.cancel(false);
                     }

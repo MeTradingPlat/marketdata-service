@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import org.springframework.web.server.ResponseStatusException;
+
 import com.metradingplat.marketdata.infrastructure.output.exceptionsController.exceptionStructure.CodigoError;
 import com.metradingplat.marketdata.infrastructure.output.exceptionsController.exceptionStructure.Error;
 import com.metradingplat.marketdata.infrastructure.output.exceptionsController.exceptionStructure.ErrorUtils;
@@ -22,6 +24,17 @@ import lombok.extern.slf4j.Slf4j;
 @RestControllerAdvice
 @Slf4j
 public class RestApiExceptionHandler {
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Error> handleResponseStatusException(HttpServletRequest req, ResponseStatusException ex) {
+        log.warn("ResponseStatusException at {}: {} {}", req.getRequestURL(), ex.getStatusCode(), ex.getReason());
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        if (status == null) {
+            status = HttpStatus.INTERNAL_SERVER_ERROR;
+        }
+        return createErrorResponse(CodigoError.ERROR_GENERICO, status, req,
+                ex.getReason() != null ? ex.getReason() : ex.getMessage());
+    }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Error> handleGenericException(HttpServletRequest req, Exception ex) {
