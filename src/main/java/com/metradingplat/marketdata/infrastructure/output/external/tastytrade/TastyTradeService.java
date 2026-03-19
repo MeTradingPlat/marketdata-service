@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -45,6 +46,15 @@ public class TastyTradeService {
 
     /** Máx. símbolos por chunk → mensaje DxLink ≤ 60 KB. */
     private static final int CHUNK_SIZE = 200;
+
+    /**
+     * Límite de canales DxLink abiertos simultáneamente.
+     * TastyTrade rechaza (INVALID_MESSAGE) al abrir demasiados canales en ráfaga.
+     * 10 canales = 2 000 símbolos concurrentes; 63 chunks → ~7 oleadas × ~5-35s.
+     * Límite conservador: TastyTrade no documenta su máximo real.
+     */
+    private static final int MAX_CONCURRENT_CHANNELS = 10;
+    private static final Semaphore CHANNEL_SEMAPHORE = new Semaphore(MAX_CONCURRENT_CHANNELS);
 
     /**
      * Executor de virtual threads (Java 21 Project Loom).
@@ -143,9 +153,9 @@ public class TastyTradeService {
 
         Map<String, List<Candle>> resultado = new HashMap<>();
         try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(90, TimeUnit.SECONDS);
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(150, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
-            log.warn("Parallel batch timeout 90s — retornando resultados parciales de chunks completados");
+            log.warn("Parallel batch timeout 150s — retornando resultados parciales de chunks completados");
         } catch (Exception e) {
             log.error("Parallel batch error: {}", e.getMessage(), e);
         }
@@ -178,11 +188,21 @@ public class TastyTradeService {
 
         ensureConnected();
 
+        // Limitar canales concurrentes para evitar INVALID_MESSAGE por rate-limiting de DxLink.
+        // El semáforo se libera en el finally block al cerrar el canal.
+        try {
+            CHANNEL_SEMAPHORE.acquire();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Interrupted waiting for channel slot");
+        }
+
         // Abre un canal dedicado para este chunk (no el default) → canales paralelos sin interferencia
         DxLinkClient.DxLinkChannel channel;
         try {
             channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
         } catch (Exception e) {
+            CHANNEL_SEMAPHORE.release();
             log.error("No se pudo abrir canal DxLink para batch: {}", e.getMessage());
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink channel unavailable");
         }
@@ -296,6 +316,8 @@ public class TastyTradeService {
             }
             // Cierra el canal dedicado — lo elimina del mapa interno, libera recursos
             channel.close();
+            // Libera el slot del semáforo para que la próxima oleada pueda abrir su canal
+            CHANNEL_SEMAPHORE.release();
         }
     }
 
