@@ -53,7 +53,9 @@ public class DxLinkClient {
 
     // Gestión de Canales
     private final Map<Integer, DxLinkChannel> channels = new ConcurrentHashMap<>();
-    private final AtomicInteger nextChannelId = new AtomicInteger(0);
+    // DxLink reserva canales pares para el servidor; el cliente DEBE usar impares (1, 3, 5, ...).
+    // Inicializamos en -1 para que el primer addAndGet(2) dé 1 (default channel).
+    private final AtomicInteger nextChannelId = new AtomicInteger(-1);
     private DxLinkChannel defaultChannel; // Canal por defecto para streaming continuo
 
     public DxLinkChannel getDefaultChannel() {
@@ -103,7 +105,7 @@ public class DxLinkClient {
         if (!authenticated || session == null || !session.isOpen()) {
             return CompletableFuture.failedFuture(new IllegalStateException("Client not authenticated/connected"));
         }
-        int newId = nextChannelId.incrementAndGet();
+        int newId = nextChannelId.addAndGet(2);
         DxLinkChannel channel = new DxLinkChannel(newId);
         channels.put(newId, channel);
 
@@ -119,7 +121,7 @@ public class DxLinkClient {
         this.authenticated = false;
         this.reconnectAttempts.set(0);
         this.channels.clear();
-        this.nextChannelId.set(0);
+        this.nextChannelId.set(-1);
 
         log.debug("Connecting to DxLink: {}", url);
 
@@ -145,7 +147,7 @@ public class DxLinkClient {
                 log.info("DxLink conectado y autenticado (url={})", url);
 
                 // Inicializar canal default (ID 1)
-                this.defaultChannel = new DxLinkChannel(nextChannelId.incrementAndGet());
+                this.defaultChannel = new DxLinkChannel(nextChannelId.addAndGet(2));
                 this.channels.put(defaultChannel.getId(), defaultChannel);
 
                 try {
@@ -408,7 +410,11 @@ public class DxLinkClient {
                 log.error("DxLink error: {} (channel {} not found)", errorCode, channelId);
             }
         } else {
-            log.error("DxLink error: {}", errorCode);
+            // Error sin channel ID — falla todos los canales pendientes de inicialización
+            log.error("DxLink error (no channel): {}", errorCode);
+            List.copyOf(channels.values()).stream()
+                    .filter(ch -> !ch.initFuture.isDone())
+                    .forEach(ch -> ch.failInitialization(errorCode));
         }
     }
 
