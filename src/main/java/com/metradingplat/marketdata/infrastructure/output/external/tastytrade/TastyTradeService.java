@@ -194,18 +194,27 @@ public class TastyTradeService {
 
         channel.addCandleListener(listener);
 
-        // Enviar N × FEED_SUBSCRIPTION al mismo canal (200 símbolos c/u)
+        // Enviar N × FEED_SUBSCRIPTION al mismo canal (200 símbolos c/u).
+        // DxLink rechaza (INVALID_MESSAGE) mensajes enviados en ráfaga rápida,
+        // así que espaciamos 100ms entre cada mensaje cuando hay más de 1 chunk.
         List<List<String>> chunks = partition(symbols, CHUNK_SIZE);
         log.info("Canal {}: suscribiendo {} simbolos en {} mensajes FEED_SUBSCRIPTION",
                 channel.getId(), symbols.size(), chunks.size());
-        for (List<String> chunk : chunks) {
-            List<Map<String, Object>> items = chunk.stream()
+        for (int ci = 0; ci < chunks.size(); ci++) {
+            List<Map<String, Object>> items = chunks.get(ci).stream()
                     .map(s -> Map.<String, Object>of(
                             "symbol", s + "{=" + tf + "}",
                             "type", "Candle",
                             "fromTime", fromTime))
                     .toList();
             channel.subscribeCandlesBatch(items);
+            // Espaciar mensajes para no disparar rate-limit de DxLink
+            if (ci < chunks.size() - 1) {
+                try { Thread.sleep(100); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
         }
 
         // Timeout: 30s base + 1s por cada 100 símbolos, máx 120s
