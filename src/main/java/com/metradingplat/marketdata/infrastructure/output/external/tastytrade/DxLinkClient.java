@@ -409,12 +409,15 @@ public class DxLinkClient {
             } else {
                 log.error("DxLink error: {} (channel {} not found)", errorCode, channelId);
             }
-        } else {
-            // Error sin channel ID — falla todos los canales pendientes de inicialización
-            log.error("DxLink error (no channel): {}", errorCode);
+        } else if ("BAD_ACTION".equals(errorCode)) {
+            // BAD_ACTION sin channel ID: canal rechazado — falla los canales pendientes de apertura
+            log.error("DxLink BAD_ACTION (no channel) — failing pending channels");
             List.copyOf(channels.values()).stream()
                     .filter(ch -> !ch.initFuture.isDone())
                     .forEach(ch -> ch.failInitialization(errorCode));
+        } else {
+            // Otros errores (INVALID_MESSAGE, etc.) se loguean sin afectar canales activos
+            log.error("DxLink error (no channel): {}", errorCode);
         }
     }
 
@@ -519,9 +522,8 @@ public class DxLinkClient {
         }
 
         public void close() {
-            // Notifica a DxLink que el canal se cierra para liberar el slot en el servidor.
-            // Sin CHANNEL_CANCEL los canales se acumulan hasta el límite y DxLink responde BAD_ACTION.
-            sendMessage(Map.of("type", "CHANNEL_CANCEL", "channel", id));
+            // DxLink no soporta CHANNEL_CANCEL — enviar ese mensaje genera INVALID_MESSAGE
+            // que envenena los canales pendientes del siguiente batch. Solo limpiamos local.
             channels.remove(id);
         }
 
