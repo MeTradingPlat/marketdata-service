@@ -4,23 +4,20 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
 
 import com.metradingplat.marketdata.application.output.GestionarChangeNotificationsProducerIntPort;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
@@ -44,24 +41,11 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class TastyTradeService {
 
-    /** Máx. símbolos por chunk → mensaje DxLink ≤ 60 KB. */
+    /**
+     * Máx. símbolos por mensaje FEED_SUBSCRIPTION → mensaje DxLink ≤ 60 KB.
+     * Todos los mensajes van al MISMO canal — evita INVALID_MESSAGE por múltiples canales.
+     */
     private static final int CHUNK_SIZE = 200;
-
-    /**
-     * Límite de canales DxLink abiertos simultáneamente.
-     * TastyTrade rechaza (INVALID_MESSAGE) al abrir demasiados canales en ráfaga.
-     * 10 canales = 2 000 símbolos concurrentes; 63 chunks → ~7 oleadas × ~5-35s.
-     * Límite conservador: TastyTrade no documenta su máximo real.
-     */
-    private static final int MAX_CONCURRENT_CHANNELS = 10;
-    private static final Semaphore CHANNEL_SEMAPHORE = new Semaphore(MAX_CONCURRENT_CHANNELS);
-
-    /**
-     * Executor de virtual threads (Java 21 Project Loom).
-     * Cada chunk abre su propio virtual thread — I/O-bound, sin overhead de OS threads.
-     * Soporta cientos de chunks concurrentes sin pool fijo.
-     */
-    private static final ExecutorService BATCH_POOL = Executors.newVirtualThreadPerTaskExecutor();
 
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
@@ -129,48 +113,116 @@ public class TastyTradeService {
     }
 
     /**
-     * Obtiene candles historicos de multiples simbolos.
-     * Divide en chunks de CHUNK_SIZE y abre un canal DxLink por chunk en paralelo.
-     * Soporta cualquier cantidad de simbolos (ej. 12 000+) sin timeout.
+     * Obtiene candles historicos de multiples simbolos usando UN solo canal DxLink.
+     * Envía N mensajes FEED_SUBSCRIPTION de 200 símbolos c/u al mismo canal,
+     * evitando el INVALID_MESSAGE que ocurre al abrir múltiples canales en paralelo.
+     * Soporta cualquier cantidad de símbolos (ej. 12 000+).
      */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
         log.info("Batch fetch: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
 
+        ensureConnected();
+
         Instant now = Instant.now();
         long fromTime = now.minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
+        String tf = timeframe.getLabel();
 
-        Map<String, Long> symbolToFromTime = new HashMap<>();
-        symbols.forEach(s -> symbolToFromTime.put(s, fromTime));
+        // Un solo canal para todos los símbolos
+        DxLinkClient.DxLinkChannel channel;
+        try {
+            channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("No se pudo abrir canal DxLink para batch: {}", e.getMessage());
+            return Map.of();
+        }
 
+        Set<String> symbolSet = new HashSet<>(symbols);
+        ConcurrentHashMap<String, List<Candle>> candlesPorSimbolo = new ConcurrentHashMap<>();
+        Set<String> simbolosConDatos = ConcurrentHashMap.newKeySet();
+        CompletableFuture<Void> allCompleted = new CompletableFuture<>();
+        AtomicReference<ScheduledFuture<?>> settleTask = new AtomicReference<>();
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+
+        DxLinkClient.CandleCallback listener = (sym, candle, isComplete) -> {
+            if (!symbolSet.contains(sym)) return;
+
+            candle.setTimeframe(timeframe);
+            candlesPorSimbolo.computeIfAbsent(sym, k -> new ArrayList<>());
+            synchronized (candlesPorSimbolo.get(sym)) {
+                candlesPorSimbolo.get(sym).add(candle);
+            }
+            simbolosConDatos.add(sym);
+
+            if (isComplete) {
+                if (scheduler.isShutdown()) return;
+                boolean allResponded = simbolosConDatos.size() >= symbols.size();
+                try {
+                    ScheduledFuture<?> prev = settleTask.getAndSet(
+                        scheduler.schedule(() -> allCompleted.complete(null),
+                            allResponded ? 300 : 2000, TimeUnit.MILLISECONDS)
+                    );
+                    if (prev != null) prev.cancel(false);
+                } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                    // scheduler cerrado entre el isShutdown() check y el schedule()
+                }
+            } else {
+                // TX_PENDING=1: más candles vienen → cancelar timer pendiente
+                ScheduledFuture<?> pending = settleTask.get();
+                if (pending != null) pending.cancel(false);
+            }
+        };
+
+        channel.addCandleListener(listener);
+
+        // Enviar N × FEED_SUBSCRIPTION al mismo canal (200 símbolos c/u)
         List<List<String>> chunks = partition(symbols, CHUNK_SIZE);
-        log.info("Dividiendo {} simbolos en {} chunks (max {} por canal)", symbols.size(), chunks.size(), CHUNK_SIZE);
+        log.info("Canal {}: suscribiendo {} simbolos en {} mensajes FEED_SUBSCRIPTION",
+                channel.getId(), symbols.size(), chunks.size());
+        for (List<String> chunk : chunks) {
+            List<Map<String, Object>> items = chunk.stream()
+                    .map(s -> Map.<String, Object>of(
+                            "symbol", s + "{=" + tf + "}",
+                            "type", "Candle",
+                            "fromTime", fromTime))
+                    .toList();
+            channel.subscribeCandlesBatch(items);
+        }
 
-        List<CompletableFuture<Map<String, List<Candle>>>> futures = chunks.stream()
-                .map(chunk -> CompletableFuture.supplyAsync(
-                        () -> fetchCandlesBatchFromDxLink(chunk, timeframe, symbolToFromTime),
-                        BATCH_POOL))
-                .toList();
+        // Timeout: 30s base + 1s por cada 100 símbolos, máx 120s
+        int maxWaitSeconds = Math.min(30 + symbols.size() / 100, 120);
+        try {
+            allCompleted.get(maxWaitSeconds, TimeUnit.SECONDS);
+            log.debug("Batch completo en canal {} con {}/{} simbolos",
+                    channel.getId(), simbolosConDatos.size(), symbols.size());
+        } catch (TimeoutException e) {
+            int received = simbolosConDatos.size();
+            if (received == 0) {
+                log.warn("Batch timeout {}s ZERO data en canal {}. {} simbolos enviados.",
+                        maxWaitSeconds, channel.getId(), symbols.size());
+            } else {
+                log.warn("Batch timeout {}s en canal {}. Recibidos {}/{} — resultados parciales.",
+                        maxWaitSeconds, channel.getId(), received, symbols.size());
+            }
+        } catch (Exception e) {
+            log.error("Batch interrupted", e);
+        }
 
         Map<String, List<Candle>> resultado = new HashMap<>();
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(150, TimeUnit.SECONDS);
-        } catch (TimeoutException e) {
-            log.warn("Parallel batch timeout 150s — retornando resultados parciales de chunks completados");
-        } catch (Exception e) {
-            log.error("Parallel batch error: {}", e.getMessage(), e);
-        }
-
-        for (CompletableFuture<Map<String, List<Candle>>> f : futures) {
-            if (f.isDone() && !f.isCompletedExceptionally()) {
-                try {
-                    resultado.putAll(f.get());
-                } catch (Exception e) {
-                    log.warn("Error obteniendo resultado de chunk: {}", e.getMessage());
-                }
+        for (Map.Entry<String, List<Candle>> entry : candlesPorSimbolo.entrySet()) {
+            List<Candle> sorted;
+            synchronized (entry.getValue()) {
+                sorted = entry.getValue().stream()
+                        .sorted(Comparator.comparing(Candle::getTimestamp))
+                        .toList();
             }
+            resultado.put(entry.getKey(), sorted);
         }
 
-        log.info("Parallel batch completo: {}/{} simbolos con datos", resultado.size(), symbols.size());
+        scheduler.shutdownNow();
+        channel.removeCandleListener(listener);
+        channel.close();
+
+        log.info("Batch completo: {}/{} simbolos con datos", resultado.size(), symbols.size());
         return resultado;
     }
 
@@ -183,152 +235,12 @@ public class TastyTradeService {
         return result;
     }
 
-    private Map<String, List<Candle>> fetchCandlesBatchFromDxLink(
-            List<String> symbols, EnumTimeframe timeframe, Map<String, Long> symbolToFromTime) {
-
-        ensureConnected();
-
-        // Limitar canales concurrentes para evitar INVALID_MESSAGE por rate-limiting de DxLink.
-        // El semáforo se libera en el finally block al cerrar el canal.
-        try {
-            CHANNEL_SEMAPHORE.acquire();
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Interrupted waiting for channel slot");
-        }
-
-        // Abre un canal dedicado para este chunk (no el default) → canales paralelos sin interferencia
-        DxLinkClient.DxLinkChannel channel;
-        try {
-            channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            CHANNEL_SEMAPHORE.release();
-            log.error("No se pudo abrir canal DxLink para batch: {}", e.getMessage());
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink channel unavailable");
-        }
-
-        DxLinkClient.CandleCallback batchListener = null;
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-        try {
-            String tf = timeframe.getLabel();
-            ConcurrentHashMap<String, List<Candle>> candlesPorSimbolo = new ConcurrentHashMap<>();
-            Set<String> simbolosConDatos = ConcurrentHashMap.newKeySet();
-            CompletableFuture<Void> allCompleted = new CompletableFuture<>();
-            AtomicReference<ScheduledFuture<?>> settleTask = new AtomicReference<>();
-
-            // Track when the first data arrives so we can start a settle timer
-            // even if not all symbols respond (some may be delisted/invalid)
-            AtomicReference<Instant> firstDataTime = new AtomicReference<>();
-
-            batchListener = (sym, candle, isComplete) -> {
-                if (!symbols.contains(sym))
-                    return;
-
-                candle.setTimeframe(timeframe);
-                candlesPorSimbolo.computeIfAbsent(sym, k -> new ArrayList<>());
-                synchronized (candlesPorSimbolo.get(sym)) {
-                    candlesPorSimbolo.get(sym).add(candle);
-                }
-                simbolosConDatos.add(sym);
-                firstDataTime.compareAndSet(null, Instant.now());
-
-                if (isComplete) {
-                    // TX_PENDING=0: start settle timer when all symbols responded,
-                    // OR when we've been receiving data for a while (some symbols may never respond)
-                    if (scheduler.isShutdown()) return; // batch ya completó, ignorar evento tardío
-                    boolean allResponded = simbolosConDatos.containsAll(symbols);
-                    try {
-                        if (allResponded) {
-                            ScheduledFuture<?> prev = settleTask.getAndSet(
-                                scheduler.schedule(() -> allCompleted.complete(null), 300, TimeUnit.MILLISECONDS)
-                            );
-                            if (prev != null) prev.cancel(false);
-                        } else {
-                            // Even if not all symbols responded, start a longer settle timer
-                            // so we don't wait forever for symbols that will never respond
-                            ScheduledFuture<?> prev = settleTask.getAndSet(
-                                scheduler.schedule(() -> allCompleted.complete(null), 2000, TimeUnit.MILLISECONDS)
-                            );
-                            if (prev != null) prev.cancel(false);
-                        }
-                    } catch (java.util.concurrent.RejectedExecutionException ignored) {
-                        // scheduler cerrado entre el isShutdown() check y el schedule() — batch ya completó
-                    }
-                } else {
-                    // TX_PENDING=1: más candles vienen → cancelar timer pendiente
-                    ScheduledFuture<?> pending = settleTask.get();
-                    if (pending != null) pending.cancel(false);
-                }
-            };
-
-            channel.addCandleListener(batchListener);
-
-            List<Map<String, Object>> subscriptionItems = symbols.stream()
-                    .map(symbol -> {
-                        String candleSymbol = symbol + "{=" + tf + "}";
-                        return Map.<String, Object>of(
-                                "symbol", candleSymbol,
-                                "type", "Candle",
-                                "fromTime", symbolToFromTime.get(symbol));
-                    })
-                    .toList();
-
-            log.debug("Batch subscribing {} symbols on shared channel {}", symbols.size(), channel.getId());
-            channel.subscribeCandlesBatch(subscriptionItems);
-
-            int maxWaitSeconds = Math.min(15 + symbols.size() / 10, 60);
-
-            try {
-                allCompleted.get(maxWaitSeconds, TimeUnit.SECONDS);
-                log.debug("Batch complete on shared channel {} successfully", channel.getId());
-            } catch (TimeoutException e) {
-                int received = simbolosConDatos.size();
-                if (received == 0) {
-                    log.warn("Batch timed out after {}s with ZERO data on channel {}. {} symbols sent, none responded.",
-                            maxWaitSeconds, channel.getId(), symbols.size());
-                } else {
-                    log.warn("Batch timed out after {}s on channel {}. Got {}/{} symbols — returning partial results.",
-                            maxWaitSeconds, channel.getId(), received, symbols.size());
-                }
-                // Return partial results instead of 503 — missing symbols get empty list
-            } catch (Exception e) {
-                log.error("Batch interrupted", e);
-                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "DxLink batch failed", e);
-            }
-
-            Map<String, List<Candle>> resultado = new HashMap<>();
-            for (Map.Entry<String, List<Candle>> entry : candlesPorSimbolo.entrySet()) {
-                List<Candle> sorted;
-                synchronized (entry.getValue()) {
-                    sorted = entry.getValue().stream()
-                            .sorted(Comparator.comparing(Candle::getTimestamp))
-                            .toList();
-                }
-                resultado.put(entry.getKey(), sorted);
-            }
-
-            return resultado;
-
-        } finally {
-            scheduler.shutdownNow();
-            if (batchListener != null) {
-                channel.removeCandleListener(batchListener);
-            }
-            // Cierra el canal dedicado — lo elimina del mapa interno, libera recursos
-            channel.close();
-            // Libera el slot del semáforo para que la próxima oleada pueda abrir su canal
-            CHANNEL_SEMAPHORE.release();
-        }
-    }
-
     /**
      * Obtiene candles actuales sin cache (Bypass Db)
      */
     public Map<String, List<Candle>> getCandlesBatchNoCache(List<String> symbols, EnumTimeframe timeframe, int bars) {
         return getCandlesBatch(symbols, timeframe, bars);
     }
-
-    // CandleKey record removed
 
     public List<ActiveEquity> getActiveEquities(int pageOffset, int perPage) {
         return tastyTradeClient.getActiveEquities(pageOffset, perPage);
