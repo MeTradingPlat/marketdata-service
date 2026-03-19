@@ -342,7 +342,7 @@ public class DxLinkClient {
                 case "FEED_CONFIG" -> handleFeedConfig(msg);
                 case "FEED_DATA" -> handleFeedData(msg);
                 case "KEEPALIVE" -> handleKeepalive();
-                case "ERROR" -> log.error("DxLink error: {}", msg.path("error").asText());
+                case "ERROR" -> handleError(msg);
                 default -> log.debug("Unhandled message type: {}", type);
             }
         } catch (Exception e) {
@@ -393,6 +393,22 @@ public class DxLinkClient {
 
         if (channel != null && data.isArray()) {
             channel.processData(data);
+        }
+    }
+
+    private void handleError(JsonNode msg) {
+        String errorCode = msg.path("error").asText();
+        int channelId = msg.path("channel").asInt(0);
+        if (channelId > 0) {
+            DxLinkChannel ch = channels.get(channelId);
+            if (ch != null) {
+                log.error("DxLink error on channel {}: {}", channelId, errorCode);
+                ch.failInitialization(errorCode);
+            } else {
+                log.error("DxLink error: {} (channel {} not found)", errorCode, channelId);
+            }
+        } else {
+            log.error("DxLink error: {}", errorCode);
         }
     }
 
@@ -497,8 +513,14 @@ public class DxLinkClient {
         }
 
         public void close() {
-            // DxLink no documenta cierre de canal explícito via websocket en esta versión,
-            // pero lo removemos del mapa local para que no procese más datos.
+            // Notifica a DxLink que el canal se cierra para liberar el slot en el servidor.
+            // Sin CHANNEL_CANCEL los canales se acumulan hasta el límite y DxLink responde BAD_ACTION.
+            sendMessage(Map.of("type", "CHANNEL_CANCEL", "channel", id));
+            channels.remove(id);
+        }
+
+        void failInitialization(String reason) {
+            initFuture.completeExceptionally(new RuntimeException("DxLink channel error: " + reason));
             channels.remove(id);
         }
 
