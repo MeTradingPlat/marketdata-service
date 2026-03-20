@@ -341,6 +341,7 @@ public class DxLinkClient {
                 case "SETUP" -> handleSetup(msg);
                 case "AUTH_STATE" -> handleAuthState(msg);
                 case "CHANNEL_OPENED" -> handleChannelOpened(msg);
+                case "CHANNEL_CLOSED" -> log.debug("Channel {} closed by server", msg.path("channel").asInt());
                 case "FEED_CONFIG" -> handleFeedConfig(msg);
                 case "FEED_DATA" -> handleFeedData(msg);
                 case "KEEPALIVE" -> handleKeepalive();
@@ -400,24 +401,23 @@ public class DxLinkClient {
 
     private void handleError(JsonNode msg) {
         String errorCode = msg.path("error").asText();
+        String errorMessage = msg.path("message").asText("");
         int channelId = msg.path("channel").asInt(0);
         if (channelId > 0) {
             DxLinkChannel ch = channels.get(channelId);
             if (ch != null) {
-                log.error("DxLink error on channel {}: {}", channelId, errorCode);
+                log.error("DxLink error on channel {}: {} — {}", channelId, errorCode, errorMessage);
                 ch.failInitialization(errorCode);
             } else {
-                log.error("DxLink error: {} (channel {} not found)", errorCode, channelId);
+                log.error("DxLink error: {} (channel {} not found) — {}", errorCode, channelId, errorMessage);
             }
         } else if ("BAD_ACTION".equals(errorCode)) {
-            // BAD_ACTION sin channel ID: canal rechazado — falla los canales pendientes de apertura
-            log.error("DxLink BAD_ACTION (no channel) — failing pending channels");
+            log.error("DxLink BAD_ACTION (no channel) — {} — failing pending channels", errorMessage);
             List.copyOf(channels.values()).stream()
                     .filter(ch -> !ch.initFuture.isDone())
                     .forEach(ch -> ch.failInitialization(errorCode));
         } else {
-            // Otros errores (INVALID_MESSAGE, etc.) se loguean sin afectar canales activos
-            log.error("DxLink error (no channel): {}", errorCode);
+            log.error("DxLink error (no channel): {} — {}", errorCode, errorMessage);
         }
     }
 
@@ -522,8 +522,11 @@ public class DxLinkClient {
         }
 
         public void close() {
-            // DxLink no soporta CHANNEL_CANCEL — enviar ese mensaje genera INVALID_MESSAGE
-            // que envenena los canales pendientes del siguiente batch. Solo limpiamos local.
+            // Enviar CHANNEL_CANCEL para cerrar el canal en el servidor.
+            // Sin esto, el canal queda como "fantasma" y DxLink rechaza nuevos canales
+            // con INVALID_MESSAGE. La spec dice: "Once the client has sent this message,
+            // the client can forget about the channel."
+            sendMessage(Map.of("type", "CHANNEL_CANCEL", "channel", id));
             channels.remove(id);
         }
 
