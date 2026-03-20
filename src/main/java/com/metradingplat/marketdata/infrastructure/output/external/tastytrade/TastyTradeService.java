@@ -204,8 +204,12 @@ public class TastyTradeService {
             channel.subscribeCandlesBatch(items);
         }
 
-        // Timeout: 30s base + 1s por cada 200 símbolos, máx 120s
-        int maxWaitSeconds = Math.min(30 + symbols.size() / 200, 120);
+        // Timeout dinámico: scanners (≤100 syms) = 8s, batches grandes escalan.
+        // Con mercado cerrado muchos batches no reciben nada; 8s evita bloquear
+        // la cola 30s por cada scanner sin datos.
+        int maxWaitSeconds = symbols.size() <= CHUNK_SIZE
+                ? 8
+                : Math.min(30 + symbols.size() / 200, 120);
         try {
             allCompleted.get(maxWaitSeconds, TimeUnit.SECONDS);
             log.debug("Batch completo en canal {} con {}/{} simbolos",
