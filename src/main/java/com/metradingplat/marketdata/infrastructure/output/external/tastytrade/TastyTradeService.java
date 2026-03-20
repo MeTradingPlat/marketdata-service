@@ -52,10 +52,12 @@ public class TastyTradeService {
     private static final int CHUNK_SIZE = 100;
 
     /**
-     * Garantiza que solo haya UN canal DxLink histórico abierto en cualquier momento.
-     * Se adquiere para todo el batch y se libera al cerrar el canal con CHANNEL_CANCEL.
+     * Limita canales DxLink históricos concurrentes. Cada canal es independiente
+     * (multiplexado en el mismo WebSocket) y se cierra con CHANNEL_CANCEL, así que
+     * varios scanners pueden operar en paralelo sin ghost channels.
+     * 4 permits = hasta 4 escaneres simultáneos sin saturar el WebSocket.
      */
-    private static final Semaphore BATCH_SEMAPHORE = new Semaphore(1);
+    private static final Semaphore BATCH_SEMAPHORE = new Semaphore(4);
 
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
