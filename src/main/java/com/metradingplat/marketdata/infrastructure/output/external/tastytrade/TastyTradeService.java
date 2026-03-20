@@ -43,11 +43,13 @@ import lombok.extern.slf4j.Slf4j;
 public class TastyTradeService {
 
     /**
-     * Máx. símbolos por mensaje FEED_SUBSCRIPTION → mensaje DxLink ≤ 60 KB.
-     * Las suscripciones son aditivas: múltiples FEED_SUBSCRIPTION al mismo canal
-     * acumulan símbolos (confirmado por spec dxLink AsyncAPI 2.4.0).
+     * Máx. símbolos por mensaje FEED_SUBSCRIPTION.
+     * dxFeed tiene un frame WebSocket de 8 KB (8192 bytes): mensajes más grandes
+     * se truncan y el servidor responde INVALID_MESSAGE (json truncado).
+     * Cada item ≈ 65 bytes → 100 × 65 + 50 (wrapper) ≈ 6550 bytes < 8192.
+     * Las suscripciones son aditivas al mismo canal (spec dxLink AsyncAPI 2.4.0).
      */
-    private static final int CHUNK_SIZE = 200;
+    private static final int CHUNK_SIZE = 100;
 
     /**
      * Garantiza que solo haya UN canal DxLink histórico abierto en cualquier momento.
