@@ -13,7 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.Semaphore;
+
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -50,14 +50,6 @@ public class TastyTradeService {
      * Las suscripciones son aditivas al mismo canal (spec dxLink AsyncAPI 2.4.0).
      */
     private static final int CHUNK_SIZE = 100;
-
-    /**
-     * Limita canales DxLink históricos concurrentes. Cada canal es independiente
-     * (multiplexado en el mismo WebSocket) y se cierra con CHANNEL_CANCEL, así que
-     * varios scanners pueden operar en paralelo sin ghost channels.
-     * 4 permits = hasta 4 escaneres simultáneos sin saturar el WebSocket.
-     */
-    private static final Semaphore BATCH_SEMAPHORE = new Semaphore(4);
 
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
@@ -135,14 +127,6 @@ public class TastyTradeService {
 
         ensureConnected();
 
-        try {
-            BATCH_SEMAPHORE.acquire();
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            log.warn("Batch interrumpido esperando slot DxLink");
-            return Map.of();
-        }
-
         Instant now = Instant.now();
         long fromTime = now.minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
         String tf = timeframe.getLabel();
@@ -151,7 +135,6 @@ public class TastyTradeService {
         try {
             channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
         } catch (Exception e) {
-            BATCH_SEMAPHORE.release();
             log.error("No se pudo abrir canal DxLink para batch: {}", e.getMessage());
             return Map.of();
         }
@@ -232,7 +215,6 @@ public class TastyTradeService {
         scheduler.shutdownNow();
         channel.removeCandleListener(listener);
         channel.close();
-        BATCH_SEMAPHORE.release();
 
         Map<String, List<Candle>> resultado = new HashMap<>();
         for (Map.Entry<String, List<Candle>> entry : candlesPorSimbolo.entrySet()) {
