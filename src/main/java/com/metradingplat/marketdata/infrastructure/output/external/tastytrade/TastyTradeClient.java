@@ -477,4 +477,42 @@ public class TastyTradeClient {
             throw new RuntimeException("Cancel order failed: " + e.getMessage(), e);
         }
     }
+
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getMarketMetricsBatch(List<String> symbols) {
+        if (accessToken == null)
+            refreshAccessToken();
+
+        List<Map<String, Object>> allItems = new ArrayList<>();
+        int chunkSize = 250;
+
+        for (int i = 0; i < symbols.size(); i += chunkSize) {
+            List<String> chunk = symbols.subList(i, Math.min(i + chunkSize, symbols.size()));
+            String symbolsStr = String.join(",", chunk);
+            
+            try {
+                Map<String, Object> response = tastyTradeRestClient
+                        .get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/market-metrics")
+                                .queryParam("symbols", symbolsStr)
+                                .build())
+                        .header("Authorization", "Bearer " + accessToken)
+                        .retrieve()
+                        .body(Map.class);
+
+                if (response != null && response.containsKey("data")) {
+                    Map<String, Object> data = (Map<String, Object>) response.get("data");
+                    List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+                    if (items != null) {
+                        allItems.addAll(items);
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Failed to get market metrics batch chunk starting at index {}: {}", i, e.getMessage());
+            }
+        }
+
+        return allItems;
+    }
 }
