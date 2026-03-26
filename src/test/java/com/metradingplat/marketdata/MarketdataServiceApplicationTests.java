@@ -13,6 +13,12 @@ class MarketdataServiceApplicationTests {
 	@MockitoBean
 	private KafkaTemplate<String, Object> kafkaTemplate;
 
+	@MockitoBean
+	private com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeClient tastyTradeClient;
+
+	@MockitoBean
+	private com.metradingplat.marketdata.infrastructure.output.external.tastytrade.DxLinkClient dxLinkClient;
+
 	@Test
 	void contextLoads() {
 	}
