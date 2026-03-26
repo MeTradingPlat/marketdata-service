@@ -29,6 +29,7 @@ import jakarta.websocket.WebSocketContainer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.metradingplat.marketdata.domain.models.Candle;
+import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.infrastructure.output.kafka.DTO.MarketDataStreamDTO;
 
 import jakarta.annotation.PreDestroy;
@@ -75,6 +76,8 @@ public class DxLinkClient {
 
     private ScheduledFuture<?> keepaliveTask;
     private ScheduledFuture<?> healthCheckTask;
+    private final List<CandleCallback> candleListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<BiConsumer<String, FundamentalData>> fundamentalListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private Supplier<String> tokenRefresher;
 
     public interface CandleCallback {
@@ -90,7 +93,7 @@ public class DxLinkClient {
 
     public void setOnCandle(CandleCallback callback) {
         if (defaultChannel != null)
-            defaultChannel.setOnCandle(callback);
+            defaultChannel.addCandleListener(callback);
     }
 
     public void setTokenRefresher(Supplier<String> tokenRefresher) {
@@ -454,15 +457,28 @@ public class DxLinkClient {
 
         // Estado Snapshot Local
         private final AtomicInteger snapshotCandleCount = new AtomicInteger(0);
-        private final Set<CandleCallback> candleListeners = ConcurrentHashMap.newKeySet();
         private final Set<BiConsumer<String, MarketDataStreamDTO>> marketDataListeners = ConcurrentHashMap.newKeySet();
 
         public void addCandleListener(CandleCallback listener) {
-            candleListeners.add(listener);
+            DxLinkClient.this.candleListeners.add(listener);
         }
 
         public void removeCandleListener(CandleCallback listener) {
-            candleListeners.remove(listener);
+            DxLinkClient.this.candleListeners.remove(listener);
+        }
+
+        public void addFundamentalListener(BiConsumer<String, FundamentalData> listener) {
+            DxLinkClient.this.fundamentalListeners.add(listener);
+        }
+
+        private void notifyFundamentalListeners(String symbol, FundamentalData data) {
+            for (BiConsumer<String, FundamentalData> listener : fundamentalListeners) {
+                try {
+                    listener.accept(symbol, data);
+                } catch (Exception e) {
+                    log.error("Error in fundamental listener", e);
+                }
+            }
         }
 
         public void addMarketDataListener(BiConsumer<String, MarketDataStreamDTO> listener) {
@@ -513,7 +529,38 @@ public class DxLinkClient {
         public void unsubscribe(String symbol) {
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id,
                     "remove",
-                    List.of(Map.of("symbol", symbol, "type", "Quote"), Map.of("symbol", symbol, "type", "Trade"))));
+                    List.of(
+                        Map.of("symbol", symbol, "type", "Quote"), 
+                        Map.of("symbol", symbol, "type", "Trade"),
+                        Map.of("symbol", symbol, "type", "Summary"),
+                        Map.of("symbol", symbol, "type", "Profile")
+                    )));
+        }
+
+        public void subscribeFundamentals(String symbol) {
+            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id,
+                    "add",
+                    List.of(
+                        Map.of("symbol", symbol, "type", "Summary"),
+                        Map.of("symbol", symbol, "type", "Profile")
+                    )));
+        }
+
+        public void subscribeFundamentalsBatch(List<String> symbols) {
+            List<Map<String, Object>> items = new java.util.ArrayList<>();
+            for (String s : symbols) {
+                items.add(Map.of("symbol", s, "type", "Summary"));
+                items.add(Map.of("symbol", s, "type", "Profile"));
+            }
+            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
+        }
+
+        public void subscribeExtendedVolumeBatch(List<String> symbols) {
+            List<Map<String, Object>> items = new java.util.ArrayList<>();
+            for (String s : symbols) {
+                items.add(Map.of("symbol", s, "type", "TradeETH"));
+            }
+            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
         }
 
         public void subscribeCandlesBatch(List<Map<String, Object>> items) {
@@ -543,6 +590,9 @@ public class DxLinkClient {
                     "acceptEventFields", Map.of(
                             "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"),
                             "Trade", List.of("eventSymbol", "price", "size", "time"),
+                            "TradeETH", List.of("eventSymbol", "dayVolume", "extendedTradingHours"),
+                            "Summary", List.of("eventSymbol", "dayVolume"),
+                            "Profile", List.of("eventSymbol", "shares", "freeFloat", "marketCap", "shortInterest"),
                             "Candle",
                             List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
         }
@@ -611,6 +661,41 @@ public class DxLinkClient {
                             }
                         }
                     }
+                    case "Summary" -> {
+                        String symbol = data.path(0).asText();
+                        FundamentalData fundData = FundamentalData.builder()
+                                .symbol(symbol)
+                                .dayVolume(data.path(1).asLong())
+                                .build();
+                        notifyFundamentalListeners(symbol, fundData);
+                    }
+                    case "TradeETH" -> {
+                        // data: [eventSymbol, dayVolume, extendedTradingHours]
+                        // extendedTradingHours: true = pre-market (before 9:30 ET)
+                        // We use dayVolume from extended session as pre or post based on current time.
+                        // Both pre and post are reported via TradeETH; we store the last received value.
+                        String symbol = data.path(0).asText();
+                        long extVol = data.path(1).asLong();
+                        boolean isPre = data.path(2).asBoolean();
+                        FundamentalData fundData = FundamentalData.builder().symbol(symbol).build();
+                        if (isPre) {
+                            fundData.setPreMarketVolume(extVol);
+                        } else {
+                            fundData.setPostMarketVolume(extVol);
+                        }
+                        notifyFundamentalListeners(symbol, fundData);
+                    }
+                    case "Profile" -> {
+                        String symbol = data.path(0).asText();
+                        FundamentalData fundData = FundamentalData.builder()
+                                .symbol(symbol)
+                                .sharesOutstanding(data.path(1).asLong())
+                                .floatShares(data.path(2).asLong())
+                                .marketCap(data.path(3).asDouble())
+                                .shortInterest(data.path(4).asDouble())
+                                .build();
+                        notifyFundamentalListeners(symbol, fundData);
+                    }
                     case "Candle" -> {
                         int fieldsPerCandle = 8;
                         for (int idx = 0; idx < data.size(); idx += fieldsPerCandle) {
@@ -619,28 +704,19 @@ public class DxLinkClient {
                                     ? candleSymbol.substring(0, candleSymbol.indexOf("{"))
                                     : candleSymbol;
 
-                            long timestamp = data.path(idx + 1).asLong();
-                            double open = data.path(idx + 2).asDouble();
-                            double high = data.path(idx + 3).asDouble();
-                            double low = data.path(idx + 4).asDouble();
-                            double close = data.path(idx + 5).asDouble();
-                            double volume = data.path(idx + 6).asDouble();
-                            int eventFlags = data.path(idx + 7).asInt(0);
-
-                            if (Double.isNaN(open))
-                                continue;
-
-                            boolean isTxPending = (eventFlags & 0x01) != 0;
-                            Candle candle = Candle.builder().symbol(baseSymbol)
-                                    .timestamp(Instant.ofEpochMilli(timestamp))
-                                    .open(open).high(high).low(low).close(close).volume(volume).build();
-
-                            snapshotCandleCount.incrementAndGet();
-                            boolean isSnapshotComplete = !isTxPending;
-
+                            Candle candle = Candle.builder()
+                                    .symbol(baseSymbol)
+                                    .timestamp(Instant.ofEpochMilli(data.path(idx + 1).asLong()))
+                                    .open(data.path(idx + 2).asDouble())
+                                    .high(data.path(idx + 3).asDouble())
+                                    .low(data.path(idx + 4).asDouble())
+                                    .close(data.path(idx + 5).asDouble())
+                                    .volume(data.path(idx + 6).asDouble())
+                                    .build();
+                            boolean isComplete = (data.path(idx + 7).asInt() & 0x01) == 0;
                             for (CandleCallback listener : candleListeners) {
                                 try {
-                                    listener.onCandle(baseSymbol, candle, isSnapshotComplete);
+                                    listener.onCandle(baseSymbol, candle, isComplete);
                                 } catch (Exception e) {
                                     log.error("Error in candle listener", e);
                                 }

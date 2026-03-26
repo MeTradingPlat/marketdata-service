@@ -12,6 +12,7 @@ import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
+import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
 import lombok.RequiredArgsConstructor;
@@ -97,5 +98,17 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
     public List<Map<String, Object>> getEarningsReports(String symbol, String startDate) {
         log.info("Gateway: Fetching earnings for symbol: {} from {}", symbol, startDate);
         return tastyTradeService.getEarningsReports(symbol, startDate);
+    }
+
+    @Override
+    public Map<String, FundamentalData> getFundamentalsBatch(List<String> symbols) {
+        log.info("Gateway: Batch fetching fundamentals for {} symbols", symbols.size());
+        return tastyTradeService.getFundamentalsBatch(symbols);
+    }
+
+    @Override
+    public List<Map<String, Object>> getMarketMetricsBatch(List<String> symbols) {
+        log.info("Gateway: Batch fetching market metrics for {} symbols", symbols.size());
+        return tastyTradeService.getMarketMetricsBatch(symbols);
     }
 }

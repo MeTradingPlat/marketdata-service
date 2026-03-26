@@ -3,6 +3,7 @@ package com.metradingplat.marketdata.domain.usecases;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -92,5 +93,55 @@ public class GestionarEarningsCUAdapter implements GestionarEarningsCUIntPort {
                 .eps(eps)
                 .daysUntilEarnings(daysUntil)
                 .build();
+    }
+
+    @Override
+    public Map<String, EarningsReport> obtenerEarningsBatch(List<String> symbols) {
+        log.info("Calculando earnings en lote para {} símbolos", symbols.size());
+        List<Map<String, Object>> metricsList = this.objExternalGateway.getMarketMetricsBatch(symbols);
+        LocalDate today = LocalDate.now();
+
+        Map<String, EarningsReport> result = new HashMap<>();
+
+        for (Map<String, Object> metrics : metricsList) {
+            String sym = (String) metrics.get("symbol");
+            if (sym == null) continue;
+
+            Double eps = null;
+            Object epsObj = metrics.get("earnings-per-share");
+            if (epsObj instanceof Number) eps = ((Number) epsObj).doubleValue();
+
+            long daysUntil = -1L;
+            Object earningsObj = metrics.get("earnings");
+            if (earningsObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> earningsMap = (Map<String, Object>) earningsObj;
+                Object dateObj = earningsMap.get("expected-report-date");
+                if (dateObj instanceof String) {
+                    try {
+                        LocalDate nextDate = LocalDate.parse((String) dateObj);
+                        daysUntil = ChronoUnit.DAYS.between(today, nextDate);
+                    } catch (Exception e) {
+                        log.warn("Could not parse expected-report-date for {}: {}", sym, dateObj);
+                    }
+                }
+            }
+
+            result.put(sym, EarningsReport.builder()
+                    .symbol(sym)
+                    .eps(eps)
+                    .daysUntilEarnings(daysUntil)
+                    .build());
+        }
+
+        // Asegurar que todos los símbolos solicitados tengan una entrada
+        for (String sym : symbols) {
+            result.putIfAbsent(sym, EarningsReport.builder()
+                    .symbol(sym)
+                    .daysUntilEarnings(-1L)
+                    .build());
+        }
+
+        return result;
     }
 }

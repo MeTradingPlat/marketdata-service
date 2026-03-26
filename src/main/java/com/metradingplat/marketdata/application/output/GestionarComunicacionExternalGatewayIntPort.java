@@ -7,6 +7,7 @@ import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.Candle;
+import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
 
@@ -34,4 +35,7 @@ public interface GestionarComunicacionExternalGatewayIntPort {
     Map<String, Object> getMarketDataByType(String symbol);
 
     List<Map<String, Object>> getEarningsReports(String symbol, String startDate);
+
+    Map<String, FundamentalData> getFundamentalsBatch(List<String> symbols);
+    List<Map<String, Object>> getMarketMetricsBatch(List<String> symbols);
 }

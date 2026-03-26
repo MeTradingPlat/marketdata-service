@@ -1,6 +1,8 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -14,9 +16,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 
 import org.springframework.stereotype.Service;
 
@@ -25,6 +29,7 @@ import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.Candle;
+import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
 
@@ -165,7 +170,7 @@ public class TastyTradeService {
                             allResponded ? 300 : 2000, TimeUnit.MILLISECONDS)
                     );
                     if (prev != null) prev.cancel(false);
-                } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                } catch (RejectedExecutionException ignored) {
                 }
             } else {
                 ScheduledFuture<?> pending = settleTask.get();
@@ -255,8 +260,103 @@ public class TastyTradeService {
         return tastyTradeClient.getMarketDataByType(symbol);
     }
 
+    public Map<String, FundamentalData> getFundamentalsBatch(List<String> symbols) {
+        log.info("Batch fundamentals: {} simbolos", symbols.size());
+        ensureConnected();
+
+        DxLinkClient.DxLinkChannel channel;
+        try {
+            channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log.error("No se pudo abrir canal DxLink para fundamentals: {}", e.getMessage());
+            return Map.of();
+        }
+
+        ConcurrentHashMap<String, FundamentalData> fundamentalsMap = new ConcurrentHashMap<>();
+        CompletableFuture<Void> allCompleted = new CompletableFuture<>();
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+
+        BiConsumer<String, FundamentalData> listener = (sym, data) -> {
+            fundamentalsMap.compute(sym, (k, v) -> {
+                if (v == null) return data;
+                if (data.getDayVolume() != null) v.setDayVolume(data.getDayVolume());
+                if (data.getMarketCap() != null) v.setMarketCap(data.getMarketCap());
+                if (data.getSharesOutstanding() != null) v.setSharesOutstanding(data.getSharesOutstanding());
+                if (data.getFloatShares() != null) v.setFloatShares(data.getFloatShares());
+                if (data.getShortInterest() != null) v.setShortInterest(data.getShortInterest());
+                if (data.getPreMarketVolume() != null) v.setPreMarketVolume(data.getPreMarketVolume());
+                if (data.getPostMarketVolume() != null) v.setPostMarketVolume(data.getPostMarketVolume());
+                return v;
+            });
+
+            // Consideramos "completo" para un simbolo si tenemos marketCap (de Profile) y dayVolume (de Summary)
+            // Esto es una heuristica para saber cuando parar el batch.
+            if (fundamentalsMap.size() >= symbols.size()) {
+                boolean allHaveProfile = fundamentalsMap.values().stream().allMatch(v -> v.getMarketCap() != null);
+                boolean allHaveSummary = fundamentalsMap.values().stream().allMatch(v -> v.getDayVolume() != null);
+                if (allHaveProfile && allHaveSummary) {
+                    allCompleted.complete(null);
+                }
+            }
+        };
+
+        channel.addFundamentalListener(listener);
+        channel.subscribeFundamentalsBatch(symbols);
+        channel.subscribeExtendedVolumeBatch(symbols);
+
+        try {
+            // Timeout mas corto para fundamentals ya que son snapshots
+            allCompleted.get(Math.min(10 + symbols.size() / 100, 30), TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            log.warn("Batch fundamentals partial results: {}/{}", fundamentalsMap.size(), symbols.size());
+        } catch (Exception e) {
+            log.error("Batch fundamentals error", e);
+        }
+
+        scheduler.shutdownNow();
+        channel.close();
+
+        // Mezclar con Market Metrics de la API REST para campos faltantes (shortRatio, earnings)
+        try {
+            List<Map<String, Object>> metrics = getMarketMetricsBatch(symbols);
+            for (Map<String, Object> metric : metrics) {
+                String sym = (String) metric.get("symbol");
+                if (sym == null) continue;
+
+                FundamentalData fund = fundamentalsMap.computeIfAbsent(sym, k -> FundamentalData.builder().symbol(k).build());
+
+                // Populating shortRatio
+                Object shortRatioValue = metric.get("short-ratio");
+                if (shortRatioValue instanceof Number) {
+                    fund.setShortRatio(((Number) shortRatioValue).doubleValue());
+                }
+
+                // Populating daysUntilEarnings
+                Object earningsDateValue = metric.get("earnings-report-date");
+                if (earningsDateValue instanceof String) {
+                    try {
+                        LocalDate earningsDate = LocalDate.parse((String) earningsDateValue);
+                        long days = ChronoUnit.DAYS.between(LocalDate.now(), earningsDate);
+                        fund.setDaysUntilEarnings((int) Math.max(0, days));
+                    } catch (Exception e) {
+                        log.debug("Failed to parse earnings date for {}: {}", sym, earningsDateValue);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to merge market metrics in fundamentals batch: {}", e.getMessage());
+        }
+
+        return fundamentalsMap;
+    }
+
     public List<Map<String, Object>> getEarningsReports(String symbol, String startDate) {
         return tastyTradeClient.getEarningsReports(symbol, startDate);
+    }
+
+    public List<Map<String, Object>> getMarketMetricsBatch(List<String> symbols) {
+        log.info("Batch market metrics: {} simbolos", symbols.size());
+        return tastyTradeClient.getMarketMetricsBatch(symbols);
     }
 
     public OrderResponse sendBracketOrder(BracketOrder order) {

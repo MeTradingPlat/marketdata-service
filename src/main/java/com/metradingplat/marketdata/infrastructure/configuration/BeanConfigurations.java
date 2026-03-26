@@ -4,12 +4,13 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.metradingplat.marketdata.application.output.GestionarComunicacionExternalGatewayIntPort;
-import com.metradingplat.marketdata.domain.usecases.GestionarEarningsCUAdapter;
+import com.metradingplat.marketdata.domain.usecases.GestionarFundamentalsCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarHistoricalDataCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarMercadosCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarOrdersCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarQuoteCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarRealTimeCUAdapter;
+import com.metradingplat.marketdata.domain.usecases.GestionarEarningsCUAdapter;
 
 @Configuration
 public class BeanConfigurations {
@@ -48,5 +49,11 @@ public class BeanConfigurations {
     public GestionarEarningsCUAdapter gestionarEarningsCUIntPort(
             GestionarComunicacionExternalGatewayIntPort objExternalGateway) {
         return new GestionarEarningsCUAdapter(objExternalGateway);
+    }
+
+    @Bean
+    public GestionarFundamentalsCUAdapter gestionarFundamentalsCUIntPort(
+            GestionarComunicacionExternalGatewayIntPort objExternalGateway) {
+        return new GestionarFundamentalsCUAdapter(objExternalGateway);
     }
 }
