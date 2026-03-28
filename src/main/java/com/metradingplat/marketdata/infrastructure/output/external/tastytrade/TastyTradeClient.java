@@ -478,8 +478,12 @@ public class TastyTradeClient {
         }
     }
 
-    @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getMarketMetricsBatch(List<String> symbols) {
+        return getMarketMetricsBatchInternal(symbols, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> getMarketMetricsBatchInternal(List<String> symbols, boolean isRetry) {
         if (accessToken == null)
             refreshAccessToken();
 
@@ -510,6 +514,11 @@ public class TastyTradeClient {
                 }
             } catch (Exception e) {
                 log.error("Failed to get market metrics batch chunk starting at index {}: {}", i, e.getMessage());
+                if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
+                    log.info("Token expired during market metrics batch, refreshing and retrying...");
+                    refreshAccessToken();
+                    return getMarketMetricsBatchInternal(symbols, true);
+                }
             }
         }
 
