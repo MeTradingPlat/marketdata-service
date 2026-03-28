@@ -663,9 +663,11 @@ public class DxLinkClient {
                     }
                     case "Summary" -> {
                         String symbol = data.path(0).asText();
+                        long dayVol = data.path(1).asLong();
+                        log.info("DxLink Summary event: symbol={}, dayVolume={}", symbol, dayVol);
                         FundamentalData fundData = FundamentalData.builder()
                                 .symbol(symbol)
-                                .dayVolume(data.path(1).asLong())
+                                .dayVolume(dayVol)
                                 .build();
                         notifyFundamentalListeners(symbol, fundData);
                     }
@@ -677,6 +679,7 @@ public class DxLinkClient {
                         String symbol = data.path(0).asText();
                         long extVol = data.path(1).asLong();
                         boolean isPre = data.path(2).asBoolean();
+                        log.info("DxLink TradeETH event: symbol={}, extVol={}, isPre={}", symbol, extVol, isPre);
                         FundamentalData fundData = FundamentalData.builder().symbol(symbol).build();
                         if (isPre) {
                             fundData.setPreMarketVolume(extVol);

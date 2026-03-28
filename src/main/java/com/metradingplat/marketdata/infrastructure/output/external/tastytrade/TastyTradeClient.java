@@ -509,6 +509,9 @@ public class TastyTradeClient {
                     Map<String, Object> data = (Map<String, Object>) response.get("data");
                     List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
                     if (items != null) {
+                        if (!items.isEmpty() && log.isInfoEnabled()) {
+                            log.info("Market metrics keys for {}: {}", items.get(0).get("symbol"), items.get(0).keySet());
+                        }
                         allItems.addAll(items);
                     }
                 }
