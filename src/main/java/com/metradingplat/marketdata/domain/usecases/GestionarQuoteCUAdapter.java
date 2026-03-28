@@ -36,13 +36,13 @@ public class GestionarQuoteCUAdapter implements GestionarQuoteCUIntPort {
                 .ask(toDouble(item.get("ask")))
                 .last(toDouble(item.get("last")))
                 .open(toDouble(item.get("open")))
-                .high(toDouble(item.get("dayHighPrice")))
-                .low(toDouble(item.get("dayLowPrice")))
+                .high(toDouble(item.get("day-high-price")))
+                .low(toDouble(item.get("day-low-price")))
                 .close(toDouble(item.get("close")))
-                .prevClose(toDouble(item.get("prevClose")))
+                .prevClose(toDouble(item.get("prev-close")))
                 .volume(toDouble(item.get("volume")))
-                .tradingHalted(item.get("tradingHalted") != null ? (Boolean) item.get("tradingHalted") : false)
-                .tradingHaltedReason(item.get("tradingHaltedReason") != null ? item.get("tradingHaltedReason").toString() : null)
+                .tradingHalted(item.get("is-trading-halted") != null ? (Boolean) item.get("is-trading-halted") : false)
+                .tradingHaltedReason(item.get("halt-reason") != null ? item.get("halt-reason").toString() : null)
                 .beta(toDouble(item.get("beta")))
                 .build();
     }

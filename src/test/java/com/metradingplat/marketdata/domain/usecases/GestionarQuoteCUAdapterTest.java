@@ -65,10 +65,10 @@ class GestionarQuoteCUAdapterTest {
                 "ask", 151.0,
                 "last", 150.75,
                 "open", 149.0,
-                "dayHighPrice", 152.0,
-                "dayLowPrice", 148.0,
+                "day-high-price", 152.0,
+                "day-low-price", 148.0,
                 "close", 150.0,
-                "prevClose", 149.5,
+                "prev-close", 149.5,
                 "volume", 1000000.0);
 
         Map<String, Object> data = Map.of("items", List.of(item));

@@ -289,14 +289,12 @@ public class TastyTradeService {
                 return v;
             });
 
-            // Consideramos "completo" para un simbolo si tenemos marketCap (de Profile) y dayVolume (de Summary)
-            // Esto es una heuristica para saber cuando parar el batch.
+            // Dejamos de esperar marketCap y dayVolume obligatoriamente de DxLink, ya que pueden tardar o no venir.
+            // El batch terminara por timeout o porque llegamos al numero de simbolos.
             if (fundamentalsMap.size() >= symbols.size()) {
-                boolean allHaveProfile = fundamentalsMap.values().stream().allMatch(v -> v.getMarketCap() != null);
-                boolean allHaveSummary = fundamentalsMap.values().stream().allMatch(v -> v.getDayVolume() != null);
-                if (allHaveProfile && allHaveSummary) {
-                    allCompleted.complete(null);
-                }
+                // Si ya tenemos todos los simbolos en el mapa, podemos considerar el batch "suficiente"
+                // aunque no tengan todos los campos, para no bloquear el hilo innecesariamente.
+                allCompleted.complete(null);
             }
         };
 
@@ -325,10 +323,28 @@ public class TastyTradeService {
 
                 FundamentalData fund = fundamentalsMap.computeIfAbsent(sym, k -> FundamentalData.builder().symbol(k).build());
 
-                // Populating shortRatio
+                // Populating Short Data
                 Object shortRatioValue = metric.get("short-ratio");
                 if (shortRatioValue instanceof Number) {
                     fund.setShortRatio(((Number) shortRatioValue).doubleValue());
+                }
+                Object shortInterestValue = metric.get("short-interest");
+                if (shortInterestValue instanceof Number) {
+                    fund.setShortInterest(((Number) shortInterestValue).doubleValue());
+                }
+
+                // Populating Financial Metrics
+                Object marketCapValue = metric.get("market-cap");
+                if (marketCapValue instanceof Number) {
+                    fund.setMarketCap(((Number) marketCapValue).doubleValue());
+                }
+                Object sharesOutstandingValue = metric.get("shares-outstanding");
+                if (sharesOutstandingValue instanceof Number) {
+                    fund.setSharesOutstanding(((Number) sharesOutstandingValue).longValue());
+                }
+                Object freeFloatValue = metric.get("free-float");
+                if (freeFloatValue instanceof Number) {
+                    fund.setFloatShares(((Number) freeFloatValue).longValue());
                 }
 
                 // Populating daysUntilEarnings
