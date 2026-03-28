@@ -279,13 +279,13 @@ public class TastyTradeService {
         BiConsumer<String, FundamentalData> listener = (sym, data) -> {
             fundamentalsMap.compute(sym, (k, v) -> {
                 if (v == null) return data;
-                if (data.getDayVolume() != null) v.setDayVolume(data.getDayVolume());
-                if (data.getMarketCap() != null) v.setMarketCap(data.getMarketCap());
-                if (data.getSharesOutstanding() != null) v.setSharesOutstanding(data.getSharesOutstanding());
-                if (data.getFloatShares() != null) v.setFloatShares(data.getFloatShares());
-                if (data.getShortInterest() != null) v.setShortInterest(data.getShortInterest());
-                if (data.getPreMarketVolume() != null) v.setPreMarketVolume(data.getPreMarketVolume());
-                if (data.getPostMarketVolume() != null) v.setPostMarketVolume(data.getPostMarketVolume());
+                if (data.getDayVolume() != null && data.getDayVolume() > 0) v.setDayVolume(data.getDayVolume());
+                if (data.getMarketCap() != null && data.getMarketCap() > 0) v.setMarketCap(data.getMarketCap());
+                if (data.getSharesOutstanding() != null && data.getSharesOutstanding() > 0) v.setSharesOutstanding(data.getSharesOutstanding());
+                if (data.getFloatShares() != null && data.getFloatShares() > 0) v.setFloatShares(data.getFloatShares());
+                if (data.getShortInterest() != null && data.getShortInterest() > 0) v.setShortInterest(data.getShortInterest());
+                if (data.getPreMarketVolume() != null && data.getPreMarketVolume() > 0) v.setPreMarketVolume(data.getPreMarketVolume());
+                if (data.getPostMarketVolume() != null && data.getPostMarketVolume() > 0) v.setPostMarketVolume(data.getPostMarketVolume());
                 return v;
             });
 

@@ -48,19 +48,33 @@ public class MetadataController {
         public List<MercadoDTORespuesta> getMarkets() {
                 return List.of(
                                 MercadoDTORespuesta.builder()
-                                                .id("us_equities")
-                                                .nombre(messageSource.getMessage("market.us_equities", null,
-                                                                "US Equities",
+                                                .id("nyse")
+                                                .nombre(messageSource.getMessage("market.nyse", null, "NYSE",
                                                                 LocaleContextHolder.getLocale()))
                                                 .build(),
                                 MercadoDTORespuesta.builder()
-                                                .id("crypto")
-                                                .nombre(messageSource.getMessage("market.crypto", null, "Crypto",
+                                                .id("nasdaq")
+                                                .nombre(messageSource.getMessage("market.nasdaq", null, "NASDAQ",
                                                                 LocaleContextHolder.getLocale()))
                                                 .build(),
                                 MercadoDTORespuesta.builder()
-                                                .id("forex")
-                                                .nombre(messageSource.getMessage("market.forex", null, "Forex",
+                                                .id("amex")
+                                                .nombre(messageSource.getMessage("market.amex", null, "AMEX",
+                                                                LocaleContextHolder.getLocale()))
+                                                .build(),
+                                MercadoDTORespuesta.builder()
+                                                .id("arca")
+                                                .nombre(messageSource.getMessage("market.arca", null, "ARCA",
+                                                                LocaleContextHolder.getLocale()))
+                                                .build(),
+                                MercadoDTORespuesta.builder()
+                                                .id("bats")
+                                                .nombre(messageSource.getMessage("market.bats", null, "BATS",
+                                                                LocaleContextHolder.getLocale()))
+                                                .build(),
+                                MercadoDTORespuesta.builder()
+                                                .id("otc")
+                                                .nombre(messageSource.getMessage("market.otc", null, "OTC",
                                                                 LocaleContextHolder.getLocale()))
                                                 .build());
         }
