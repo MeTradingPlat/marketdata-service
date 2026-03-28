@@ -361,12 +361,12 @@ public class DxLinkClient {
     }
 
     private void handleAuthState(JsonNode msg) {
-        if ("AUTHORIZED".equals(msg.path("state").asText())) {
+        String state = msg.path("state").asText();
+        if ("AUTHORIZED".equals(state)) {
             authenticated = true;
             log.info("Authenticated successfully");
         } else {
-            log.error("Authentication failed");
-            authenticated = false;
+            log.debug("Auth state received: {} (waiting for AUTHORIZED)", state);
         }
     }
 
