@@ -686,7 +686,7 @@
 	"variable": [
 		{
 			"key": "baseUrl",
-			"value": "https://metradingplat.com/api/marketdata"
+			"value": "https://metradingplat.net/api/marketdata"
 		}
 	]
 }

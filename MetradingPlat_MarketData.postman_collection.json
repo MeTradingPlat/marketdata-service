@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "c3a1b2d4-e5f6-7890-abcd-ef1234567891",
 		"name": "MeTradingPlat – MarketData Service (v2)",
-		"description": "Coleccion completa de pruebas para el MarketData Service via metradingplat.com",
+		"description": "Coleccion completa de pruebas para el MarketData Service via metradingplat.net",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
@@ -363,7 +363,7 @@
 	"variable": [
 		{
 			"key": "baseUrl",
-			"value": "https://metradingplat.com/api/marketdata"
+			"value": "https://metradingplat.net/api/marketdata"
 		},
 		{
 			"key": "orderId",
