@@ -591,8 +591,8 @@ public class DxLinkClient {
                             "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"),
                             "Trade", List.of("eventSymbol", "price", "size", "time"),
                             "TradeETH", List.of("eventSymbol", "dayVolume", "extendedTradingHours"),
-                            "Summary", List.of("eventSymbol", "dayVolume"),
-                            "Profile", List.of("eventSymbol", "shares", "freeFloat", "marketCap", "shortInterest"),
+                            "Summary", List.of("eventSymbol", "dayVolume", "eventFlags"),
+                            "Profile", List.of("eventSymbol", "shares", "freeFloat", "marketCap", "shortInterest", "eventFlags"),
                             "Candle",
                             List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
         }

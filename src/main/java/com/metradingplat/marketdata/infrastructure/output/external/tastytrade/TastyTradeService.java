@@ -261,7 +261,13 @@ public class TastyTradeService {
     }
 
     public Map<String, FundamentalData> getFundamentalsBatch(List<String> symbols) {
-        log.info("Batch fundamentals: {} simbolos", symbols.size());
+        // Normalizar simbolos a mayusculas y remover duplicados
+        List<String> normalizedSymbols = symbols.stream()
+                .map(String::toUpperCase)
+                .distinct()
+                .toList();
+        
+        log.info("Batch fundamentals: {} simbolos", normalizedSymbols.size());
         ensureConnected();
 
         DxLinkClient.DxLinkChannel channel;
@@ -273,11 +279,12 @@ public class TastyTradeService {
         }
 
         ConcurrentHashMap<String, FundamentalData> fundamentalsMap = new ConcurrentHashMap<>();
-        CompletableFuture<Void> allCompleted = new CompletableFuture<>();
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        CompletableFuture<Void> allEssentialDataReceived = new CompletableFuture<>();
+        Set<String> symbolsWithProfile = ConcurrentHashMap.newKeySet();
 
         BiConsumer<String, FundamentalData> listener = (sym, data) -> {
-            fundamentalsMap.compute(sym, (k, v) -> {
+            String upperSym = sym.toUpperCase();
+            fundamentalsMap.compute(upperSym, (k, v) -> {
                 if (v == null) return data;
                 if (data.getDayVolume() != null && data.getDayVolume() > 0) v.setDayVolume(data.getDayVolume());
                 if (data.getMarketCap() != null && data.getMarketCap() > 0) v.setMarketCap(data.getMarketCap());
@@ -289,42 +296,47 @@ public class TastyTradeService {
                 return v;
             });
 
-            // Dejamos de esperar marketCap y dayVolume obligatoriamente de DxLink, ya que pueden tardar o no venir.
-            // El batch terminara por timeout o porque llegamos al numero de simbolos.
-            if (fundamentalsMap.size() >= symbols.size()) {
-                // Si ya tenemos todos los simbolos en el mapa, podemos considerar el batch "suficiente"
-                // aunque no tengan todos los campos, para no bloquear el hilo innecesariamente.
-                allCompleted.complete(null);
+            // Si el evento traía MarketCap o SharesOutstanding, es un evento 'Profile' (fundamental completo)
+            if (data.getMarketCap() != null || data.getSharesOutstanding() != null) {
+                symbolsWithProfile.add(upperSym);
+                if (symbolsWithProfile.size() >= normalizedSymbols.size()) {
+                    allEssentialDataReceived.complete(null);
+                }
             }
         };
 
         channel.addFundamentalListener(listener);
-        channel.subscribeFundamentalsBatch(symbols);
-        channel.subscribeExtendedVolumeBatch(symbols);
+        channel.subscribeFundamentalsBatch(normalizedSymbols);
+        channel.subscribeExtendedVolumeBatch(normalizedSymbols);
 
         try {
-            // Timeout mas corto para fundamentals ya que son snapshots
-            allCompleted.get(Math.min(10 + symbols.size() / 100, 30), TimeUnit.SECONDS);
+            // Esperar hasta que todos tengan el Profile o hasta el timeout
+            int maxWait = Math.min(10 + normalizedSymbols.size() / 100, 30);
+            allEssentialDataReceived.get(maxWait, TimeUnit.SECONDS);
+            log.info("Batch fundamentals: Todos los snapshots recibidos en tiempo record.");
         } catch (TimeoutException e) {
-            log.warn("Batch fundamentals partial results: {}/{}", fundamentalsMap.size(), symbols.size());
+            log.warn("Batch fundamentals: Timeout alcanzado. Recibidos {}/{} profiles.", 
+                symbolsWithProfile.size(), normalizedSymbols.size());
         } catch (Exception e) {
             log.error("Batch fundamentals error", e);
         }
 
-        scheduler.shutdownNow();
         channel.close();
 
         // Mezclar con Market Metrics de la API REST para campos faltantes (shortRatio, earnings)
         try {
-            List<Map<String, Object>> metrics = getMarketMetricsBatch(symbols);
+            List<Map<String, Object>> metrics = getMarketMetricsBatch(normalizedSymbols);
             for (Map<String, Object> metric : metrics) {
                 String sym = (String) metric.get("symbol");
                 if (sym == null) continue;
+                sym = sym.toUpperCase(); // Normalizar
 
-                FundamentalData fund = fundamentalsMap.computeIfAbsent(sym, k -> FundamentalData.builder().symbol(k).build());
+                String finalSym = sym;
+                FundamentalData fund = fundamentalsMap.computeIfAbsent(finalSym, k -> FundamentalData.builder().symbol(k).build());
 
                 // Populating Short Data
                 Object shortRatioValue = metric.get("short-ratio");
+                if (shortRatioValue == null) shortRatioValue = metric.get("short-ratio-index");
                 if (shortRatioValue instanceof Number) {
                     fund.setShortRatio(((Number) shortRatioValue).doubleValue());
                 }

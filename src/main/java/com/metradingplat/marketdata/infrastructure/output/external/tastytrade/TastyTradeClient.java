@@ -499,7 +499,7 @@ public class TastyTradeClient {
                         .get()
                         .uri(uriBuilder -> uriBuilder
                                 .path("/market-metrics")
-                                .queryParam("symbols", symbolsStr)
+                                .queryParam("symbols", chunk)
                                 .build())
                         .header("Authorization", "Bearer " + accessToken)
                         .retrieve()

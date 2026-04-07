@@ -197,6 +197,74 @@
 			]
 		},
 		{
+			"name": "Fundamentals",
+			"item": [
+				{
+					"name": "GET Fundamentals AAPL",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/fundamentals/AAPL",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"fundamentals",
+								"AAPL"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "GET Fundamentals TSLA",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/fundamentals/TSLA",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"fundamentals",
+								"TSLA"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "POST Batch Fundamentals (AAPL, TSLA, MSFT)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "[\"AAPL\", \"TSLA\", \"MSFT\"]"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/fundamentals/batch",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"fundamentals",
+								"batch"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
 			"name": "Metadata",
 			"item": [
 				{
