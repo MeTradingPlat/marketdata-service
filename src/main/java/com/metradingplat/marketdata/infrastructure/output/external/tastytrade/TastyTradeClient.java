@@ -13,6 +13,12 @@ import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
+import com.metradingplat.marketdata.domain.models.Candle;
+
+import org.springframework.scheduling.annotation.Scheduled;
+import java.util.concurrent.TimeUnit;
+import java.time.Instant;
+import java.time.ZoneOffset;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -69,6 +75,21 @@ public class TastyTradeClient {
 
         log.info("Access token obtained, expires in {} seconds", response.get("expires_in"));
         return this.accessToken;
+    }
+
+    /**
+     * Tarea programada para refrescar el token proactivamente cada 14 minutos.
+     * Evita la degradacion de sesion (15 min) y los errores 401.
+     */
+    @Scheduled(fixedRate = 14, timeUnit = TimeUnit.MINUTES)
+    public void proactiveTokenRefresh() {
+        try {
+            log.info("Proactive token refresh execution");
+            refreshAccessToken();
+            refreshApiQuoteToken();
+        } catch (Exception e) {
+            log.error("Failed proactive token refresh", e);
+        }
     }
 
     /**
@@ -526,5 +547,123 @@ public class TastyTradeClient {
         }
 
         return allItems;
+    }
+
+    /**
+     * Obtiene velas historicas utilizando el API REST (Punto 2 del Manual).
+     * Endpoint: /market-data/candles
+     */
+    @SuppressWarnings("unchecked")
+    public List<Candle> getHistoricalCandles(String symbol, String dxSymbol, Instant from, Instant to) {
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/market-data/candles")
+                            .queryParam("symbol", dxSymbol)
+                            .queryParam("from-date", from.atOffset(ZoneOffset.UTC).toString())
+                            .queryParam("to-date", to.atOffset(ZoneOffset.UTC).toString())
+                            .build())
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response == null || !response.containsKey("data")) {
+                return List.of();
+            }
+
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+            if (items == null) return List.of();
+
+            List<Candle> candles = new ArrayList<>();
+            for (Map<String, Object> item : items) {
+                Candle c = new Candle();
+                c.setSymbol(symbol);
+                // The API returns timestamp as long (milliseconds)
+                Number time = (Number) item.get("time");
+                if (time != null) {
+                    // El API de TastyTrade devuelve el tiempo en microsegundos o milisegundos.
+                    // Generalmente el dxFeed usa ms para bars y micros para ticks.
+                    // Si el numero es muy grande, puede ser micros.
+                    long t = time.longValue();
+                    c.setTimestamp(Instant.ofEpochMilli(t > 100000000000000L ? t / 1000 : t));
+                }
+                c.setOpen(((Number) item.get("open")).doubleValue());
+                c.setHigh(((Number) item.get("high")).doubleValue());
+                c.setLow(((Number) item.get("low")).doubleValue());
+                c.setClose(((Number) item.get("close")).doubleValue());
+                c.setVolume(((Number) item.get("volume")).doubleValue());
+                candles.add(c);
+            }
+            return candles;
+        } catch (Exception e) {
+            log.error("Failed to get historical candles for {}: {}", symbol, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Obtiene el calendario de sesiones de mercado (Punto 2 del Refinamiento).
+     * Endpoint: /market-time/sessions
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getMarketTimeSessions(String fromDate, String toDate) {
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/market-time/sessions")
+                            .queryParam("from-date", fromDate)
+                            .queryParam("to-date", toDate)
+                            .build())
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response == null || !response.containsKey("data")) {
+                return List.of();
+            }
+
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+            return items != null ? items : List.of();
+        } catch (Exception e) {
+            log.error("Failed to get market time sessions: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Obtiene el calendario de dias festivos (Punto 2 del Refinamiento).
+     * Endpoint: /market-time/equities/holidays
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getMarketTimeHolidays() {
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri("/market-time/equities/holidays")
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response == null || !response.containsKey("data")) {
+                return List.of();
+            }
+
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+            return items != null ? items : List.of();
+        } catch (Exception e) {
+            log.error("Failed to get market time holidays: {}", e.getMessage());
+            return List.of();
+        }
     }
 }

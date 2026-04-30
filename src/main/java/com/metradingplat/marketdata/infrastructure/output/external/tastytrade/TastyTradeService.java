@@ -1,26 +1,9 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 
 import org.springframework.stereotype.Service;
 
@@ -54,11 +37,13 @@ public class TastyTradeService {
      * Cada item ≈ 65 bytes → 100 × 65 + 50 (wrapper) ≈ 6550 bytes < 8192.
      * Las suscripciones son aditivas al mismo canal (spec dxLink AsyncAPI 2.4.0).
      */
-    private static final int CHUNK_SIZE = 100;
 
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
+
+    // Trackers para la heuristica de Halt Status (Punto 5)
+    private final ConcurrentHashMap<String, Long> lastMarketDataUpdates = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
@@ -85,7 +70,32 @@ public class TastyTradeService {
         dxLinkClient.setOnMarketData((symbol, data) -> {
             log.debug("Market data received for {}: bid={}, ask={}, last={}",
                     symbol, data.getBid(), data.getAsk(), data.getLastPrice());
+
+            // Heuristica de Spread Anómalo (Punto 5): Evaluar spreads de error como señal adicional
+            if (data.getBid() != null && data.getAsk() != null) {
+                double spread = data.getAsk() - data.getBid();
+                if (data.getBid() == 0 || data.getAsk() == 0 || spread < 0) {
+                    log.warn("HALT HEURISTIC: Probable Suspensión para {} debido a spread anómalo (Bid={}, Ask={})", symbol, data.getBid(), data.getAsk());
+                }
+            }
+
+            lastMarketDataUpdates.put(symbol, System.currentTimeMillis());
             kafkaProducer.publishMarketData(data);
+        });
+
+        // Evento determinista de Suspensión mediante canal Message (Punto 5, Refinamiento)
+        dxLinkClient.setOnMessage((symbol, messageData) -> {
+            // data array: [eventSymbol, eventTime, messageType, message]
+            if (messageData.isArray() && messageData.size() >= 4) {
+                String type = messageData.get(2).asText("");
+                String text = messageData.get(3).asText("");
+                log.warn("ADMIN MESSAGE [{}]: {} - {}", symbol, type, text);
+                
+                if (text.toLowerCase().contains("halt") || text.toLowerCase().contains("suspend")) {
+                    log.error("DETERMINISTIC HALT DETECTED para {}: {}", symbol, text);
+                    // Aqui se podria disparar un evento de Kafka especifico para detener la operativa
+                }
+            }
         });
 
         dxLinkClient.setOnCandle((symbol, candle, isComplete) -> {
@@ -122,127 +132,42 @@ public class TastyTradeService {
     }
 
     /**
-     * Obtiene candles históricos de múltiples símbolos usando UN canal DxLink.
-     * Las FEED_SUBSCRIPTION son aditivas (spec dxLink): enviamos N mensajes de 200 símbolos
-     * al mismo canal y se acumulan. CHANNEL_CANCEL cierra el canal al final para evitar
-     * canales fantasma que causan INVALID_MESSAGE en batches posteriores.
+     * Obtiene candles históricos de múltiples símbolos (Punto 2).
+     * Reemplaza WebSocket por llamadas REST para asegurar la alineación temporal.
      */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Batch fetch: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
-
-        ensureConnected();
+        log.info("Batch fetch REST: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
 
         Instant now = Instant.now();
-        long fromTime = now.minus(timeframe.getDuration().multipliedBy(bars + 10)).toEpochMilli();
-        String tf = timeframe.getLabel();
-
-        DxLinkClient.DxLinkChannel channel;
-        try {
-            channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.error("No se pudo abrir canal DxLink para batch: {}", e.getMessage());
-            return Map.of();
+        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy(bars));
+        
+        // Validación de contexto temporal (Punto 6)
+        long daysBetween = java.time.Duration.between(fromTime, now).toDays();
+        if (daysBetween > 270) {
+            throw new IllegalArgumentException("El intervalo histórico excede los 9 meses soportados por el API.");
         }
 
-        Set<String> symbolSet = new HashSet<>(symbols);
-        ConcurrentHashMap<String, List<Candle>> candlesPorSimbolo = new ConcurrentHashMap<>();
-        Set<String> simbolosConDatos = ConcurrentHashMap.newKeySet();
-        CompletableFuture<Void> allCompleted = new CompletableFuture<>();
-        AtomicReference<ScheduledFuture<?>> settleTask = new AtomicReference<>();
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-
-        DxLinkClient.CandleCallback listener = (sym, candle, isComplete) -> {
-            if (!symbolSet.contains(sym)) return;
-
-            candle.setTimeframe(timeframe);
-            candlesPorSimbolo.computeIfAbsent(sym, k -> new ArrayList<>());
-            synchronized (candlesPorSimbolo.get(sym)) {
-                candlesPorSimbolo.get(sym).add(candle);
+        String tf = timeframe.getLabel(); // m, d, w, etc.
+        Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
+        
+        symbols.parallelStream().forEach(symbol -> {
+            // Construir símbolo dxFeed m{tho=true,priceType=last}:SYMBOL
+            String dxSymbol = tf + "{tho=true,priceType=last}:" + symbol;
+            List<Candle> candles = tastyTradeClient.getHistoricalCandles(symbol, dxSymbol, fromTime, now);
+            
+            if (candles != null && !candles.isEmpty()) {
+                candles.forEach(c -> c.setTimeframe(timeframe));
+                resultado.put(symbol, candles);
             }
-            simbolosConDatos.add(sym);
+        });
 
-            if (isComplete) {
-                if (scheduler.isShutdown()) return;
-                boolean allResponded = simbolosConDatos.size() >= symbols.size();
-                try {
-                    ScheduledFuture<?> prev = settleTask.getAndSet(
-                        scheduler.schedule(() -> allCompleted.complete(null),
-                            allResponded ? 300 : 2000, TimeUnit.MILLISECONDS)
-                    );
-                    if (prev != null) prev.cancel(false);
-                } catch (RejectedExecutionException ignored) {
-                }
-            } else {
-                ScheduledFuture<?> pending = settleTask.get();
-                if (pending != null) pending.cancel(false);
-            }
-        };
-
-        channel.addCandleListener(listener);
-
-        // Enviar N × FEED_SUBSCRIPTION aditivas al mismo canal (200 símbolos c/u, ≤64KB).
-        List<List<String>> chunks = partition(symbols, CHUNK_SIZE);
-        log.info("Canal {}: suscribiendo {} simbolos en {} mensajes FEED_SUBSCRIPTION",
-                channel.getId(), symbols.size(), chunks.size());
-        for (List<String> chunk : chunks) {
-            List<Map<String, Object>> items = chunk.stream()
-                    .map(s -> Map.<String, Object>of(
-                            "symbol", s + "{=" + tf + "}",
-                            "type", "Candle",
-                            "fromTime", fromTime))
-                    .toList();
-            channel.subscribeCandlesBatch(items);
-        }
-
-        // Timeout dinámico: scanners (≤100 syms) = 8s, batches grandes escalan.
-        // Con mercado cerrado muchos batches no reciben nada; 8s evita bloquear
-        // la cola 30s por cada scanner sin datos.
-        int maxWaitSeconds = symbols.size() <= CHUNK_SIZE
-                ? 8
-                : Math.min(30 + symbols.size() / 200, 120);
-        try {
-            allCompleted.get(maxWaitSeconds, TimeUnit.SECONDS);
-            log.debug("Batch completo en canal {} con {}/{} simbolos",
-                    channel.getId(), simbolosConDatos.size(), symbols.size());
-        } catch (TimeoutException e) {
-            int received = simbolosConDatos.size();
-            if (received == 0) {
-                log.warn("Batch timeout {}s ZERO data en canal {}. {} simbolos enviados.",
-                        maxWaitSeconds, channel.getId(), symbols.size());
-            } else {
-                log.info("Batch timeout {}s en canal {}. Recibidos {}/{} — resultados parciales.",
-                        maxWaitSeconds, channel.getId(), received, symbols.size());
-            }
-        } catch (Exception e) {
-            log.error("Batch interrupted", e);
-        }
-
-        scheduler.shutdownNow();
-        channel.removeCandleListener(listener);
-        channel.close();
-
-        Map<String, List<Candle>> resultado = new HashMap<>();
-        for (Map.Entry<String, List<Candle>> entry : candlesPorSimbolo.entrySet()) {
-            List<Candle> sorted;
-            synchronized (entry.getValue()) {
-                sorted = entry.getValue().stream()
-                        .sorted(Comparator.comparing(Candle::getTimestamp))
-                        .toList();
-            }
-            resultado.put(entry.getKey(), sorted);
-        }
-
-        log.info("Batch completo: {}/{} simbolos con datos", resultado.size(), symbols.size());
+        log.info("Batch REST completo: {}/{} simbolos con datos", resultado.size(), symbols.size());
         return resultado;
     }
 
-    /** Divide una lista en sublistas de tamaño maximo {@code size}. */
-    private static <T> List<List<T>> partition(List<T> list, int size) {
-        List<List<T>> result = new ArrayList<>();
-        for (int i = 0; i < list.size(); i += size) {
-            result.add(list.subList(i, Math.min(i + size, list.size())));
-        }
-        return result;
+    public void shutdown() {
+        log.info("Shutting down TastyTradeService...");
+        dxLinkClient.disconnect();
     }
 
     /**
@@ -260,7 +185,12 @@ public class TastyTradeService {
         return tastyTradeClient.getMarketDataByType(symbol);
     }
 
+    /**
+     * Obtiene métricas fundamentales apoyándose únicamente en los datos
+     * soportados por /market-metrics.
+     */
     public Map<String, FundamentalData> getFundamentalsBatch(List<String> symbols) {
+<<<<<<< HEAD
         // Normalizar simbolos a mayusculas y remover duplicados
         List<String> normalizedSymbols = symbols.stream()
                 .map(String::toUpperCase)
@@ -324,6 +254,12 @@ public class TastyTradeService {
         channel.close();
 
         // Mezclar con Market Metrics de la API REST para campos faltantes (shortRatio, earnings)
+=======
+        log.info("Batch fundamentals (market metrics): {} simbolos", symbols.size());
+        
+        ConcurrentHashMap<String, FundamentalData> fundamentalsMap = new ConcurrentHashMap<>();
+        
+>>>>>>> c8c3a39 (feat: restore fundamental fields for dxLink and sync with database entity)
         try {
             List<Map<String, Object>> metrics = getMarketMetricsBatch(normalizedSymbols);
             for (Map<String, Object> metric : metrics) {
@@ -331,6 +267,7 @@ public class TastyTradeService {
                 if (sym == null) continue;
                 sym = sym.toUpperCase(); // Normalizar
 
+<<<<<<< HEAD
                 String finalSym = sym;
                 FundamentalData fund = fundamentalsMap.computeIfAbsent(finalSym, k -> FundamentalData.builder().symbol(k).build());
 
@@ -370,9 +307,20 @@ public class TastyTradeService {
                         log.debug("Failed to parse earnings date for {}: {}", sym, earningsDateValue);
                     }
                 }
+=======
+                FundamentalData fund = FundamentalData.builder().symbol(sym).build();
+                
+                if (metric.get("implied-volatility-index") != null) fund.setImpliedVolatilityIndex(((Number) metric.get("implied-volatility-index")).doubleValue());
+                if (metric.get("implied-volatility-index-rank") != null) fund.setImpliedVolatilityRank(((Number) metric.get("implied-volatility-index-rank")).doubleValue());
+                if (metric.get("implied-volatility-percentile") != null) fund.setImpliedVolatilityPercentile(((Number) metric.get("implied-volatility-percentile")).doubleValue());
+                if (metric.get("liquidity-value") != null) fund.setLiquidity(((Number) metric.get("liquidity-value")).doubleValue());
+                if (metric.get("liquidity-rating") != null) fund.setLiquidityRating(((Number) metric.get("liquidity-rating")).intValue());
+
+                fundamentalsMap.put(sym, fund);
+>>>>>>> c8c3a39 (feat: restore fundamental fields for dxLink and sync with database entity)
             }
         } catch (Exception e) {
-            log.error("Failed to merge market metrics in fundamentals batch: {}", e.getMessage());
+            log.error("Failed to fetch market metrics: {}", e.getMessage());
         }
 
         return fundamentalsMap;

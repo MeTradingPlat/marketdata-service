@@ -16,7 +16,7 @@ public class TastyTradeConfig {
     private String clientSecret;
     private String refreshToken;
     private String accountNumber;
-    private String apiBaseUrl = "https://api.tastytrade.com";
+    private String apiBaseUrl = "https://api.tastyworks.com";
     private String dxlinkUrl = "wss://tasty.dxfeed.com/realtime";
 
     @Bean
@@ -25,6 +25,7 @@ public class TastyTradeConfig {
                 .baseUrl(apiBaseUrl)
                 .defaultHeader("Content-Type", "application/json")
                 .defaultHeader("Accept", "application/json")
+                .defaultHeader("User-Agent", "QuantMaestro/2.0.0")
                 .build();
     }
 }

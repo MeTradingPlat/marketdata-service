@@ -78,6 +78,7 @@ public class DxLinkClient {
     private ScheduledFuture<?> healthCheckTask;
     private final List<CandleCallback> candleListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<BiConsumer<String, FundamentalData>> fundamentalListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<BiConsumer<String, JsonNode>> messageListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private Supplier<String> tokenRefresher;
 
     public interface CandleCallback {
@@ -94,6 +95,11 @@ public class DxLinkClient {
     public void setOnCandle(CandleCallback callback) {
         if (defaultChannel != null)
             defaultChannel.addCandleListener(callback);
+    }
+
+    public void setOnMessage(BiConsumer<String, JsonNode> callback) {
+        if (defaultChannel != null)
+            defaultChannel.addMessageListener(callback);
     }
 
     public void setTokenRefresher(Supplier<String> tokenRefresher) {
@@ -481,6 +487,10 @@ public class DxLinkClient {
             }
         }
 
+        public void addMessageListener(BiConsumer<String, JsonNode> listener) {
+            DxLinkClient.this.messageListeners.add(listener);
+        }
+
         public void addMarketDataListener(BiConsumer<String, MarketDataStreamDTO> listener) {
             marketDataListeners.add(listener);
         }
@@ -523,7 +533,11 @@ public class DxLinkClient {
         public void subscribe(String symbol) {
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id,
                     "add",
-                    List.of(Map.of("symbol", symbol, "type", "Quote"), Map.of("symbol", symbol, "type", "Trade"))));
+                    List.of(
+                        Map.of("symbol", symbol, "type", "Quote"), 
+                        Map.of("symbol", symbol, "type", "Trade"),
+                        Map.of("symbol", symbol, "type", "Message")
+                    )));
         }
 
         public void unsubscribe(String symbol) {
@@ -533,7 +547,8 @@ public class DxLinkClient {
                         Map.of("symbol", symbol, "type", "Quote"), 
                         Map.of("symbol", symbol, "type", "Trade"),
                         Map.of("symbol", symbol, "type", "Summary"),
-                        Map.of("symbol", symbol, "type", "Profile")
+                        Map.of("symbol", symbol, "type", "Profile"),
+                        Map.of("symbol", symbol, "type", "Message")
                     )));
         }
 
@@ -591,8 +606,14 @@ public class DxLinkClient {
                             "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"),
                             "Trade", List.of("eventSymbol", "price", "size", "time"),
                             "TradeETH", List.of("eventSymbol", "dayVolume", "extendedTradingHours"),
+<<<<<<< HEAD
                             "Summary", List.of("eventSymbol", "dayVolume", "eventFlags"),
                             "Profile", List.of("eventSymbol", "shares", "freeFloat", "marketCap", "shortInterest", "eventFlags"),
+=======
+                            "Summary", List.of("eventSymbol", "dayVolume"),
+                            "Profile", List.of("eventSymbol", "shares", "freeFloat"),
+                            "Message", List.of("eventSymbol", "eventTime", "messageType", "message"),
+>>>>>>> c8c3a39 (feat: restore fundamental fields for dxLink and sync with database entity)
                             "Candle",
                             List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
         }
@@ -694,8 +715,6 @@ public class DxLinkClient {
                                 .symbol(symbol)
                                 .sharesOutstanding(data.path(1).asLong())
                                 .floatShares(data.path(2).asLong())
-                                .marketCap(data.path(3).asDouble())
-                                .shortInterest(data.path(4).asDouble())
                                 .build();
                         notifyFundamentalListeners(symbol, fundData);
                     }
@@ -723,6 +742,18 @@ public class DxLinkClient {
                                 } catch (Exception e) {
                                     log.error("Error in candle listener", e);
                                 }
+                            }
+                        }
+                    }
+                    case "Message" -> {
+                        // data: [eventSymbol, eventTime, messageType, message]
+                        String symbol = data.path(0).asText();
+                        log.info("DxLink Message event received for symbol={}", symbol);
+                        for (BiConsumer<String, JsonNode> listener : messageListeners) {
+                            try {
+                                listener.accept(symbol, data);
+                            } catch (Exception e) {
+                                log.error("Error in message listener", e);
                             }
                         }
                     }
