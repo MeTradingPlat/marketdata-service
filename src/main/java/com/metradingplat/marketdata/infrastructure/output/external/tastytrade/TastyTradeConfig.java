@@ -18,6 +18,22 @@ public class TastyTradeConfig {
     private String accountNumber;
     private String apiBaseUrl = "https://api.tastyworks.com";
     private String dxlinkUrl = "wss://tasty.dxfeed.com/realtime";
+    
+    private DxlinkConfig dxlink = new DxlinkConfig();
+    private TokenRefreshConfig tokenRefresh = new TokenRefreshConfig();
+
+    @Data
+    public static class DxlinkConfig {
+        private int keepaliveInterval = 30000;
+        private int connectionTimeout = 10000;
+        private String acceptDataFormat = "COMPACT";
+    }
+
+    @Data
+    public static class TokenRefreshConfig {
+        private boolean enabled = true;
+        private int fixedRateHours = 23;
+    }
 
     @Bean
     public RestClient tastyTradeRestClient() {
