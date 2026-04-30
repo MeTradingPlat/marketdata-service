@@ -21,7 +21,6 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
-@Service
 @RequiredArgsConstructor
 public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIntPort {
 
