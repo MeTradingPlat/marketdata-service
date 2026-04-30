@@ -19,6 +19,15 @@ class MarketdataServiceApplicationTests {
 	@MockitoBean
 	private com.metradingplat.marketdata.infrastructure.output.external.tastytrade.DxLinkClient dxLinkClient;
 
+	@MockitoBean
+	private org.springframework.web.client.RestClient restClient;
+
+	@MockitoBean
+	private com.metradingplat.marketdata.application.output.GestionarChangeNotificationsProducerIntPort kafkaProducer;
+
+	@MockitoBean
+	private com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeConfig tastyTradeConfig;
+
 	@Test
 	void contextLoads() {
 	}
