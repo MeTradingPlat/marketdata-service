@@ -513,7 +513,6 @@ public class TastyTradeClient {
 
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             List<String> chunk = symbols.subList(i, Math.min(i + chunkSize, symbols.size()));
-            String symbolsStr = String.join(",", chunk);
             
             try {
                 Map<String, Object> response = tastyTradeRestClient

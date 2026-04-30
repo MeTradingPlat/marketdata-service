@@ -1,9 +1,16 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.BiConsumer;
 
 import org.springframework.stereotype.Service;
 
@@ -190,7 +197,6 @@ public class TastyTradeService {
      * soportados por /market-metrics.
      */
     public Map<String, FundamentalData> getFundamentalsBatch(List<String> symbols) {
-<<<<<<< HEAD
         // Normalizar simbolos a mayusculas y remover duplicados
         List<String> normalizedSymbols = symbols.stream()
                 .map(String::toUpperCase)
@@ -253,74 +259,48 @@ public class TastyTradeService {
 
         channel.close();
 
-        // Mezclar con Market Metrics de la API REST para campos faltantes (shortRatio, earnings)
-=======
-        log.info("Batch fundamentals (market metrics): {} simbolos", symbols.size());
-        
-        ConcurrentHashMap<String, FundamentalData> fundamentalsMap = new ConcurrentHashMap<>();
-        
->>>>>>> c8c3a39 (feat: restore fundamental fields for dxLink and sync with database entity)
+        // Mezclar con Market Metrics de la API REST para campos faltantes (shortRatio, earnings, IV)
         try {
-            List<Map<String, Object>> metrics = getMarketMetricsBatch(normalizedSymbols);
-            for (Map<String, Object> metric : metrics) {
+            List<Map<String, Object>> metricsList = getMarketMetricsBatch(normalizedSymbols);
+            for (Map<String, Object> metric : metricsList) {
                 String sym = (String) metric.get("symbol");
                 if (sym == null) continue;
-                sym = sym.toUpperCase(); // Normalizar
-
-<<<<<<< HEAD
-                String finalSym = sym;
+                String finalSym = sym.toUpperCase();
+                
                 FundamentalData fund = fundamentalsMap.computeIfAbsent(finalSym, k -> FundamentalData.builder().symbol(k).build());
 
-                // Populating Short Data
-                Object shortRatioValue = metric.get("short-ratio");
-                if (shortRatioValue == null) shortRatioValue = metric.get("short-ratio-index");
-                if (shortRatioValue instanceof Number) {
-                    fund.setShortRatio(((Number) shortRatioValue).doubleValue());
-                }
-                Object shortInterestValue = metric.get("short-interest");
-                if (shortInterestValue instanceof Number) {
-                    fund.setShortInterest(((Number) shortInterestValue).doubleValue());
-                }
-
-                // Populating Financial Metrics
-                Object marketCapValue = metric.get("market-cap");
-                if (marketCapValue instanceof Number) {
-                    fund.setMarketCap(((Number) marketCapValue).doubleValue());
-                }
-                Object sharesOutstandingValue = metric.get("shares-outstanding");
-                if (sharesOutstandingValue instanceof Number) {
-                    fund.setSharesOutstanding(((Number) sharesOutstandingValue).longValue());
-                }
-                Object freeFloatValue = metric.get("free-float");
-                if (freeFloatValue instanceof Number) {
-                    fund.setFloatShares(((Number) freeFloatValue).longValue());
-                }
-
-                // Populating daysUntilEarnings
-                Object earningsDateValue = metric.get("earnings-report-date");
-                if (earningsDateValue instanceof String) {
-                    try {
-                        LocalDate earningsDate = LocalDate.parse((String) earningsDateValue);
-                        long days = ChronoUnit.DAYS.between(LocalDate.now(), earningsDate);
-                        fund.setDaysUntilEarnings((int) Math.max(0, days));
-                    } catch (Exception e) {
-                        log.debug("Failed to parse earnings date for {}: {}", sym, earningsDateValue);
-                    }
-                }
-=======
-                FundamentalData fund = FundamentalData.builder().symbol(sym).build();
-                
+                // IV & Rank
                 if (metric.get("implied-volatility-index") != null) fund.setImpliedVolatilityIndex(((Number) metric.get("implied-volatility-index")).doubleValue());
                 if (metric.get("implied-volatility-index-rank") != null) fund.setImpliedVolatilityRank(((Number) metric.get("implied-volatility-index-rank")).doubleValue());
                 if (metric.get("implied-volatility-percentile") != null) fund.setImpliedVolatilityPercentile(((Number) metric.get("implied-volatility-percentile")).doubleValue());
                 if (metric.get("liquidity-value") != null) fund.setLiquidity(((Number) metric.get("liquidity-value")).doubleValue());
                 if (metric.get("liquidity-rating") != null) fund.setLiquidityRating(((Number) metric.get("liquidity-rating")).intValue());
 
-                fundamentalsMap.put(sym, fund);
->>>>>>> c8c3a39 (feat: restore fundamental fields for dxLink and sync with database entity)
+                // Short Data (Fallback if DxLink missed it)
+                Object shortRatioValue = metric.get("short-ratio");
+                if (shortRatioValue == null) shortRatioValue = metric.get("short-ratio-index");
+                if (shortRatioValue instanceof Number) fund.setShortRatio(((Number) shortRatioValue).doubleValue());
+                
+                if (fund.getShortInterest() == null || fund.getShortInterest() == 0) {
+                    Object si = metric.get("short-interest");
+                    if (si instanceof Number) fund.setShortInterest(((Number) si).doubleValue());
+                }
+
+                // Earnings
+                Object earningsDateValue = metric.get("earnings-report-date");
+                if (earningsDateValue instanceof String) {
+                    try {
+                        LocalDate earningsDate = LocalDate.parse((String) earningsDateValue);
+                        fund.setNextEarningsDate(earningsDate);
+                        long days = ChronoUnit.DAYS.between(LocalDate.now(), earningsDate);
+                        fund.setDaysUntilEarnings((int) Math.max(0, days));
+                    } catch (Exception e) {
+                        log.debug("Failed to parse earnings date for {}: {}", finalSym, earningsDateValue);
+                    }
+                }
             }
         } catch (Exception e) {
-            log.error("Failed to fetch market metrics: {}", e.getMessage());
+            log.error("Failed to fetch market metrics for enrichment: {}", e.getMessage());
         }
 
         return fundamentalsMap;

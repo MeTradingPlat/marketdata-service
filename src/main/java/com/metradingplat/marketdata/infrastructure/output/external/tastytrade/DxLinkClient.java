@@ -606,14 +606,9 @@ public class DxLinkClient {
                             "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"),
                             "Trade", List.of("eventSymbol", "price", "size", "time"),
                             "TradeETH", List.of("eventSymbol", "dayVolume", "extendedTradingHours"),
-<<<<<<< HEAD
                             "Summary", List.of("eventSymbol", "dayVolume", "eventFlags"),
                             "Profile", List.of("eventSymbol", "shares", "freeFloat", "marketCap", "shortInterest", "eventFlags"),
-=======
-                            "Summary", List.of("eventSymbol", "dayVolume"),
-                            "Profile", List.of("eventSymbol", "shares", "freeFloat"),
                             "Message", List.of("eventSymbol", "eventTime", "messageType", "message"),
->>>>>>> c8c3a39 (feat: restore fundamental fields for dxLink and sync with database entity)
                             "Candle",
                             List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
         }
