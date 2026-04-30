@@ -47,9 +47,11 @@ public class MarketTimeService {
             List<Map<String, Object>> sessions = tastyTradeClient.getMarketTimeSessions(fromDate, toDate);
             sessionsCache.clear();
             
-            for (Map<String, Object> session : sessions) {
-                if (session.containsKey("date")) {
-                    sessionsCache.put((String) session.get("date"), session);
+            if (sessions != null) {
+                for (Map<String, Object> session : sessions) {
+                    if (session.containsKey("date")) {
+                        sessionsCache.put((String) session.get("date"), session);
+                    }
                 }
             }
             
