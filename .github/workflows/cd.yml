@@ -39,7 +39,6 @@ jobs:
       - name: Run Application Container
         run: |
           docker run -d \
-            -p 127.0.0.1:8082:8082 \
             --name "marketdata-service" \
             --network "metradingplat-network" \
             --restart "unless-stopped" \
