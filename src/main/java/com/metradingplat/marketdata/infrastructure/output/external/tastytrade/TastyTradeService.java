@@ -155,8 +155,12 @@ public class TastyTradeService {
         
         // Validación de contexto temporal (Punto 6)
         long daysBetween = java.time.Duration.between(fromTime, now).toDays();
-        if (daysBetween > 270) {
-            throw new IllegalArgumentException("El intervalo histórico excede los 9 meses soportados por el API.");
+        boolean isIntraday = timeframe.getLabel().contains("m") || timeframe.getLabel().contains("h");
+        
+        if (isIntraday && daysBetween > 270) {
+            throw new IllegalArgumentException("El intervalo histórico para datos intradía excede los 9 meses soportados por el API.");
+        } else if (daysBetween > 3650) { // Límite de 10 años para diario
+            throw new IllegalArgumentException("El intervalo histórico excede el máximo de 10 años soportado.");
         }
 
         String tf = timeframe.getLabel(); // m, d, w, etc.

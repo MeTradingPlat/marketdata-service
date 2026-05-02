@@ -564,7 +564,7 @@ public class TastyTradeClient {
                             .queryParam("symbol", dxSymbol)
                             .queryParam("from-date", from.atOffset(ZoneOffset.UTC).toString())
                             .queryParam("to-date", to.atOffset(ZoneOffset.UTC).toString())
-                            .build())
+                            .build(java.util.Collections.emptyMap()))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .body(Map.class);
