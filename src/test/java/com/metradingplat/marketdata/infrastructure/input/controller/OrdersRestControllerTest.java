@@ -74,7 +74,7 @@ class OrdersRestControllerTest {
                 }
                 """;
 
-        mockMvc.perform(post("/api/marketdata/orders")
+        mockMvc.perform(post("/marketdata/orders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isOk())
@@ -90,7 +90,7 @@ class OrdersRestControllerTest {
                 }
                 """;
 
-        mockMvc.perform(post("/api/marketdata/orders")
+        mockMvc.perform(post("/marketdata/orders")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isBadRequest());

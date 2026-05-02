@@ -22,7 +22,7 @@ import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMeta
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/marketdata")
+@RequestMapping("/marketdata")
 @RequiredArgsConstructor
 public class MetadataController {
 

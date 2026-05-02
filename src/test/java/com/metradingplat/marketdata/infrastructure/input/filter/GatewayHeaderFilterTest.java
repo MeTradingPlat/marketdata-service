@@ -12,7 +12,7 @@ class GatewayHeaderFilterTest {
     @Test
     void shouldNotFilter_actuatorPath() {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setRequestURI("/api/marketdata/api/actuator/health");
+        request.setRequestURI("/marketdata/actuator/health");
 
         assertTrue(filter.shouldNotFilter(request));
     }
@@ -20,7 +20,7 @@ class GatewayHeaderFilterTest {
     @Test
     void shouldNotFilter_healthPath() {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setRequestURI("/api/marketdata/api/health/dxlink/status");
+        request.setRequestURI("/marketdata/health/dxlink/status");
 
         assertTrue(filter.shouldNotFilter(request));
     }
@@ -28,7 +28,7 @@ class GatewayHeaderFilterTest {
     @Test
     void shouldFilter_regularApiPath() {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setRequestURI("/api/marketdata/historical/AAPL");
+        request.setRequestURI("/marketdata/historical/AAPL");
 
         assertFalse(filter.shouldNotFilter(request));
     }
@@ -36,7 +36,7 @@ class GatewayHeaderFilterTest {
     @Test
     void doFilterInternal_allowsRequestWithGatewayHeader() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setRequestURI("/api/marketdata/quote/AAPL");
+        request.setRequestURI("/marketdata/quote/AAPL");
         request.addHeader("X-Gateway-Passed", "true");
 
         org.springframework.mock.web.MockHttpServletResponse response = new org.springframework.mock.web.MockHttpServletResponse();
@@ -51,7 +51,7 @@ class GatewayHeaderFilterTest {
     @Test
     void doFilterInternal_blocksRequestWithoutGatewayHeader() throws Exception {
         MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setRequestURI("/api/marketdata/quote/AAPL");
+        request.setRequestURI("/marketdata/quote/AAPL");
 
         org.springframework.mock.web.MockHttpServletResponse response = new org.springframework.mock.web.MockHttpServletResponse();
         org.springframework.mock.web.MockFilterChain chain = new org.springframework.mock.web.MockFilterChain();

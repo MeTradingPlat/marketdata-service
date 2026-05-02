@@ -19,7 +19,7 @@ import com.metradingplat.marketdata.infrastructure.input.controllerGestionarFund
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/marketdata/fundamentals")
+@RequestMapping("/marketdata/fundamentals")
 @RequiredArgsConstructor
 public class FundamentalsRestController {
 

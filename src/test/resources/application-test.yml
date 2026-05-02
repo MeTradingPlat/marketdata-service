@@ -58,6 +58,6 @@ tastytrade:
 management:
   endpoints:
     web:
-      base-path: /api/marketdata/api/actuator
+      base-path: /marketdata/actuator
       exposure:
         include: health,info

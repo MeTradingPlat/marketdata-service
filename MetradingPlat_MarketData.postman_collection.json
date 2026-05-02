@@ -1,8 +1,8 @@
 {
 	"info": {
 		"_postman_id": "c3a1b2d4-e5f6-7890-abcd-ef1234567891",
-		"name": "MeTradingPlat – MarketData Service (v2)",
-		"description": "Coleccion completa de pruebas para el MarketData Service via metradingplat.net",
+		"name": "MeTradingPlat – MarketData Service (Unified)",
+		"description": "Coleccion unificada bajo metradingplat.net sin gateway redundante.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"auth": {
@@ -50,9 +50,9 @@
 							}
 						},
 						"url": {
-							"raw": "{{gatewayUrl}}/api/auth/login",
-							"host": ["{{gatewayUrl}}"],
-							"path": ["api", "auth", "login"]
+							"raw": "{{baseUrl}}/auth/login",
+							"host": ["{{baseUrl}}"],
+							"path": ["auth", "login"]
 						}
 					},
 					"response": []
@@ -88,9 +88,9 @@
 							}
 						},
 						"url": {
-							"raw": "{{gatewayUrl}}/api/auth/login",
-							"host": ["{{gatewayUrl}}"],
-							"path": ["api", "auth", "login"]
+							"raw": "{{baseUrl}}/auth/login",
+							"host": ["{{baseUrl}}"],
+							"path": ["auth", "login"]
 						}
 					},
 					"response": []
@@ -106,9 +106,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/historical/AAPL?timeframe=M5&bars=100",
+							"raw": "{{baseUrl}}/marketdata/historical/AAPL?timeframe=M5&bars=100",
 							"host": ["{{baseUrl}}"],
-							"path": ["historical", "AAPL"],
+							"path": ["marketdata", "historical", "AAPL"],
 							"query": [
 								{ "key": "timeframe", "value": "M5" },
 								{ "key": "bars", "value": "100" }
@@ -123,9 +123,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/historical/SPY?timeframe=H1&bars=50",
+							"raw": "{{baseUrl}}/marketdata/historical/SPY?timeframe=H1&bars=50",
 							"host": ["{{baseUrl}}"],
-							"path": ["historical", "SPY"],
+							"path": ["marketdata", "historical", "SPY"],
 							"query": [
 								{ "key": "timeframe", "value": "H1" },
 								{ "key": "bars", "value": "50" }
@@ -140,9 +140,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/historical/AAPL/current?timeframe=M5",
+							"raw": "{{baseUrl}}/marketdata/historical/AAPL/current?timeframe=M5",
 							"host": ["{{baseUrl}}"],
-							"path": ["historical", "AAPL", "current"],
+							"path": ["marketdata", "historical", "AAPL", "current"],
 							"query": [
 								{ "key": "timeframe", "value": "M5" }
 							]
@@ -156,9 +156,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/historical/TSLA/last?timeframe=M15",
+							"raw": "{{baseUrl}}/marketdata/historical/TSLA/last?timeframe=M15",
 							"host": ["{{baseUrl}}"],
-							"path": ["historical", "TSLA", "last"],
+							"path": ["marketdata", "historical", "TSLA", "last"],
 							"query": [
 								{ "key": "timeframe", "value": "M15" }
 							]
@@ -178,9 +178,9 @@
 							"raw": "{\n  \"symbols\": [\"AAPL\", \"MSFT\", \"GOOGL\"],\n  \"timeframe\": \"M5\",\n  \"bars\": 100\n}"
 						},
 						"url": {
-							"raw": "{{baseUrl}}/historical/batch",
+							"raw": "{{baseUrl}}/marketdata/historical/batch",
 							"host": ["{{baseUrl}}"],
-							"path": ["historical", "batch"]
+							"path": ["marketdata", "historical", "batch"]
 						}
 					},
 					"response": []
@@ -197,9 +197,9 @@
 							"raw": "{\n  \"symbols\": [\"AAPL\", \"TSLA\", \"NVDA\"],\n  \"timeframe\": \"M1\"\n}"
 						},
 						"url": {
-							"raw": "{{baseUrl}}/historical/batch/last",
+							"raw": "{{baseUrl}}/marketdata/historical/batch/last",
 							"host": ["{{baseUrl}}"],
-							"path": ["historical", "batch", "last"]
+							"path": ["marketdata", "historical", "batch", "last"]
 						}
 					},
 					"response": []
@@ -216,9 +216,9 @@
 							"raw": "{\n  \"symbols\": [\"SPY\", \"QQQ\"],\n  \"timeframe\": \"M5\"\n}"
 						},
 						"url": {
-							"raw": "{{baseUrl}}/historical/batch/current",
+							"raw": "{{baseUrl}}/marketdata/historical/batch/current",
 							"host": ["{{baseUrl}}"],
-							"path": ["historical", "batch", "current"]
+							"path": ["marketdata", "historical", "batch", "current"]
 						}
 					},
 					"response": []
@@ -234,9 +234,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/quote/AAPL",
+							"raw": "{{baseUrl}}/marketdata/quote/AAPL",
 							"host": ["{{baseUrl}}"],
-							"path": ["quote", "AAPL"]
+							"path": ["marketdata", "quote", "AAPL"]
 						}
 					},
 					"response": []
@@ -247,9 +247,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/quote/SPY",
+							"raw": "{{baseUrl}}/marketdata/quote/SPY",
 							"host": ["{{baseUrl}}"],
-							"path": ["quote", "SPY"]
+							"path": ["marketdata", "quote", "SPY"]
 						}
 					},
 					"response": []
@@ -265,9 +265,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/earnings/AAPL",
+							"raw": "{{baseUrl}}/marketdata/earnings/AAPL",
 							"host": ["{{baseUrl}}"],
-							"path": ["earnings", "AAPL"]
+							"path": ["marketdata", "earnings", "AAPL"]
 						}
 					},
 					"response": []
@@ -278,9 +278,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/earnings/TSLA",
+							"raw": "{{baseUrl}}/marketdata/earnings/TSLA",
 							"host": ["{{baseUrl}}"],
-							"path": ["earnings", "TSLA"]
+							"path": ["marketdata", "earnings", "TSLA"]
 						}
 					},
 					"response": []
@@ -297,9 +297,9 @@
 							"raw": "[\"AAPL\", \"TSLA\", \"MSFT\"]"
 						},
 						"url": {
-							"raw": "{{baseUrl}}/earnings/batch",
+							"raw": "{{baseUrl}}/marketdata/earnings/batch",
 							"host": ["{{baseUrl}}"],
-							"path": ["earnings", "batch"]
+							"path": ["marketdata", "earnings", "batch"]
 						}
 					},
 					"response": []
@@ -315,9 +315,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/fundamentals/AAPL",
+							"raw": "{{baseUrl}}/marketdata/fundamentals/AAPL",
 							"host": ["{{baseUrl}}"],
-							"path": ["fundamentals", "AAPL"]
+							"path": ["marketdata", "fundamentals", "AAPL"]
 						}
 					},
 					"response": []
@@ -328,9 +328,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/fundamentals/TSLA",
+							"raw": "{{baseUrl}}/marketdata/fundamentals/TSLA",
 							"host": ["{{baseUrl}}"],
-							"path": ["fundamentals", "TSLA"]
+							"path": ["marketdata", "fundamentals", "TSLA"]
 						}
 					},
 					"response": []
@@ -347,9 +347,9 @@
 							"raw": "[\"AAPL\", \"TSLA\", \"MSFT\"]"
 						},
 						"url": {
-							"raw": "{{baseUrl}}/fundamentals/batch",
+							"raw": "{{baseUrl}}/marketdata/fundamentals/batch",
 							"host": ["{{baseUrl}}"],
-							"path": ["fundamentals", "batch"]
+							"path": ["marketdata", "fundamentals", "batch"]
 						}
 					},
 					"response": []
@@ -365,9 +365,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/options/chain/AAPL",
+							"raw": "{{baseUrl}}/marketdata/options/chain/AAPL",
 							"host": ["{{baseUrl}}"],
-							"path": ["options", "chain", "AAPL"]
+							"path": ["marketdata", "options", "chain", "AAPL"]
 						}
 					},
 					"response": []
@@ -385,9 +385,9 @@
 							{ "key": "Accept-Language", "value": "es" }
 						],
 						"url": {
-							"raw": "{{baseUrl}}/timeframes",
+							"raw": "{{baseUrl}}/marketdata/timeframes",
 							"host": ["{{baseUrl}}"],
-							"path": ["timeframes"]
+							"path": ["marketdata", "timeframes"]
 						}
 					},
 					"response": []
@@ -400,9 +400,9 @@
 							{ "key": "Accept-Language", "value": "en" }
 						],
 						"url": {
-							"raw": "{{baseUrl}}/timeframes",
+							"raw": "{{baseUrl}}/marketdata/timeframes",
 							"host": ["{{baseUrl}}"],
-							"path": ["timeframes"]
+							"path": ["marketdata", "timeframes"]
 						}
 					},
 					"response": []
@@ -415,9 +415,9 @@
 							{ "key": "Accept-Language", "value": "es" }
 						],
 						"url": {
-							"raw": "{{baseUrl}}/markets",
+							"raw": "{{baseUrl}}/marketdata/markets",
 							"host": ["{{baseUrl}}"],
-							"path": ["markets"]
+							"path": ["marketdata", "markets"]
 						}
 					},
 					"response": []
@@ -428,9 +428,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/symbols?markets=NYSE,NASDAQ",
+							"raw": "{{baseUrl}}/marketdata/symbols?markets=NYSE,NASDAQ",
 							"host": ["{{baseUrl}}"],
-							"path": ["symbols"],
+							"path": ["marketdata", "symbols"],
 							"query": [
 								{ "key": "markets", "value": "NYSE,NASDAQ" }
 							]
@@ -444,9 +444,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/symbols?markets=ETF",
+							"raw": "{{baseUrl}}/marketdata/symbols?markets=ETF",
 							"host": ["{{baseUrl}}"],
-							"path": ["symbols"],
+							"path": ["marketdata", "symbols"],
 							"query": [
 								{ "key": "markets", "value": "ETF" }
 							]
@@ -471,9 +471,9 @@
 							"raw": "{\n  \"symbol\": \"AAPL\",\n  \"action\": \"BUY_TO_OPEN\",\n  \"quantity\": 1,\n  \"entryPrice\": 235.00,\n  \"stopLossPrice\": 230.00,\n  \"takeProfitPrice\": 245.00,\n  \"timeInForce\": \"GTC\"\n}"
 						},
 						"url": {
-							"raw": "{{baseUrl}}/orders",
+							"raw": "{{baseUrl}}/marketdata/orders",
 							"host": ["{{baseUrl}}"],
-							"path": ["orders"]
+							"path": ["marketdata", "orders"]
 						}
 					},
 					"response": []
@@ -484,9 +484,9 @@
 						"method": "DELETE",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/orders/{{orderId}}",
+							"raw": "{{baseUrl}}/marketdata/orders/{{orderId}}",
 							"host": ["{{baseUrl}}"],
-							"path": ["orders", "{{orderId}}"]
+							"path": ["marketdata", "orders", "{{orderId}}"]
 						}
 					},
 					"response": []
@@ -502,9 +502,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/api/health/dxlink/status",
+							"raw": "{{baseUrl}}/marketdata/health/dxlink/status",
 							"host": ["{{baseUrl}}"],
-							"path": ["api", "health", "dxlink", "status"]
+							"path": ["marketdata", "health", "dxlink", "status"]
 						}
 					},
 					"response": []
@@ -515,9 +515,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/api/actuator/health",
+							"raw": "{{baseUrl}}/marketdata/actuator/health",
 							"host": ["{{baseUrl}}"],
-							"path": ["api", "actuator", "health"]
+							"path": ["marketdata", "actuator", "health"]
 						}
 					},
 					"response": []
@@ -528,9 +528,9 @@
 						"method": "POST",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/api/health/dxlink/reconnect",
+							"raw": "{{baseUrl}}/marketdata/health/dxlink/reconnect",
 							"host": ["{{baseUrl}}"],
-							"path": ["api", "health", "dxlink", "reconnect"]
+							"path": ["marketdata", "health", "dxlink", "reconnect"]
 						}
 					},
 					"response": []
@@ -540,14 +540,9 @@
 	],
 	"variable": [
 		{
-			"key": "gatewayUrl",
-			"value": "https://metradingplat.net",
-			"description": "URL base del servidor (para auth)"
-		},
-		{
 			"key": "baseUrl",
-			"value": "https://metradingplat.net/api/marketdata",
-			"description": "URL base del MarketData Service via Gateway"
+			"value": "https://api.metradingplat.net",
+			"description": "URL base unificada del ecosistema MeTradingPlat"
 		},
 		{
 			"key": "jwt_token",

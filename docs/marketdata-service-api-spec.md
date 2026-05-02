@@ -12,34 +12,34 @@ El servicio opera bajo un modelo **Híbrido de Alta Performance**:
 ## 🛠 Endpoints REST Disponibles
 
 ### 1. Market Data & Opciones
-- **`GET /api/marketdata/quote/{symbol}`**: Precio real-time (Bid/Ask/Last).
-- **`GET /api/marketdata/options/chain/{symbol}`**: Cadena de opciones jerárquica con Griegas en vivo.
-- **`GET /api/marketdata/fundamentals/{symbol}`**: Datos fundamentales con predicción de Earnings.
-- **`POST /api/marketdata/fundamentals/batch`**: Hidratación masiva de fundamentales (Body: `["AAPL", "MSFT", ...]`).
+- **`GET /marketdata/quote/{symbol}`**: Precio real-time (Bid/Ask/Last).
+- **`GET /marketdata/options/chain/{symbol}`**: Cadena de opciones jerárquica con Griegas en vivo.
+- **`GET /marketdata/fundamentals/{symbol}`**: Datos fundamentales con predicción de Earnings.
+- **`POST /marketdata/fundamentals/batch`**: Hidratación masiva de fundamentales (Body: `["AAPL", "MSFT", ...]`).
 
 ### 2. Datos Históricos (Candles)
-- **`GET /api/marketdata/historical/{symbol}?timeframe={T}&bars={N}`**: Histórico de velas.
-- **`GET /api/marketdata/historical/{symbol}/last?timeframe={T}`**: Última vela cerrada.
-- **`GET /api/marketdata/historical/{symbol}/current?timeframe={T}`**: Vela en formación (Live).
-- **`POST /api/marketdata/historical/batch`**: Descarga masiva de velas para múltiples símbolos.
+- **`GET /marketdata/historical/{symbol}?timeframe={T}&bars={N}`**: Histórico de velas.
+- **`GET /marketdata/historical/{symbol}/last?timeframe={T}`**: Última vela cerrada.
+- **`GET /marketdata/historical/{symbol}/current?timeframe={T}`**: Vela en formación (Live).
+- **`POST /marketdata/historical/batch`**: Descarga masiva de velas para múltiples símbolos.
 
 ### 3. Eventos Corporativos (Earnings)
-- **`GET /api/marketdata/earnings/{symbol}`**: Historial de reportes y fechas proyectadas.
-- **`POST /api/marketdata/earnings/batch`**: Consulta masiva de eventos próximos.
+- **`GET /marketdata/earnings/{symbol}`**: Historial de reportes y fechas proyectadas.
+- **`POST /marketdata/earnings/batch`**: Consulta masiva de eventos próximos.
 
 ### 4. Metadatos & Diccionario
-- **`GET /api/marketdata/timeframes`**: Lista de timeframes soportados (M1, M5, H1, D1, etc.).
-- **`GET /api/marketdata/markets`**: Lista de mercados activos (NYSE, NASDAQ, ETF, etc.).
-- **`GET /api/marketdata/symbols?markets=NYSE`**: Diccionario de símbolos por mercado.
+- **`GET /marketdata/timeframes`**: Lista de timeframes soportados (M1, M5, H1, D1, etc.).
+- **`GET /marketdata/markets`**: Lista de mercados activos (NYSE, NASDAQ, ETF, etc.).
+- **`GET /marketdata/symbols?markets=NYSE`**: Diccionario de símbolos por mercado.
 
 ### 5. Gestión de Órdenes (Trading)
-- **`POST /api/marketdata/orders`**: Colocación de Bracket Orders (Entry, TP, SL).
-- **`DELETE /api/marketdata/orders/{orderId}`**: Cancelación de orden activa.
+- **`POST /marketdata/orders`**: Colocación de Bracket Orders (Entry, TP, SL).
+- **`DELETE /marketdata/orders/{orderId}`**: Cancelación de orden activa.
 
 ### 6. Monitoreo & Salud (DevOps)
-- **`GET /api/marketdata/api/health/dxlink/status`**: Estado de la sesión dxLink.
-- **`POST /api/marketdata/api/health/dxlink/reconnect`**: Forzar reconexión del WebSocket.
-- **`GET /api/marketdata/api/actuator/health`**: Estado general del microservicio.
+- **`GET /marketdata/health/dxlink/status`**: Estado de la sesión dxLink.
+- **`POST /marketdata/health/dxlink/reconnect`**: Forzar reconexión del WebSocket.
+- **`GET /marketdata/actuator/health`**: Estado general del microservicio.
 
 ---
 

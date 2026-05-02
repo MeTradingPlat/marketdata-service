@@ -69,7 +69,7 @@ class HistoricalDataRestControllerTest {
         when(useCase.getCandles(eq("AAPL"), eq(EnumTimeframe.M5), isNull(), isNull()))
                 .thenReturn(List.of(candle));
 
-        mockMvc.perform(get("/api/marketdata/historical/AAPL").param("timeframe", "M5"))
+        mockMvc.perform(get("/marketdata/historical/AAPL").param("timeframe", "M5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].symbol").value("AAPL"))
                 .andExpect(jsonPath("$[0].close").value(151.0));
@@ -80,7 +80,7 @@ class HistoricalDataRestControllerTest {
         when(useCase.getCandles(eq("AAPL"), eq(EnumTimeframe.M5), isNull(), isNull()))
                 .thenReturn(List.of());
 
-        mockMvc.perform(get("/api/marketdata/historical/AAPL").param("timeframe", "M5"))
+        mockMvc.perform(get("/marketdata/historical/AAPL").param("timeframe", "M5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isEmpty());
     }
@@ -89,7 +89,7 @@ class HistoricalDataRestControllerTest {
     void getLastCandle_returnsNoContent_whenNull() throws Exception {
         when(useCase.getLastCandle("AAPL", EnumTimeframe.M5)).thenReturn(null);
 
-        mockMvc.perform(get("/api/marketdata/historical/AAPL/last").param("timeframe", "M5"))
+        mockMvc.perform(get("/marketdata/historical/AAPL/last").param("timeframe", "M5"))
                 .andExpect(status().isNoContent());
     }
 
@@ -98,7 +98,7 @@ class HistoricalDataRestControllerTest {
         Candle candle = buildCandle("AAPL");
         when(useCase.getCurrentCandle("AAPL", EnumTimeframe.M5)).thenReturn(candle);
 
-        mockMvc.perform(get("/api/marketdata/historical/AAPL/current").param("timeframe", "M5"))
+        mockMvc.perform(get("/marketdata/historical/AAPL/current").param("timeframe", "M5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.symbol").value("AAPL"));
     }
@@ -109,7 +109,7 @@ class HistoricalDataRestControllerTest {
         when(useCase.getCandlesBatch(anyList(), eq(EnumTimeframe.M5), eq(100)))
                 .thenReturn(Map.of("AAPL", List.of(candle)));
 
-        mockMvc.perform(post("/api/marketdata/historical/batch")
+        mockMvc.perform(post("/marketdata/historical/batch")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"symbols\":[\"AAPL\"],\"timeframe\":\"M5\",\"bars\":100}"))
                 .andExpect(status().isOk())
@@ -122,7 +122,7 @@ class HistoricalDataRestControllerTest {
         when(useCase.getLastCandleBatch(anyList(), eq(EnumTimeframe.M5)))
                 .thenReturn(Map.of("AAPL", candle));
 
-        mockMvc.perform(post("/api/marketdata/historical/batch/last")
+        mockMvc.perform(post("/marketdata/historical/batch/last")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"symbols\":[\"AAPL\"],\"timeframe\":\"M5\"}"))
                 .andExpect(status().isOk())

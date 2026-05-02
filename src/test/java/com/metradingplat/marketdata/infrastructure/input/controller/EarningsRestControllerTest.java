@@ -60,7 +60,7 @@ class EarningsRestControllerTest {
 
         when(useCase.obtenerProximoEarnings("AAPL")).thenReturn(report);
 
-        mockMvc.perform(get("/api/marketdata/earnings/AAPL"))
+        mockMvc.perform(get("/marketdata/earnings/AAPL"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.symbol").value("AAPL"))
                 .andExpect(jsonPath("$.eps").value(2.5))

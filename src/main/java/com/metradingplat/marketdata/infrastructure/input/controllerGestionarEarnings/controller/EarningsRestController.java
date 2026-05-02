@@ -22,7 +22,7 @@ import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/marketdata")
+@RequestMapping("/marketdata")
 @RequiredArgsConstructor
 @Validated
 public class EarningsRestController {

@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/marketdata/options")
+@RequestMapping("/marketdata/options")
 @RequiredArgsConstructor
 public class OptionsRestController {
 

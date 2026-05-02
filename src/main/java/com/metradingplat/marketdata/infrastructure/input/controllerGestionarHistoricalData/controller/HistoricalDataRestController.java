@@ -33,7 +33,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @RestController
-@RequestMapping("/api/marketdata/historical")
+@RequestMapping("/marketdata/historical")
 @RequiredArgsConstructor
 @Validated
 @Slf4j

@@ -21,7 +21,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/marketdata/orders")
+@RequestMapping("/marketdata/orders")
 @RequiredArgsConstructor
 @Validated
 public class OrdersRestController {

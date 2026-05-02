@@ -63,7 +63,7 @@ class QuoteRestControllerTest {
 
         when(useCase.obtenerQuote("AAPL")).thenReturn(quote);
 
-        mockMvc.perform(get("/api/marketdata/quote/AAPL"))
+        mockMvc.perform(get("/marketdata/quote/AAPL"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.symbol").value("AAPL"))
                 .andExpect(jsonPath("$.bid").value(150.0))
