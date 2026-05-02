@@ -585,11 +585,20 @@ public class DxLinkClient {
 
         public void subscribeCandlesHistory(List<Map<String, Object>> items, long fromTime) {
             snapshotCandleCount.set(0);
+            
+            // Según la documentación, fromTime debe ir DENTRO de cada item
+            List<Map<String, Object>> itemsWithTime = items.stream()
+                .map(item -> {
+                    Map<String, Object> newItem = new java.util.HashMap<>(item);
+                    newItem.put("fromTime", fromTime);
+                    return newItem;
+                })
+                .toList();
+
             sendMessage(Map.of(
                 "type", "FEED_SUBSCRIPTION", 
                 "channel", id, 
-                "fromTime", fromTime,
-                "add", items
+                "add", itemsWithTime
             ));
         }
 
