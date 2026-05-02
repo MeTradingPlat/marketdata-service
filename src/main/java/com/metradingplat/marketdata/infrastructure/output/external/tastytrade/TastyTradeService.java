@@ -398,11 +398,13 @@ public class TastyTradeService {
                 log.warn("Timeout esperando snapshots de fundamentals. Recibidos {}/{}", symbolsWithProfile.size(), normalizedSymbols.size());
             }
 
-            // Calculamos el Market Cap dinámico: Shares * Last Price
+            // Calculamos el Market Cap dinámico: Shares * Last Price (con fallback a prevClose)
             fundamentalsMap.forEach((sym, fund) -> {
                 Double lastPrice = lastPrices.get(sym);
-                if (lastPrice != null && fund.getSharesOutstanding() != null) {
-                    fund.setMarketCap(fund.getSharesOutstanding() * lastPrice);
+                Double basePrice = (lastPrice != null) ? lastPrice : fund.getPrevClose();
+                
+                if (basePrice != null && fund.getSharesOutstanding() != null) {
+                    fund.setMarketCap(fund.getSharesOutstanding() * basePrice);
                 }
             });
 
