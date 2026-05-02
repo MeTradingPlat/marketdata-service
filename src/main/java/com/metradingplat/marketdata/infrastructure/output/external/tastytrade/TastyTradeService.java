@@ -245,73 +245,87 @@ public class TastyTradeService {
     }
 
     /**
-     * Obtiene métricas fundamentales apoyándose únicamente en los datos
-     * soportados por /market-metrics.
+     * Obtiene métricas fundamentales apoyándose en dxLink (Profile/Summary) 
+     * y enriqueciendo con Market Metrics de la API REST.
      */
     public Map<String, FundamentalData> getFundamentalsBatch(List<String> symbols) {
-        // Normalizar simbolos a mayusculas y remover duplicados
         List<String> normalizedSymbols = symbols.stream()
                 .map(String::toUpperCase)
                 .distinct()
                 .toList();
         
-        log.info("Batch fundamentals: {} simbolos", normalizedSymbols.size());
+        log.info("Batch fundamentals: {} simbolos via dxLink", normalizedSymbols.size());
         ensureConnected();
 
-        DxLinkClient.DxLinkChannel channel;
-        try {
-            channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            log.error("No se pudo abrir canal DxLink para fundamentals: {}", e.getMessage());
-            return Map.of();
-        }
-
         ConcurrentHashMap<String, FundamentalData> fundamentalsMap = new ConcurrentHashMap<>();
-        CompletableFuture<Void> allEssentialDataReceived = new CompletableFuture<>();
+        ConcurrentHashMap<String, Double> lastPrices = new ConcurrentHashMap<>();
+        CompletableFuture<Void> snapshotReceived = new CompletableFuture<>();
         Set<String> symbolsWithProfile = ConcurrentHashMap.newKeySet();
 
-        BiConsumer<String, FundamentalData> listener = (sym, data) -> {
-            String upperSym = sym.toUpperCase();
-            fundamentalsMap.compute(upperSym, (k, v) -> {
-                if (v == null) return data;
-                if (data.getDayVolume() != null && data.getDayVolume() > 0) v.setDayVolume(data.getDayVolume());
-                if (data.getMarketCap() != null && data.getMarketCap() > 0) v.setMarketCap(data.getMarketCap());
-                if (data.getSharesOutstanding() != null && data.getSharesOutstanding() > 0) v.setSharesOutstanding(data.getSharesOutstanding());
-                if (data.getFloatShares() != null && data.getFloatShares() > 0) v.setFloatShares(data.getFloatShares());
-                if (data.getShortInterest() != null && data.getShortInterest() > 0) v.setShortInterest(data.getShortInterest());
-                if (data.getPreMarketVolume() != null && data.getPreMarketVolume() > 0) v.setPreMarketVolume(data.getPreMarketVolume());
-                if (data.getPostMarketVolume() != null && data.getPostMarketVolume() > 0) v.setPostMarketVolume(data.getPostMarketVolume());
-                return v;
+        try (DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS)) {
+            
+            // Listener para capturar todo: Profile, Summary y Quotes (para el Market Cap)
+            channel.addFundamentalListener((sym, data) -> {
+                String upperSym = sym.toUpperCase();
+                fundamentalsMap.merge(upperSym, data, (v1, v2) -> {
+                    // Combinar datos de Profile y Summary
+                    if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
+                    if (v2.getEps() != null) v1.setEps(v2.getEps());
+                    if (v2.getDividendAmount() != null) v1.setDividendAmount(v2.getDividendAmount());
+                    if (v2.getDividendFrequency() != null) v1.setDividendFrequency(v2.getDividendFrequency());
+                    if (v2.getTradingStatus() != null) v1.setTradingStatus(v2.getTradingStatus());
+                    if (v2.getStatusReason() != null) v1.setStatusReason(v2.getStatusReason());
+                    if (v2.getHaltStartTime() != null) v1.setHaltStartTime(v2.getHaltStartTime());
+                    if (v2.getHaltEndTime() != null) v1.setHaltEndTime(v2.getHaltEndTime());
+                    if (v2.getBeta() != null) v1.setBeta(v2.getBeta());
+                    if (v2.getOpen() != null) v1.setOpen(v2.getOpen());
+                    if (v2.getHigh() != null) v1.setHigh(v2.getHigh());
+                    if (v2.getLow() != null) v1.setLow(v2.getLow());
+                    if (v2.getPrevClose() != null) v1.setPrevClose(v2.getPrevClose());
+                    if (v2.getDayVolume() != null) v1.setDayVolume(v2.getDayVolume());
+                    if (v2.getOpenInterest() != null) v1.setOpenInterest(v2.getOpenInterest());
+                    if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
+                    return v1;
+                });
+
+                // Si recibimos acciones, marcamos como perfil recibido
+                if (data.getSharesOutstanding() != null) {
+                    symbolsWithProfile.add(upperSym);
+                    if (symbolsWithProfile.size() >= normalizedSymbols.size()) {
+                        snapshotReceived.complete(null);
+                    }
+                }
             });
 
-            // Si el evento traía MarketCap o SharesOutstanding, es un evento 'Profile' (fundamental completo)
-            if (data.getMarketCap() != null || data.getSharesOutstanding() != null) {
-                symbolsWithProfile.add(upperSym);
-                if (symbolsWithProfile.size() >= normalizedSymbols.size()) {
-                    allEssentialDataReceived.complete(null);
+            // También escuchamos el precio en vivo para calcular el Market Cap (Punto 2 del notebook)
+            channel.addMarketDataListener((sym, data) -> {
+                if (data.getLastPrice() != null) {
+                    lastPrices.put(sym.toUpperCase(), data.getLastPrice());
                 }
+            });
+
+            channel.subscribeFundamentalsBatch(normalizedSymbols);
+            dxLinkClient.subscribe(normalizedSymbols); // Suscribir también a quotes para el precio actual
+
+            try {
+                snapshotReceived.get(5 + (normalizedSymbols.size() / 50), TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                log.warn("Timeout esperando snapshots de fundamentals. Recibidos {}/{}", symbolsWithProfile.size(), normalizedSymbols.size());
             }
-        };
 
-        channel.addFundamentalListener(listener);
-        channel.subscribeFundamentalsBatch(normalizedSymbols);
-        channel.subscribeExtendedVolumeBatch(normalizedSymbols);
+            // Calculamos el Market Cap dinámico: Shares * Last Price
+            fundamentalsMap.forEach((sym, fund) -> {
+                Double lastPrice = lastPrices.get(sym);
+                if (lastPrice != null && fund.getSharesOutstanding() != null) {
+                    fund.setMarketCap(fund.getSharesOutstanding() * lastPrice);
+                }
+            });
 
-        try {
-            // Esperar hasta que todos tengan el Profile o hasta el timeout
-            int maxWait = Math.min(10 + normalizedSymbols.size() / 100, 30);
-            allEssentialDataReceived.get(maxWait, TimeUnit.SECONDS);
-            log.info("Batch fundamentals: Todos los snapshots recibidos en tiempo record.");
-        } catch (TimeoutException e) {
-            log.warn("Batch fundamentals: Timeout alcanzado. Recibidos {}/{} profiles.", 
-                symbolsWithProfile.size(), normalizedSymbols.size());
         } catch (Exception e) {
-            log.error("Batch fundamentals error", e);
+            log.error("Error en batch fundamentals dxLink", e);
         }
 
-        channel.close();
-
-        // Mezclar con Market Metrics de la API REST para campos faltantes (shortRatio, earnings, IV)
+        // Enriquecimiento con Market Metrics REST (para IV, Liquidez y fechas de Earnings)
         try {
             List<Map<String, Object>> metricsList = getMarketMetricsBatch(normalizedSymbols);
             for (Map<String, Object> metric : metricsList) {
@@ -321,38 +335,27 @@ public class TastyTradeService {
                 
                 FundamentalData fund = fundamentalsMap.computeIfAbsent(finalSym, k -> FundamentalData.builder().symbol(k).build());
 
-                // IV & Rank
                 if (metric.get("implied-volatility-index") != null) fund.setImpliedVolatilityIndex(((Number) metric.get("implied-volatility-index")).doubleValue());
                 if (metric.get("implied-volatility-index-rank") != null) fund.setImpliedVolatilityRank(((Number) metric.get("implied-volatility-index-rank")).doubleValue());
                 if (metric.get("implied-volatility-percentile") != null) fund.setImpliedVolatilityPercentile(((Number) metric.get("implied-volatility-percentile")).doubleValue());
                 if (metric.get("liquidity-value") != null) fund.setLiquidity(((Number) metric.get("liquidity-value")).doubleValue());
                 if (metric.get("liquidity-rating") != null) fund.setLiquidityRating(((Number) metric.get("liquidity-rating")).intValue());
 
-                // Short Data (Fallback if DxLink missed it)
                 Object shortRatioValue = metric.get("short-ratio");
-                if (shortRatioValue == null) shortRatioValue = metric.get("short-ratio-index");
                 if (shortRatioValue instanceof Number) fund.setShortRatio(((Number) shortRatioValue).doubleValue());
                 
-                if (fund.getShortInterest() == null || fund.getShortInterest() == 0) {
-                    Object si = metric.get("short-interest");
-                    if (si instanceof Number) fund.setShortInterest(((Number) si).doubleValue());
-                }
-
-                // Earnings
                 Object earningsDateValue = metric.get("earnings-report-date");
                 if (earningsDateValue instanceof String) {
                     try {
                         LocalDate earningsDate = LocalDate.parse((String) earningsDateValue);
                         fund.setNextEarningsDate(earningsDate);
                         long days = ChronoUnit.DAYS.between(LocalDate.now(), earningsDate);
-                        fund.setDaysUntilEarnings((int) Math.max(0, days));
-                    } catch (Exception e) {
-                        log.debug("Failed to parse earnings date for {}: {}", finalSym, earningsDateValue);
-                    }
+                        fund.setDaysUntilEarnings((int) Math.max(0, (int) days));
+                    } catch (Exception ignored) {}
                 }
             }
         } catch (Exception e) {
-            log.error("Failed to fetch market metrics for enrichment: {}", e.getMessage());
+            log.warn("No se pudo enriquecer con Market Metrics REST: {}", e.getMessage());
         }
 
         return fundamentalsMap;

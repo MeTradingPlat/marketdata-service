@@ -184,6 +184,21 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
                     existing.setDayVolume(rt.getDayVolume());
                     existing.setPreMarketVolume(rt.getPreMarketVolume());
                     existing.setPostMarketVolume(rt.getPostMarketVolume());
+                    
+                    // New fields from dxLink
+                    if (rt.getEps() != null) existing.setEps(rt.getEps());
+                    if (rt.getDividendAmount() != null) existing.setDividendAmount(rt.getDividendAmount());
+                    if (rt.getDividendFrequency() != null) existing.setDividendFrequency(rt.getDividendFrequency());
+                    if (rt.getTradingStatus() != null) existing.setTradingStatus(rt.getTradingStatus());
+                    if (rt.getStatusReason() != null) existing.setStatusReason(rt.getStatusReason());
+                    if (rt.getHaltStartTime() != null) existing.setHaltStartTime(rt.getHaltStartTime());
+                    if (rt.getHaltEndTime() != null) existing.setHaltEndTime(rt.getHaltEndTime());
+                    if (rt.getBeta() != null) existing.setBeta(rt.getBeta());
+                    if (rt.getOpen() != null) existing.setOpen(rt.getOpen());
+                    if (rt.getHigh() != null) existing.setHigh(rt.getHigh());
+                    if (rt.getLow() != null) existing.setLow(rt.getLow());
+                    if (rt.getPrevClose() != null) existing.setPrevClose(rt.getPrevClose());
+                    if (rt.getOpenInterest() != null) existing.setOpenInterest(rt.getOpenInterest());
 
                     // Prioritize nextEarningsDate from market-metrics if detailed fetch didn't happen or is old
                     if (rt.getNextEarningsDate() != null) {

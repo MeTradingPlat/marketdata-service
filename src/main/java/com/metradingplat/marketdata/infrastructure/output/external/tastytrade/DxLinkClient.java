@@ -620,13 +620,14 @@ public class DxLinkClient {
             sendMessage(Map.of(
                     "type", "FEED_SETUP",
                     "channel", id,
+                    "acceptAggregationPeriod", 0.1, // Throttle de 100ms para no saturar la red
                     "acceptDataFormat", "COMPACT",
                     "acceptEventFields", Map.of(
                             "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"),
                             "Trade", List.of("eventSymbol", "price", "size", "time"),
                             "TradeETH", List.of("eventSymbol", "dayVolume", "extendedTradingHours"),
-                            "Summary", List.of("eventSymbol", "dayVolume", "eventFlags"),
-                            "Profile", List.of("eventSymbol", "shares", "freeFloat", "marketCap", "shortInterest", "eventFlags"),
+                            "Summary", List.of("eventSymbol", "dayOpenPrice", "dayHighPrice", "dayLowPrice", "prevDayClosePrice", "prevDayVolume", "openInterest"),
+                            "Profile", List.of("eventSymbol", "shares", "earningsPerShare", "exDividendAmount", "dividendFrequency", "tradingStatus", "statusReason", "haltStartTime", "haltEndTime", "beta", "freeFloat"),
                             "Message", List.of("eventSymbol", "eventTime", "messageType", "message"),
                             "Candle",
                             List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
@@ -697,24 +698,25 @@ public class DxLinkClient {
                         }
                     }
                     case "Summary" -> {
+                        // Order: eventSymbol, dayOpenPrice, dayHighPrice, dayLowPrice, prevDayClosePrice, prevDayVolume, openInterest
                         String symbol = data.path(0).asText();
-                        long dayVol = data.path(1).asLong();
-                        log.info("DxLink Summary event: symbol={}, dayVolume={}", symbol, dayVol);
                         FundamentalData fundData = FundamentalData.builder()
                                 .symbol(symbol)
-                                .dayVolume(dayVol)
+                                .open(data.path(1).asDouble())
+                                .high(data.path(2).asDouble())
+                                .low(data.path(3).asDouble())
+                                .prevClose(data.path(4).asDouble())
+                                .dayVolume(data.path(5).asLong())
+                                .openInterest(data.path(6).asLong())
                                 .build();
+                        log.debug("DxLink Summary event: {}", fundData);
                         notifyFundamentalListeners(symbol, fundData);
                     }
                     case "TradeETH" -> {
                         // data: [eventSymbol, dayVolume, extendedTradingHours]
-                        // extendedTradingHours: true = pre-market (before 9:30 ET)
-                        // We use dayVolume from extended session as pre or post based on current time.
-                        // Both pre and post are reported via TradeETH; we store the last received value.
                         String symbol = data.path(0).asText();
                         long extVol = data.path(1).asLong();
                         boolean isPre = data.path(2).asBoolean();
-                        log.info("DxLink TradeETH event: symbol={}, extVol={}, isPre={}", symbol, extVol, isPre);
                         FundamentalData fundData = FundamentalData.builder().symbol(symbol).build();
                         if (isPre) {
                             fundData.setPreMarketVolume(extVol);
@@ -724,12 +726,22 @@ public class DxLinkClient {
                         notifyFundamentalListeners(symbol, fundData);
                     }
                     case "Profile" -> {
+                        // Order: eventSymbol, shares, earningsPerShare, exDividendAmount, dividendFrequency, tradingStatus, statusReason, haltStartTime, haltEndTime, beta, freeFloat
                         String symbol = data.path(0).asText();
                         FundamentalData fundData = FundamentalData.builder()
                                 .symbol(symbol)
                                 .sharesOutstanding(data.path(1).asLong())
-                                .floatShares(data.path(2).asLong())
+                                .eps(data.path(2).asDouble())
+                                .dividendAmount(data.path(3).asDouble())
+                                .dividendFrequency(data.path(4).asText())
+                                .tradingStatus(data.path(5).asText())
+                                .statusReason(data.path(6).asText())
+                                .haltStartTime(data.path(7).asLong())
+                                .haltEndTime(data.path(8).asLong())
+                                .beta(data.path(9).asDouble())
+                                .floatShares(data.path(10).asLong())
                                 .build();
+                        log.debug("DxLink Profile event: {}", fundData);
                         notifyFundamentalListeners(symbol, fundData);
                     }
                     case "Candle" -> {
