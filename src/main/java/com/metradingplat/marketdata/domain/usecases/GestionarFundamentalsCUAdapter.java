@@ -13,7 +13,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -136,37 +136,64 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
 
     private void refreshEarningsFromTastyTrade(FundamentalData data) {
         try {
-            String startDate = LocalDate.now().minusYears(1).toString();
+            String startDate = LocalDate.now().minusYears(2).toString(); // Pedimos 2 años para tener suficiente muestra
             List<Map<String, Object>> reports = tastyTradeService.getEarningsReports(data.getSymbol(), startDate);
             
-            if (reports != null && !reports.isEmpty()) {
-                // Find latest reported quarter
-                Optional<Map<String, Object>> lastReportedOpt = reports.stream()
+            if (reports != null && reports.size() >= 2) {
+                // 1. Extraer y ordenar todas las fechas de reportes pasados (los que tienen EPS)
+                List<LocalDate> sortedDates = reports.stream()
                         .filter(r -> r.get("occurred-date") != null && r.get("eps") != null)
-                        .max(Comparator.comparing(r -> LocalDate.parse((String) r.get("occurred-date"))));
+                        .map(r -> LocalDate.parse((String) r.get("occurred-date")))
+                        .sorted()
+                        .toList();
 
-                if (lastReportedOpt.isPresent()) {
-                    Map<String, Object> lastReported = lastReportedOpt.get();
-                    data.setOccurredDate(LocalDate.parse((String) lastReported.get("occurred-date")));
-                    Object epsObj = lastReported.get("eps");
-                    if (epsObj instanceof Number) {
-                        data.setEps(((Number) epsObj).doubleValue());
+                if (sortedDates.isEmpty()) return;
+
+                // 2. Guardar el último reporte conocido para el DTO
+                LocalDate lastReportDate = sortedDates.get(sortedDates.size() - 1);
+                data.setOccurredDate(lastReportDate);
+                
+                // Buscar el EPS del último reporte
+                reports.stream()
+                    .filter(r -> r.get("occurred-date") != null && LocalDate.parse((String) r.get("occurred-date")).equals(lastReportDate))
+                    .findFirst()
+                    .ifPresent(r -> {
+                        Object epsObj = r.get("eps");
+                        if (epsObj instanceof Number) data.setEps(((Number) epsObj).doubleValue());
+                    });
+
+                // 3. Algoritmo Predictivo: Calcular deltas entre reportes (mínimo 60 días para filtrar ruidos)
+                List<Long> deltas = new ArrayList<>();
+                for (int i = 1; i < sortedDates.size(); i++) {
+                    long diff = ChronoUnit.DAYS.between(sortedDates.get(i - 1), sortedDates.get(i));
+                    if (diff > 60) {
+                        deltas.add(diff);
                     }
                 }
 
-                // Find next pending quarter
-                Optional<Map<String, Object>> nextPendingOpt = reports.stream()
-                        .filter(r -> r.get("occurred-date") != null && r.get("eps") == null)
-                        .min(Comparator.comparing(r -> LocalDate.parse((String) r.get("occurred-date"))));
+                if (!deltas.isEmpty()) {
+                    // Calculamos la MEDIANA para ser robustos a años bisiestos o retrasos puntuales
+                    Collections.sort(deltas);
+                    long medianDelta;
+                    int size = deltas.size();
+                    if (size % 2 == 0) {
+                        medianDelta = (deltas.get(size / 2 - 1) + deltas.get(size / 2)) / 2;
+                    } else {
+                        medianDelta = deltas.get(size / 2);
+                    }
 
-                if (nextPendingOpt.isPresent()) {
-                    LocalDate pendingQuarterEnd = LocalDate.parse((String) nextPendingOpt.get().get("occurred-date"));
-                    // TastyTrade reports usually occur 30-40 days after quarter end if not yet scheduled
-                    data.setNextEarningsDate(pendingQuarterEnd.plusDays(35)); 
+                    // 4. Proyectar la próxima fecha: Último reporte + Mediana del Ciclo
+                    LocalDate predictedDate = lastReportDate.plusDays(medianDelta);
+                    
+                    // Si la fecha predicha ya pasó, probablemente el reporte sea inminente (ventana de reporte)
+                    // En ese caso, podríamos estimar el siguiente ciclo o marcarlo como "hoy"
+                    data.setNextEarningsDate(predictedDate);
+                    log.info("Predicted next earnings for {}: {} (based on {} day cycle)", 
+                            data.getSymbol(), predictedDate, medianDelta);
                 }
             }
         } catch (Exception e) {
-            log.error("Error refreshing earnings from TastyTrade for {}: {}", data.getSymbol(), e.getMessage());
+            log.error("Error predicting earnings from TastyTrade for {}: {}", data.getSymbol(), e.getMessage());
         }
     }
 

@@ -10,7 +10,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.BiConsumer;
 
 import org.springframework.stereotype.Service;
 
@@ -20,6 +19,8 @@ import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
+import com.metradingplat.marketdata.domain.models.OptionChain;
+import com.metradingplat.marketdata.domain.models.OptionContract;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
 
@@ -52,6 +53,7 @@ public class TastyTradeService {
 
     // Trackers para la heuristica de Halt Status (Punto 5)
     private final ConcurrentHashMap<String, Long> lastMarketDataUpdates = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, OptionContract> greeksCache = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
@@ -115,6 +117,12 @@ public class TastyTradeService {
             log.debug("Candle received for {}: {} O={} H={} L={} C={} complete={}",
                     symbol, candle.getTimestamp(), candle.getOpen(),
                     candle.getHigh(), candle.getLow(), candle.getClose(), isComplete);
+        });
+
+        dxLinkClient.setOnGreeks((symbol, greeks) -> {
+            log.debug("Greeks received for {}: Delta={}, IV={}", symbol, greeks.getDelta(), greeks.getImpliedVolatility());
+            greeksCache.put(symbol, greeks);
+            // Aquí se podría publicar a Kafka si fuera necesario
         });
     }
 
@@ -220,6 +228,82 @@ public class TastyTradeService {
         } catch (Exception e) {
             log.error("Failed to fetch candles via WebSocket", e);
             return Map.of();
+        }
+    }
+
+    public OptionChain getOptionChain(String symbol) {
+        log.info("Fetching option chain for {}", symbol);
+        Map<String, Object> nested = tastyTradeClient.getOptionChainNested(symbol);
+        if (nested == null || nested.isEmpty()) return null;
+
+        OptionChain chain = OptionChain.builder()
+                .symbol(symbol)
+                .expirations(new java.util.HashMap<>())
+                .build();
+
+        List<String> allOptionSymbols = new java.util.ArrayList<>();
+
+        try {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> expirations = (List<Map<String, Object>>) nested.get("expirations");
+            if (expirations != null) {
+                for (Map<String, Object> exp : expirations) {
+                    String date = (String) exp.get("expiration-date");
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> strikes = (List<Map<String, Object>>) exp.get("strikes");
+                    
+                    List<OptionContract> contracts = new java.util.ArrayList<>();
+                    if (strikes != null) {
+                        for (Map<String, Object> strike : strikes) {
+                            addContract(contracts, allOptionSymbols, symbol, date, strike, "call");
+                            addContract(contracts, allOptionSymbols, symbol, date, strike, "put");
+                        }
+                    }
+                    chain.getExpirations().put(date, contracts);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error parsing option chain for {}: {}", symbol, e.getMessage());
+        }
+
+        // Suscripción masiva por lotes (Batch)
+        if (!allOptionSymbols.isEmpty()) {
+            log.info("Subscribing to Greeks for {} options of {}", allOptionSymbols.size(), symbol);
+            ensureConnected();
+            // Dividir en lotes de 100 para no exceder los 8KB del frame dxLink
+            for (int i = 0; i < allOptionSymbols.size(); i += 100) {
+                List<String> chunk = allOptionSymbols.subList(i, Math.min(i + 100, allOptionSymbols.size()));
+                dxLinkClient.subscribe(chunk);
+            }
+        }
+
+        return chain;
+    }
+
+    private void addContract(List<OptionContract> list, List<String> allSymbols, String root, String date, Map<String, Object> strike, String side) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) strike.get(side);
+        if (data != null) {
+            String osiSymbol = (String) data.get("streamer-symbol");
+            if (osiSymbol != null) {
+                OptionContract cached = greeksCache.get(osiSymbol);
+                OptionContract contract = OptionContract.builder()
+                        .symbol(osiSymbol)
+                        .rootSymbol(root)
+                        .expirationDate(LocalDate.parse(date))
+                        .strikePrice(((Number) strike.get("strike-price")).doubleValue())
+                        .optionType(side.toUpperCase())
+                        .delta(cached != null ? cached.getDelta() : null)
+                        .gamma(cached != null ? cached.getGamma() : null)
+                        .theta(cached != null ? cached.getTheta() : null)
+                        .vega(cached != null ? cached.getVega() : null)
+                        .rho(cached != null ? cached.getRho() : null)
+                        .impliedVolatility(cached != null ? cached.getImpliedVolatility() : null)
+                        .theoreticalPrice(cached != null ? cached.getTheoreticalPrice() : null)
+                        .build();
+                list.add(contract);
+                allSymbols.add(osiSymbol);
+            }
         }
     }
 

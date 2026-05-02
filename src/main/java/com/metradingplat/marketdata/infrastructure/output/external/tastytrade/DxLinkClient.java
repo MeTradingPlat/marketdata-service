@@ -30,6 +30,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
+import com.metradingplat.marketdata.domain.models.OptionContract;
 import com.metradingplat.marketdata.infrastructure.output.kafka.DTO.MarketDataStreamDTO;
 
 import jakarta.annotation.PreDestroy;
@@ -78,6 +79,7 @@ public class DxLinkClient {
     private ScheduledFuture<?> healthCheckTask;
     private final List<CandleCallback> candleListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<BiConsumer<String, FundamentalData>> fundamentalListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<BiConsumer<String, OptionContract>> greeksListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<BiConsumer<String, JsonNode>> messageListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private Supplier<String> tokenRefresher;
 
@@ -100,6 +102,11 @@ public class DxLinkClient {
     public void setOnMessage(BiConsumer<String, JsonNode> callback) {
         if (defaultChannel != null)
             defaultChannel.addMessageListener(callback);
+    }
+
+    public void setOnGreeks(BiConsumer<String, OptionContract> callback) {
+        if (defaultChannel != null)
+            defaultChannel.addGreeksListener(callback);
     }
 
     public void setTokenRefresher(Supplier<String> tokenRefresher) {
@@ -483,6 +490,10 @@ public class DxLinkClient {
             DxLinkClient.this.fundamentalListeners.add(listener);
         }
 
+        public void addGreeksListener(BiConsumer<String, OptionContract> listener) {
+            DxLinkClient.this.greeksListeners.add(listener);
+        }
+
         private void notifyFundamentalListeners(String symbol, FundamentalData data) {
             for (BiConsumer<String, FundamentalData> listener : fundamentalListeners) {
                 try {
@@ -626,11 +637,11 @@ public class DxLinkClient {
                     "acceptAggregationPeriod", 0.1, // Throttle de 100ms para no saturar la red
                     "acceptDataFormat", "COMPACT",
                     "acceptEventFields", Map.of(
-                            "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"),
-                            "Trade", List.of("eventSymbol", "price", "size", "time"),
-                            "TradeETH", List.of("eventSymbol", "dayVolume", "extendedTradingHours"),
+                            "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "lastPrice", "bidSize", "askSize", "lastSize"),
+                            "Trade", List.of("eventSymbol", "price", "size", "dayVolume"),
                             "Summary", List.of("eventSymbol", "dayOpenPrice", "dayHighPrice", "dayLowPrice", "prevDayClosePrice", "prevDayVolume", "openInterest"),
                             "Profile", List.of("eventSymbol", "shares", "earningsPerShare", "exDividendAmount", "dividendFrequency", "tradingStatus", "statusReason", "haltStartTime", "haltEndTime", "beta", "freeFloat"),
+                            "Greeks", List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice"),
                             "Message", List.of("eventSymbol", "eventTime", "messageType", "message"),
                             "Candle",
                             List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
@@ -746,6 +757,28 @@ public class DxLinkClient {
                                 .build();
                         log.debug("DxLink Profile event: {}", fundData);
                         notifyFundamentalListeners(symbol, fundData);
+                    }
+                    case "Greeks" -> {
+                        // Order: eventSymbol, volatility, delta, gamma, theta, vega, rho, theoreticalPrice
+                        String symbol = data.path(0).asText();
+                        OptionContract greeks = OptionContract.builder()
+                                .symbol(symbol)
+                                .impliedVolatility(data.path(1).asDouble())
+                                .delta(data.path(2).asDouble())
+                                .gamma(data.path(3).asDouble())
+                                .theta(data.path(4).asDouble())
+                                .vega(data.path(5).asDouble())
+                                .rho(data.path(6).asDouble())
+                                .theoreticalPrice(data.path(7).asDouble())
+                                .build();
+                        log.debug("DxLink Greeks event: {}", greeks);
+                        for (BiConsumer<String, OptionContract> listener : greeksListeners) {
+                            try {
+                                listener.accept(symbol, greeks);
+                            } catch (Exception e) {
+                                log.error("Error in greeks listener", e);
+                            }
+                        }
                     }
                     case "Candle" -> {
                         int fieldsPerCandle = 8;

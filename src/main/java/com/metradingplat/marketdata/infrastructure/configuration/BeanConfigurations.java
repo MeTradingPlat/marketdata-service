@@ -12,6 +12,7 @@ import com.metradingplat.marketdata.domain.usecases.GestionarOrdersCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarQuoteCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarRealTimeCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarEarningsCUAdapter;
+import com.metradingplat.marketdata.domain.usecases.GestionarOptionsCUAdapter;
 import com.metradingplat.marketdata.infrastructure.output.external.finviz.FinvizScraper;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
@@ -60,5 +61,11 @@ public class BeanConfigurations {
             FinvizScraper finvizScraper,
             TastyTradeService tastyTradeService) {
         return new GestionarFundamentalsCUAdapter(persistenceGateway, finvizScraper, tastyTradeService);
+    }
+
+    @Bean
+    public GestionarOptionsCUAdapter gestionarOptionsCUIntPort(
+            GestionarComunicacionExternalGatewayIntPort objExternalGateway) {
+        return new GestionarOptionsCUAdapter(objExternalGateway);
     }
 }
