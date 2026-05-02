@@ -583,6 +583,16 @@ public class DxLinkClient {
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
         }
 
+        public void subscribeCandlesHistory(List<Map<String, Object>> items, long fromTime) {
+            snapshotCandleCount.set(0);
+            sendMessage(Map.of(
+                "type", "FEED_SUBSCRIPTION", 
+                "channel", id, 
+                "fromTime", fromTime,
+                "add", items
+            ));
+        }
+
         public void close() {
             // Enviar CHANNEL_CANCEL para cerrar el canal en el servidor.
             // Sin esto, el canal queda como "fantasma" y DxLink rechaza nuevos canales

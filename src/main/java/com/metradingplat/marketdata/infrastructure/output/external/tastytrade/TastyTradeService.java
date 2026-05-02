@@ -148,7 +148,7 @@ public class TastyTradeService {
      * Reemplaza WebSocket por llamadas REST para asegurar la alineación temporal.
      */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Batch fetch REST: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
+        log.info("Batch fetch WebSocket History: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
 
         Instant now = Instant.now();
         Instant fromTime = now.minus(timeframe.getDuration().multipliedBy(bars));
@@ -159,7 +159,7 @@ public class TastyTradeService {
         
         if (isIntraday && daysBetween > 270) {
             throw new IllegalArgumentException("El intervalo histórico para datos intradía excede los 9 meses soportados por el API.");
-        } else if (daysBetween > 3650) { // Límite de 10 años para diario
+        } else if (daysBetween > 3650) { 
             throw new IllegalArgumentException("El intervalo histórico excede el máximo de 10 años soportado.");
         }
 
@@ -167,22 +167,48 @@ public class TastyTradeService {
         String type = label.substring(label.length() - 1); // "m", "d", etc.
         String period = label.substring(0, label.length() - 1); // "5", "1", etc.
 
-        Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
+        ensureConnected();
         
-        symbols.parallelStream().forEach(symbol -> {
-            // Construir símbolo dxFeed según guía técnica: type{period=X,tho=true,priceType=last}SYMBOL
-            // Importante: No lleva ":" antes del símbolo base.
-            String dxSymbol = String.format("%s{period=%s,tho=true,priceType=last}%s", type, period, symbol);
-            List<Candle> candles = tastyTradeClient.getHistoricalCandles(symbol, dxSymbol, fromTime, now);
+        Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
+        CompletableFuture<Map<String, List<Candle>>> future = new CompletableFuture<>();
+        
+        try {
+            DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
             
-            if (candles != null && !candles.isEmpty()) {
-                candles.forEach(c -> c.setTimeframe(timeframe));
-                resultado.put(symbol, candles);
-            }
-        });
+            // Listener para recolectar las velas del snapshot
+            channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
+                candle.setTimeframe(timeframe);
+                resultado.computeIfAbsent(symbol, k -> new java.util.ArrayList<>()).add(candle);
+                
+                // Si el snapshot ha terminado (isSnapshotComplete=true en el último evento del snapshot)
+                if (isSnapshotComplete) {
+                    log.debug("Snapshot complete for {}", symbol);
+                    // Como pedimos batch, esperamos un poco más o contamos símbolos si fuera necesario
+                }
+            });
 
-        log.info("Batch REST completo: {}/{} simbolos con datos", resultado.size(), symbols.size());
-        return resultado;
+            List<Map<String, Object>> subscriptionItems = symbols.stream()
+                .map(s -> {
+                    // Sintaxis: type{period=X}Symbol
+                    String dxSymbol = String.format("%s{period=%s}%s", type, period, s);
+                    return Map.of("symbol", dxSymbol, "type", "Candle");
+                })
+                .toList();
+
+            channel.subscribeCandlesHistory(subscriptionItems, fromTime.toEpochMilli());
+
+            // Esperamos unos segundos para que se llene el buffer de velas (dxFeed es muy rápido)
+            scheduler.schedule(() -> {
+                channel.close(); // Cerramos el canal temporal
+                future.complete(resultado);
+            }, 3 + (symbols.size() / 10), TimeUnit.SECONDS);
+
+            return future.get(15, TimeUnit.SECONDS);
+
+        } catch (Exception e) {
+            log.error("Failed to fetch candles via WebSocket", e);
+            return Map.of();
+        }
     }
 
     public void shutdown() {
