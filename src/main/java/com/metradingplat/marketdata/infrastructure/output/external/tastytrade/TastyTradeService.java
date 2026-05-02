@@ -369,6 +369,8 @@ public class TastyTradeService {
                     if (v2.getDayVolume() != null) v1.setDayVolume(v2.getDayVolume());
                     if (v2.getOpenInterest() != null) v1.setOpenInterest(v2.getOpenInterest());
                     if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
+                    if (v2.getPreMarketVolume() != null) v1.setPreMarketVolume(v2.getPreMarketVolume());
+                    if (v2.getPostMarketVolume() != null) v1.setPostMarketVolume(v2.getPostMarketVolume());
                     return v1;
                 });
 

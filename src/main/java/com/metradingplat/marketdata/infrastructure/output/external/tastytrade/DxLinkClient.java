@@ -83,6 +83,55 @@ public class DxLinkClient {
     private final List<BiConsumer<String, JsonNode>> messageListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private Supplier<String> tokenRefresher;
 
+    // --- Definición de Contratos para Formato COMPACT (Punto 1 y 2 del manual) ---
+    private static final List<String> QUOTE_FIELDS = List.of("eventSymbol", "bidPrice", "askPrice");
+    private static final List<String> TRADE_FIELDS = List.of("eventSymbol", "price", "dayVolume", "time");
+    private static final List<String> SUMMARY_FIELDS = List.of("eventSymbol", "dayOpenPrice", "dayHighPrice", "dayLowPrice", "prevDayClosePrice", "openInterest");
+    private static final List<String> PROFILE_FIELDS = List.of("eventSymbol", "shares", "earningsPerShare", "exDividendAmount", "dividendFrequency", "tradingStatus", "statusReason", "haltStartTime", "haltEndTime", "beta", "freeFloat");
+    private static final List<String> TRADE_ETH_FIELDS = List.of("eventSymbol", "dayVolume", "extendedTradingHours", "time");
+    private static final List<String> GREEKS_FIELDS = List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice");
+
+    // Índices (basados en las listas anteriores, +1 porque el índice 0 es siempre el EventType)
+    private static final int IDX_SYMBOL = 1;
+    
+    // Trade Indices
+    private static final int IDX_TRADE_PRICE = 2;
+    private static final int IDX_TRADE_VOLUME = 3;
+    private static final int IDX_TRADE_TIME = 4;
+
+    // Summary Indices (Sin dayVolume como advirtió el arquitecto)
+    private static final int IDX_SUMM_OPEN = 2;
+    private static final int IDX_SUMM_HIGH = 3;
+    private static final int IDX_SUMM_LOW = 4;
+    private static final int IDX_SUMM_PREV_CLOSE = 5;
+    private static final int IDX_SUMM_OI = 6;
+
+    // Profile Indices
+    private static final int IDX_PROF_SHARES = 2;
+    private static final int IDX_PROF_EPS = 3;
+    private static final int IDX_PROF_DIV_AMT = 4;
+    private static final int IDX_PROF_DIV_FREQ = 5;
+    private static final int IDX_PROF_STATUS = 6;
+    private static final int IDX_PROF_STATUS_RSN = 7;
+    private static final int IDX_PROF_HALT_START = 8;
+    private static final int IDX_PROF_HALT_END = 9;
+    private static final int IDX_PROF_BETA = 10;
+    private static final int IDX_PROF_FLOAT = 11;
+
+    // TradeETH Indices
+    private static final int IDX_ETH_VOL = 2;
+    private static final int IDX_ETH_IS_EXT = 3;
+    private static final int IDX_ETH_TIME = 4;
+
+    // Greeks Indices
+    private static final int IDX_GRK_IV = 2;
+    private static final int IDX_GRK_DELTA = 3;
+    private static final int IDX_GRK_GAMMA = 4;
+    private static final int IDX_GRK_THETA = 5;
+    private static final int IDX_GRK_VEGA = 6;
+    private static final int IDX_GRK_RHO = 7;
+    private static final int IDX_GRK_THEO = 8;
+
     public interface CandleCallback {
         void onCandle(String symbol, Candle candle, boolean isSnapshotComplete);
     }
@@ -583,6 +632,7 @@ public class DxLinkClient {
             for (String s : symbols) {
                 items.add(Map.of("symbol", s, "type", "Summary"));
                 items.add(Map.of("symbol", s, "type", "Profile"));
+                items.add(Map.of("symbol", s, "type", "TradeETH"));
             }
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
         }
@@ -637,14 +687,14 @@ public class DxLinkClient {
                     "acceptAggregationPeriod", 0.1, // Throttle de 100ms para no saturar la red
                     "acceptDataFormat", "COMPACT",
                     "acceptEventFields", Map.of(
-                            "Quote", List.of("eventSymbol", "bidPrice", "askPrice", "lastPrice", "bidSize", "askSize", "lastSize"),
-                            "Trade", List.of("eventSymbol", "price", "size", "dayVolume"),
-                            "Summary", List.of("eventSymbol", "dayOpenPrice", "dayHighPrice", "dayLowPrice", "prevDayClosePrice", "prevDayVolume", "openInterest"),
-                            "Profile", List.of("eventSymbol", "shares", "earningsPerShare", "exDividendAmount", "dividendFrequency", "tradingStatus", "statusReason", "haltStartTime", "haltEndTime", "beta", "freeFloat"),
-                            "Greeks", List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice"),
+                            "Quote", QUOTE_FIELDS,
+                            "Trade", TRADE_FIELDS,
+                            "Summary", SUMMARY_FIELDS,
+                            "Profile", PROFILE_FIELDS,
+                            "TradeETH", TRADE_ETH_FIELDS,
+                            "Greeks", GREEKS_FIELDS,
                             "Message", List.of("eventSymbol", "eventTime", "messageType", "message"),
-                            "Candle",
-                            List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
+                            "Candle", List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
         }
 
         private void handleConfigured() {
@@ -726,104 +776,140 @@ public class DxLinkClient {
                         log.debug("DxLink Summary event: {}", fundData);
                         notifyFundamentalListeners(symbol, fundData);
                     }
-                    case "TradeETH" -> {
-                        // data: [eventSymbol, dayVolume, extendedTradingHours]
-                        String symbol = data.path(0).asText();
-                        long extVol = data.path(1).asLong();
-                        boolean isPre = data.path(2).asBoolean();
-                        FundamentalData fundData = FundamentalData.builder().symbol(symbol).build();
-                        if (isPre) {
-                            fundData.setPreMarketVolume(extVol);
-                        } else {
-                            fundData.setPostMarketVolume(extVol);
-                        }
-                        notifyFundamentalListeners(symbol, fundData);
+    private void processCompactEvent(String eventType, JsonNode data) {
+        try {
+            switch (eventType) {
+                case "Quote" -> {
+                    String symbol = data.path(IDX_SYMBOL).asText();
+                    MarketDataStreamDTO streamData = MarketDataStreamDTO.builder()
+                            .symbol(symbol)
+                            .bidPrice(data.path(2).asDouble())
+                            .askPrice(data.path(3).asDouble())
+                            .build();
+                    notifyMarketDataListeners(symbol, streamData);
+                }
+                case "Trade" -> {
+                    String symbol = data.path(IDX_SYMBOL).asText();
+                    MarketDataStreamDTO streamData = MarketDataStreamDTO.builder()
+                            .symbol(symbol)
+                            .lastPrice(data.path(IDX_TRADE_PRICE).asDouble())
+                            .volume(data.path(IDX_TRADE_VOLUME).asLong())
+                            .timestamp(Instant.ofEpochMilli(data.path(IDX_TRADE_TIME).asLong()))
+                            .build();
+                    notifyMarketDataListeners(symbol, streamData);
+                }
+                case "Summary" -> {
+                    String symbol = data.path(IDX_SYMBOL).asText();
+                    FundamentalData fundData = FundamentalData.builder()
+                            .symbol(symbol)
+                            .open(data.path(IDX_SUMM_OPEN).asDouble())
+                            .high(data.path(IDX_SUMM_HIGH).asDouble())
+                            .low(data.path(IDX_SUMM_LOW).asDouble())
+                            .prevClose(data.path(IDX_SUMM_PREV_CLOSE).asDouble())
+                            .openInterest(data.path(IDX_SUMM_OI).asLong())
+                            .build();
+                    notifyFundamentalListeners(symbol, fundData);
+                }
+                case "TradeETH" -> {
+                    String symbol = data.path(IDX_SYMBOL).asText();
+                    long extVol = data.path(IDX_ETH_VOL).asLong();
+                    long time = data.path(IDX_ETH_TIME).asLong();
+                    
+                    FundamentalData fundData = FundamentalData.builder().symbol(symbol).build();
+                    // Inferencia de Sesión Pre/Post Market (Basado en 09:30 AM EST)
+                    if (isPreMarket(time)) {
+                        fundData.setPreMarketVolume(extVol);
+                    } else {
+                        fundData.setPostMarketVolume(extVol);
                     }
-                    case "Profile" -> {
-                        // Order: eventSymbol, shares, earningsPerShare, exDividendAmount, dividendFrequency, tradingStatus, statusReason, haltStartTime, haltEndTime, beta, freeFloat
-                        String symbol = data.path(0).asText();
-                        FundamentalData fundData = FundamentalData.builder()
-                                .symbol(symbol)
-                                .sharesOutstanding(data.path(1).asLong())
-                                .eps(data.path(2).asDouble())
-                                .dividendAmount(data.path(3).asDouble())
-                                .dividendFrequency(data.path(4).asText())
-                                .tradingStatus(data.path(5).asText())
-                                .statusReason(data.path(6).asText())
-                                .haltStartTime(data.path(7).asLong())
-                                .haltEndTime(data.path(8).asLong())
-                                .beta(data.path(9).asDouble())
-                                .floatShares(data.path(10).asLong())
-                                .build();
-                        log.debug("DxLink Profile event: {}", fundData);
-                        notifyFundamentalListeners(symbol, fundData);
+                    notifyFundamentalListeners(symbol, fundData);
+                }
+                case "Profile" -> {
+                    String symbol = data.path(IDX_SYMBOL).asText();
+                    FundamentalData fundData = FundamentalData.builder()
+                            .symbol(symbol)
+                            .sharesOutstanding(data.path(IDX_PROF_SHARES).asLong())
+                            .eps(data.path(IDX_PROF_EPS).asDouble())
+                            .dividendAmount(data.path(IDX_PROF_DIV_AMT).asDouble())
+                            .dividendFrequency(data.path(IDX_PROF_DIV_FREQ).asText())
+                            .tradingStatus(data.path(IDX_PROF_STATUS).asText())
+                            .statusReason(data.path(IDX_PROF_STATUS_RSN).asText())
+                            .haltStartTime(data.path(IDX_PROF_HALT_START).asLong())
+                            .haltEndTime(data.path(IDX_PROF_HALT_END).asLong())
+                            .beta(data.path(IDX_PROF_BETA).asDouble())
+                            .floatShares(data.path(IDX_PROF_FLOAT).asLong())
+                            .build();
+                    notifyFundamentalListeners(symbol, fundData);
+                }
+                case "Greeks" -> {
+                    String symbol = data.path(IDX_SYMBOL).asText();
+                    OptionContract greeks = OptionContract.builder()
+                            .symbol(symbol)
+                            .impliedVolatility(data.path(IDX_GRK_IV).asDouble())
+                            .delta(data.path(IDX_GRK_DELTA).asDouble())
+                            .gamma(data.path(IDX_GRK_GAMMA).asDouble())
+                            .theta(data.path(IDX_GRK_THETA).asDouble())
+                            .vega(data.path(IDX_GRK_VEGA).asDouble())
+                            .rho(data.path(IDX_GRK_RHO).asDouble())
+                            .theoreticalPrice(data.path(IDX_GRK_THEO).asDouble())
+                            .build();
+                    for (BiConsumer<String, OptionContract> listener : greeksListeners) {
+                        try { listener.accept(symbol, greeks); } catch (Exception e) { log.error("Error in greeks listener", e); }
                     }
-                    case "Greeks" -> {
-                        // Order: eventSymbol, volatility, delta, gamma, theta, vega, rho, theoreticalPrice
-                        String symbol = data.path(0).asText();
-                        OptionContract greeks = OptionContract.builder()
-                                .symbol(symbol)
-                                .impliedVolatility(data.path(1).asDouble())
-                                .delta(data.path(2).asDouble())
-                                .gamma(data.path(3).asDouble())
-                                .theta(data.path(4).asDouble())
-                                .vega(data.path(5).asDouble())
-                                .rho(data.path(6).asDouble())
-                                .theoreticalPrice(data.path(7).asDouble())
-                                .build();
-                        log.debug("DxLink Greeks event: {}", greeks);
-                        for (BiConsumer<String, OptionContract> listener : greeksListeners) {
-                            try {
-                                listener.accept(symbol, greeks);
-                            } catch (Exception e) {
-                                log.error("Error in greeks listener", e);
-                            }
-                        }
-                    }
-                    case "Candle" -> {
-                        int fieldsPerCandle = 8;
-                        for (int idx = 0; idx < data.size(); idx += fieldsPerCandle) {
-                            String candleSymbol = data.path(idx).asText();
-                            String baseSymbol = candleSymbol.contains("{")
-                                    ? candleSymbol.substring(0, candleSymbol.indexOf("{"))
-                                    : candleSymbol;
+                }
+                case "Candle" -> {
+                    int fieldsPerCandle = 8;
+                    for (int idx = 0; idx < data.size(); idx += fieldsPerCandle) {
+                        String candleSymbol = data.path(idx).asText();
+                        String baseSymbol = candleSymbol.contains("{")
+                                ? candleSymbol.substring(0, candleSymbol.indexOf("{"))
+                                : candleSymbol;
 
-                            Candle candle = Candle.builder()
-                                    .symbol(baseSymbol)
-                                    .timestamp(Instant.ofEpochMilli(data.path(idx + 1).asLong()))
-                                    .open(data.path(idx + 2).asDouble())
-                                    .high(data.path(idx + 3).asDouble())
-                                    .low(data.path(idx + 4).asDouble())
-                                    .close(data.path(idx + 5).asDouble())
-                                    .volume(data.path(idx + 6).asDouble())
-                                    .build();
-                            boolean isComplete = (data.path(idx + 7).asInt() & 0x01) == 0;
-                            for (CandleCallback listener : candleListeners) {
-                                try {
-                                    listener.onCandle(baseSymbol, candle, isComplete);
-                                } catch (Exception e) {
-                                    log.error("Error in candle listener", e);
-                                }
-                            }
-                        }
-                    }
-                    case "Message" -> {
-                        // data: [eventSymbol, eventTime, messageType, message]
-                        String symbol = data.path(0).asText();
-                        log.info("DxLink Message event received for symbol={}", symbol);
-                        for (BiConsumer<String, JsonNode> listener : messageListeners) {
-                            try {
-                                listener.accept(symbol, data);
-                            } catch (Exception e) {
-                                log.error("Error in message listener", e);
-                            }
+                        Candle candle = Candle.builder()
+                                .symbol(baseSymbol)
+                                .timestamp(Instant.ofEpochMilli(data.path(idx + 1).asLong()))
+                                .open(data.path(idx + 2).asDouble())
+                                .high(data.path(idx + 3).asDouble())
+                                .low(data.path(idx + 4).asDouble())
+                                .close(data.path(idx + 5).asDouble())
+                                .volume(data.path(idx + 6).asDouble())
+                                .build();
+                        boolean isComplete = (data.path(idx + 7).asInt() & 0x01) == 0;
+                        for (CandleCallback listener : candleListeners) {
+                            try { listener.onCandle(baseSymbol, candle, isComplete); } catch (Exception e) { log.error("Error in candle listener", e); }
                         }
                     }
                 }
-            } catch (Exception e) {
-                log.error("Error processing compact event {}", eventType, e);
+                case "Message" -> {
+                    String symbol = data.path(0).asText();
+                    for (BiConsumer<String, JsonNode> listener : messageListeners) {
+                        try { listener.accept(symbol, data); } catch (Exception e) { log.error("Error in message listener", e); }
+                    }
+                }
             }
+        } catch (Exception e) {
+            log.error("Error processing compact event {}", eventType, e);
         }
+    }
+
+    private boolean isPreMarket(long timeMs) {
+        java.time.ZonedDateTime nyTime = Instant.ofEpochMilli(timeMs).atZone(java.time.ZoneId.of("America/New_York"));
+        int hour = nyTime.getHour();
+        int minute = nyTime.getMinute();
+        return (hour < 9) || (hour == 9 && minute < 30);
+    }
+
+    private void notifyMarketDataListeners(String symbol, MarketDataStreamDTO data) {
+        for (BiConsumer<String, MarketDataStreamDTO> listener : marketDataListeners) {
+            try { listener.accept(symbol, data); } catch (Exception e) { log.error("Error in market data listener", e); }
+        }
+    }
+
+    private void notifyFundamentalListeners(String symbol, FundamentalData data) {
+        for (BiConsumer<String, FundamentalData> listener : fundamentalListeners) {
+            try { listener.accept(symbol, data); } catch (Exception e) { log.error("Error in fundamental listener", e); }
+        }
+    }
 
         private void processFullEvent(String eventType, JsonNode data) {
             // Implementación simplificada para FULL events si fuera necesario
