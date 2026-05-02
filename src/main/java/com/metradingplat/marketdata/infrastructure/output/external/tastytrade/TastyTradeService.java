@@ -189,8 +189,8 @@ public class TastyTradeService {
 
             List<Map<String, Object>> subscriptionItems = symbols.stream()
                 .map(s -> {
-                    // Sintaxis: type{period=X}Symbol
-                    String dxSymbol = String.format("%s{period=%s}%s", type, period, s);
+                    // Sintaxis dxLink: Symbol{=periodType} ej: AAPL{=5m}
+                    String dxSymbol = String.format("%s{=%s%s}", s, period, type);
                     return Map.of("symbol", dxSymbol, "type", "Candle");
                 })
                 .toList();
