@@ -48,6 +48,7 @@ public class TastyTradeService {
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
+    private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     // Trackers para la heuristica de Halt Status (Punto 5)
     private final ConcurrentHashMap<String, Long> lastMarketDataUpdates = new ConcurrentHashMap<>();
@@ -191,7 +192,10 @@ public class TastyTradeService {
                 .map(s -> {
                     // Sintaxis dxLink: Symbol{=periodType} ej: AAPL{=5m}
                     String dxSymbol = String.format("%s{=%s%s}", s, period, type);
-                    return Map.of("symbol", dxSymbol, "type", "Candle");
+                    Map<String, Object> item = new java.util.HashMap<>();
+                    item.put("symbol", dxSymbol);
+                    item.put("type", "Candle");
+                    return item;
                 })
                 .toList();
 
