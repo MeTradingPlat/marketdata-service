@@ -163,12 +163,16 @@ public class TastyTradeService {
             throw new IllegalArgumentException("El intervalo histórico excede el máximo de 10 años soportado.");
         }
 
-        String tf = timeframe.getLabel(); // m, d, w, etc.
+        String label = timeframe.getLabel(); // ej: "5m", "1d"
+        String type = label.substring(label.length() - 1); // "m", "d", etc.
+        String period = label.substring(0, label.length() - 1); // "5", "1", etc.
+
         Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
         
         symbols.parallelStream().forEach(symbol -> {
-            // Construir símbolo dxFeed m{tho=true,priceType=last}:SYMBOL
-            String dxSymbol = tf + "{tho=true,priceType=last}:" + symbol;
+            // Construir símbolo dxFeed según guía técnica: type{period=X,tho=true,priceType=last}SYMBOL
+            // Importante: No lleva ":" antes del símbolo base.
+            String dxSymbol = String.format("%s{period=%s,tho=true,priceType=last}%s", type, period, symbol);
             List<Candle> candles = tastyTradeClient.getHistoricalCandles(symbol, dxSymbol, fromTime, now);
             
             if (candles != null && !candles.isEmpty()) {
