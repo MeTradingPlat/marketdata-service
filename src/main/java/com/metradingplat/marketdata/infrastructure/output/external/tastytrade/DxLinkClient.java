@@ -279,6 +279,12 @@ public class DxLinkClient {
         subscribedSymbols.add(symbol);
     }
 
+    public void subscribe(List<String> symbols) {
+        if (defaultChannel != null) {
+            symbols.forEach(this::subscribe);
+        }
+    }
+
     public void unsubscribe(String symbol) {
         if (defaultChannel != null)
             defaultChannel.unsubscribe(symbol);
@@ -456,7 +462,7 @@ public class DxLinkClient {
 
     // --- Inner Class: DxLinkChannel ---
 
-    public class DxLinkChannel {
+    public class DxLinkChannel implements AutoCloseable {
         private final int id;
         private final CompletableFuture<DxLinkChannel> initFuture = new CompletableFuture<>();
         private volatile boolean ready = false;
@@ -604,9 +610,6 @@ public class DxLinkClient {
 
         public void close() {
             // Enviar CHANNEL_CANCEL para cerrar el canal en el servidor.
-            // Sin esto, el canal queda como "fantasma" y DxLink rechaza nuevos canales
-            // con INVALID_MESSAGE. La spec dice: "Once the client has sent this message,
-            // the client can forget about the channel."
             sendMessage(Map.of("type", "CHANNEL_CANCEL", "channel", id));
             channels.remove(id);
         }
