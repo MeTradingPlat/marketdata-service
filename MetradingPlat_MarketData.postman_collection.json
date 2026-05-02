@@ -5,7 +5,98 @@
 		"description": "Coleccion completa de pruebas para el MarketData Service via metradingplat.net",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{jwt_token}}",
+				"type": "string"
+			}
+		]
+	},
 	"item": [
+		{
+			"name": "Auth",
+			"item": [
+				{
+					"name": "Login Admin (Editor)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    pm.collectionVariables.set(\"jwt_token\", pm.response.json().token);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"admin\",\n    \"password\": \"root\"\n}",
+							"options": {
+								"raw": { "language": "json" }
+							}
+						},
+						"url": {
+							"raw": "{{gatewayUrl}}/api/auth/login",
+							"host": ["{{gatewayUrl}}"],
+							"path": ["api", "auth", "login"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Login User (Viewer)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    pm.collectionVariables.set(\"jwt_token\", pm.response.json().token);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"user\",\n    \"password\": \"root\"\n}",
+							"options": {
+								"raw": { "language": "json" }
+							}
+						},
+						"url": {
+							"raw": "{{gatewayUrl}}/api/auth/login",
+							"host": ["{{gatewayUrl}}"],
+							"path": ["api", "auth", "login"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
 		{
 			"name": "Historical Data",
 			"item": [
@@ -193,6 +284,25 @@
 						}
 					},
 					"response": []
+				},
+				{
+					"name": "POST Batch Earnings (AAPL, TSLA, MSFT)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "[\"AAPL\", \"TSLA\", \"MSFT\"]"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/earnings/batch",
+							"host": ["{{baseUrl}}"],
+							"path": ["earnings", "batch"]
+						}
+					},
+					"response": []
 				}
 			]
 		},
@@ -206,13 +316,8 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/fundamentals/AAPL",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"fundamentals",
-								"AAPL"
-							]
+							"host": ["{{baseUrl}}"],
+							"path": ["fundamentals", "AAPL"]
 						}
 					},
 					"response": []
@@ -224,13 +329,8 @@
 						"header": [],
 						"url": {
 							"raw": "{{baseUrl}}/fundamentals/TSLA",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"fundamentals",
-								"TSLA"
-							]
+							"host": ["{{baseUrl}}"],
+							"path": ["fundamentals", "TSLA"]
 						}
 					},
 					"response": []
@@ -240,10 +340,7 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
+							{ "key": "Content-Type", "value": "application/json" }
 						],
 						"body": {
 							"mode": "raw",
@@ -251,13 +348,8 @@
 						},
 						"url": {
 							"raw": "{{baseUrl}}/fundamentals/batch",
-							"host": [
-								"{{baseUrl}}"
-							],
-							"path": [
-								"fundamentals",
-								"batch"
-							]
+							"host": ["{{baseUrl}}"],
+							"path": ["fundamentals", "batch"]
 						}
 					},
 					"response": []
@@ -430,8 +522,19 @@
 	],
 	"variable": [
 		{
+			"key": "gatewayUrl",
+			"value": "https://metradingplat.net",
+			"description": "URL base del servidor (para auth)"
+		},
+		{
 			"key": "baseUrl",
-			"value": "https://metradingplat.net/api/marketdata"
+			"value": "https://metradingplat.net/api/marketdata",
+			"description": "URL base del MarketData Service via Gateway"
+		},
+		{
+			"key": "jwt_token",
+			"value": "",
+			"description": "Token JWT, se llena automaticamente al hacer Login"
 		},
 		{
 			"key": "orderId",
