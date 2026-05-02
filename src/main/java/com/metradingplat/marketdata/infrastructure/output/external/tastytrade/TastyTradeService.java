@@ -218,6 +218,7 @@ public class TastyTradeService {
     public void shutdown() {
         log.info("Shutting down TastyTradeService...");
         dxLinkClient.disconnect();
+        scheduler.shutdown();
     }
 
     /**
