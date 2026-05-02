@@ -11,4 +11,5 @@ public interface OptionsMapper {
     OptionChainDTORespuesta toDTORespuesta(OptionChain domainModel);
     OptionContractDTORespuesta toDTORespuesta(OptionContract domainModel);
     java.util.List<OptionContractDTORespuesta> toDTOList(java.util.List<OptionContract> list);
+    java.util.Map<String, java.util.List<OptionContractDTORespuesta>> mapExpirations(java.util.Map<String, java.util.List<OptionContract>> value);
 }
