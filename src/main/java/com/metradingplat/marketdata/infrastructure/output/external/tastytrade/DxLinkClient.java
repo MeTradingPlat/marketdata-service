@@ -194,8 +194,25 @@ public class DxLinkClient {
     }
 
     public void subscribe(String symbol) { if (defaultChannel != null) defaultChannel.subscribe(symbol); subscribedSymbols.add(symbol); }
+    public void subscribe(List<String> symbols) { if (defaultChannel != null) symbols.forEach(this::subscribe); }
     public void unsubscribe(String symbol) { if (defaultChannel != null) defaultChannel.unsubscribe(symbol); subscribedSymbols.remove(symbol); }
     public boolean isConnected() { return session != null && session.isOpen() && authenticated; }
+
+    public void forceReconnect() {
+        reconnectAttempts.set(0);
+        cleanupConnection();
+        scheduleReconnect();
+    }
+
+    public Map<String, Object> getConnectionStats() {
+        return Map.of(
+                "connected", isConnected(),
+                "authenticated", authenticated,
+                "channels", channels.size(),
+                "activeSubscriptions", subscribedSymbols.size(),
+                "reconnectAttempts", reconnectAttempts.get(),
+                "reconnecting", reconnecting.get());
+    }
 
     @PreDestroy
     public void cleanup() { disconnect(); }
@@ -210,7 +227,7 @@ public class DxLinkClient {
         } catch (Exception e) { log.error("Send failed", e); }
     }
 
-    private void handleMessage(String payload) {
+    private void processRawMessage(String payload) {
         try {
             JsonNode msg = objectMapper.readTree(payload);
             String type = msg.path("type").asText();
@@ -257,6 +274,7 @@ public class DxLinkClient {
         public void addFundamentalListener(BiConsumer<String, FundamentalData> listener) { fundamentalListeners.add(listener); }
         public void addGreeksListener(BiConsumer<String, OptionContract> listener) { greeksListeners.add(listener); }
         public void addMessageListener(BiConsumer<String, JsonNode> listener) { messageListeners.add(listener); }
+        public void addMarketDataListener(BiConsumer<String, MarketDataStreamDTO> listener) { marketDataListeners.add(listener); }
         public void setOnMarketData(BiConsumer<String, MarketDataStreamDTO> cb) { marketDataListeners.clear(); marketDataListeners.add(cb); }
 
         public CompletableFuture<DxLinkChannel> initialize() {
@@ -331,7 +349,7 @@ public class DxLinkClient {
 
     private class DxLinkHandler extends TextWebSocketHandler {
         @Override public void afterConnectionEstablished(WebSocketSession s) { session = s; sendMessage(Map.of("type", "SETUP", "channel", 0, "version", "0.1-js/1.0.0", "keepaliveTimeout", 60, "acceptKeepaliveTimeout", 60)); }
-        @Override protected void handleTextMessage(WebSocketSession s, TextMessage m) { handleMessage(m.getPayload()); }
+        @Override protected void handleTextMessage(WebSocketSession s, TextMessage m) { processRawMessage(m.getPayload()); }
         @Override public void afterConnectionClosed(WebSocketSession s, CloseStatus st) { authenticated = false; channels.clear(); if (st.getCode() != CloseStatus.NORMAL.getCode()) scheduleReconnect(); }
     }
 }
