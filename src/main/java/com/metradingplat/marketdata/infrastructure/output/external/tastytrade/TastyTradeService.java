@@ -152,16 +152,18 @@ public class TastyTradeService {
         log.info("Batch fetch WebSocket History: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
 
         Instant now = Instant.now();
-        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy(bars));
+        // Sobre-aproximamos el tiempo (x1.5) para cubrir fines de semana y feriados
+        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
         
         // Validación de contexto temporal (Punto 6)
         long daysBetween = java.time.Duration.between(fromTime, now).toDays();
         boolean isIntraday = timeframe.getLabel().contains("m") || timeframe.getLabel().contains("h");
         
         if (isIntraday && daysBetween > 270) {
-            throw new IllegalArgumentException("El intervalo histórico para datos intradía excede los 9 meses soportados por el API.");
+            // Si el x1.5 se pasa de los 9 meses, bajamos al límite máximo permitido
+            fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
         } else if (daysBetween > 3650) { 
-            throw new IllegalArgumentException("El intervalo histórico excede el máximo de 10 años soportado.");
+            fromTime = now.minus(3650, java.time.temporal.ChronoUnit.DAYS);
         }
 
         String label = timeframe.getLabel(); // ej: "5m", "1d"
@@ -176,16 +178,9 @@ public class TastyTradeService {
         try {
             DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
             
-            // Listener para recolectar las velas del snapshot
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 candle.setTimeframe(timeframe);
                 resultado.computeIfAbsent(symbol, k -> new java.util.ArrayList<>()).add(candle);
-                
-                // Si el snapshot ha terminado (isSnapshotComplete=true en el último evento del snapshot)
-                if (isSnapshotComplete) {
-                    log.debug("Snapshot complete for {}", symbol);
-                    // Como pedimos batch, esperamos un poco más o contamos símbolos si fuera necesario
-                }
             });
 
             List<Map<String, Object>> subscriptionItems = symbols.stream()
@@ -201,9 +196,22 @@ public class TastyTradeService {
 
             channel.subscribeCandlesHistory(subscriptionItems, fromTime.toEpochMilli());
 
-            // Esperamos unos segundos para que se llene el buffer de velas (dxFeed es muy rápido)
+            // Esperamos a que se llene el snapshot
             scheduler.schedule(() -> {
-                channel.close(); // Cerramos el canal temporal
+                channel.close();
+                
+                // RECORTE FINAL (Simulando el parámetro 'limit')
+                resultado.forEach((symbol, candles) -> {
+                    // Ordenar por tiempo (por si acaso dxLink los manda desordenados, aunque no suele pasar)
+                    candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
+                    
+                    // Si tenemos más de las pedidas, nos quedamos con las últimas 'bars'
+                    if (candles.size() > bars) {
+                        List<Candle> truncated = new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size()));
+                        resultado.put(symbol, truncated);
+                    }
+                });
+                
                 future.complete(resultado);
             }, 3 + (symbols.size() / 10), TimeUnit.SECONDS);
 
