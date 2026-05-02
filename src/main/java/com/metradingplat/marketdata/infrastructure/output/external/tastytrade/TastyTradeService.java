@@ -305,7 +305,8 @@ public class TastyTradeService {
             });
 
             channel.subscribeFundamentalsBatch(normalizedSymbols);
-            dxLinkClient.subscribe(normalizedSymbols); // Suscribir también a quotes para el precio actual
+            // Suscribir a quotes para el precio actual (usando el nuevo método batch)
+            dxLinkClient.subscribe(normalizedSymbols); 
 
             try {
                 snapshotReceived.get(5 + (normalizedSymbols.size() / 50), TimeUnit.SECONDS);
