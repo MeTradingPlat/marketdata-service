@@ -100,7 +100,7 @@ class OrdersRestControllerTest {
     void cancelOrder_returnsNoContent() throws Exception {
         doNothing().when(useCase).cancelOrder("order-123");
 
-        mockMvc.perform(delete("/api/marketdata/orders/order-123"))
+        mockMvc.perform(delete("/marketdata/orders/order-123"))
                 .andExpect(status().isNoContent());
 
         verify(useCase).cancelOrder("order-123");
