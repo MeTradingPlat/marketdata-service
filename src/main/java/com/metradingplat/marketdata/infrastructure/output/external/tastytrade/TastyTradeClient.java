@@ -846,4 +846,34 @@ public class TastyTradeClient {
             throw e;
         }
     }
+
+    private Double safeConvertToDouble(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).doubleValue();
+        try {
+            return Double.parseDouble(val.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Long safeConvertToLong(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).longValue();
+        try {
+            return Long.parseLong(val.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Integer safeConvertToInt(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).intValue();
+        try {
+            return Integer.parseInt(val.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }
