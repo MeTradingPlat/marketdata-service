@@ -13,6 +13,7 @@ import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
+import com.metradingplat.marketdata.domain.models.ComplexOrderModels;
 import com.metradingplat.marketdata.domain.models.Candle;
 
 import org.springframework.scheduling.annotation.Scheduled;
@@ -456,72 +457,82 @@ public class TastyTradeClient {
      * POST /accounts/{accountNumber}/orders
      */
     public OrderResponse submitBracketOrder(BracketOrder order) {
-        return submitBracketOrderInternal(order, false);
+        return submitBracketOrderInternal(order, false, false);
     }
 
-    private OrderResponse submitBracketOrderInternal(BracketOrder order, boolean isRetry) {
-        log.info("Submitting bracket order: {} {} {} @ entry={} SL={} TP={}",
+    public ComplexOrderModels.DryRunResponse validateBracketOrder(BracketOrder order) {
+        return (ComplexOrderModels.DryRunResponse) submitBracketOrderInternal(order, false, true);
+    }
+
+    private Object submitBracketOrderInternal(BracketOrder order, boolean isRetry, boolean dryRun) {
+        log.info("{} bracket order: {} {} {} @ entry={} SL={} TP={}",
+                dryRun ? "Validating" : "Submitting",
                 order.getAction(), order.getQuantity(), order.getSymbol(),
                 order.getEntryPrice(), order.getStopLossPrice(), order.getTakeProfitPrice());
 
-        if (accessToken == null)
-            refreshAccessToken();
+        if (accessToken == null) refreshAccessToken();
 
-        // Accion de cierre inversa
-        String closeAction = order.getAction().name().contains("BUY")
-                ? "Sell to Close"
-                : "Buy to Close";
+        String entryAction = order.getAction().name().replace("_", " ");
+        String closeAction = order.getAction().name().contains("BUY") ? "Sell to Close" : "Buy to Close";
+        
+        // Determinar price-effect (Simplificado para Equity)
+        String entryEffect = order.getAction().name().contains("BUY") ? "Debit" : "Credit";
+        String closeEffect = order.getAction().name().contains("BUY") ? "Credit" : "Debit";
 
         // Leg de entrada
-        Map<String, Object> entryLeg = Map.of(
-                "instrument-type", "Equity",
-                "symbol", order.getSymbol(),
-                "quantity", order.getQuantity(),
-                "action", order.getAction().name().replace("_", " "));
+        var entryLeg = ComplexOrderModels.OrderLeg.builder()
+                .instrumentType("Equity")
+                .symbol(order.getSymbol())
+                .quantity(order.getQuantity())
+                .action(entryAction)
+                .build();
 
-        Map<String, Object> entryOrder = Map.of(
-                "time-in-force", order.getTimeInForce() != null ? order.getTimeInForce() : "Day",
-                "order-type", "Limit",
-                "price", order.getEntryPrice().toString(),
-                "legs", new Map[] { entryLeg });
+        var triggerOrder = ComplexOrderModels.SingleOrder.builder()
+                .timeInForce(order.getTimeInForce() != null ? order.getTimeInForce() : "Day")
+                .orderType("Limit")
+                .price(order.getEntryPrice().doubleValue())
+                .priceEffect(entryEffect)
+                .legs(List.of(entryLeg))
+                .build();
 
-        // Leg de take profit (LIMIT)
-        Map<String, Object> tpLeg = Map.of(
-                "instrument-type", "Equity",
-                "symbol", order.getSymbol(),
-                "quantity", order.getQuantity(),
-                "action", closeAction);
+        // Leg de salida (Reutilizable)
+        var exitLeg = ComplexOrderModels.OrderLeg.builder()
+                .instrumentType("Equity")
+                .symbol(order.getSymbol())
+                .quantity(order.getQuantity())
+                .action(closeAction)
+                .build();
 
-        Map<String, Object> tpOrder = Map.of(
-                "time-in-force", "GTC",
-                "order-type", "Limit",
-                "price", order.getTakeProfitPrice().toString(),
-                "legs", new Map[] { tpLeg });
+        // Orden Take Profit (Limit)
+        var tpOrder = ComplexOrderModels.SingleOrder.builder()
+                .timeInForce("GTC")
+                .orderType("Limit")
+                .price(order.getTakeProfitPrice().doubleValue())
+                .priceEffect(closeEffect)
+                .legs(List.of(exitLeg))
+                .build();
 
-        // Leg de stop loss (STOP)
-        Map<String, Object> slLeg = Map.of(
-                "instrument-type", "Equity",
-                "symbol", order.getSymbol(),
-                "quantity", order.getQuantity(),
-                "action", closeAction);
+        // Orden Stop Loss (Stop)
+        var slOrder = ComplexOrderModels.SingleOrder.builder()
+                .timeInForce("GTC")
+                .orderType("Stop")
+                .stopTrigger(order.getStopLossPrice().doubleValue())
+                .legs(List.of(exitLeg))
+                .build();
 
-        Map<String, Object> slOrder = Map.of(
-                "time-in-force", "GTC",
-                "order-type", "Stop",
-                "stop-trigger", order.getStopLossPrice().toString(),
-                "legs", new Map[] { slLeg });
+        var otoco = ComplexOrderModels.ComplexOrderRequest.builder()
+                .type("OTOCO")
+                .triggerOrder(triggerOrder)
+                .orders(List.of(tpOrder, slOrder))
+                .build();
 
-        // OTOCO: One Triggers One Cancels Other
-        Map<String, Object> otoco = Map.of(
-                "type", "OTOCO",
-                "trigger-order", entryOrder,
-                "orders", new Map[] { tpOrder, slOrder });
+        String endpoint = "/accounts/{accountNumber}/complex-orders" + (dryRun ? "/dry-run" : "");
 
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> response = tastyTradeRestClient
                     .post()
-                    .uri("/accounts/{accountNumber}/complex-orders", config.getAccountNumber())
+                    .uri(endpoint, config.getAccountNumber())
                     .header("Authorization", "Bearer " + accessToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(otoco)
@@ -529,11 +540,30 @@ public class TastyTradeClient {
                     .body(Map.class);
 
             if (response == null) {
-                throw new RuntimeException("Empty response from bracket order submission");
+                throw new RuntimeException("Empty response from order " + (dryRun ? "validation" : "submission"));
             }
 
             @SuppressWarnings("unchecked")
             Map<String, Object> data = (Map<String, Object>) response.get("data");
+
+            if (dryRun) {
+                log.info("Bracket order validation successful");
+                
+                @SuppressWarnings("unchecked")
+                Map<String, Object> bp = (Map<String, Object>) data.get("buying-power-effect");
+                List<String> warnings = (List<String>) data.get("warnings");
+
+                return ComplexOrderModels.DryRunResponse.builder()
+                        .status("VALIDATED")
+                        .warnings(warnings)
+                        .buyingPowerEffect(bp != null ? ComplexOrderModels.BuyingPowerEffect.builder()
+                                .changeInBuyingPower(safeConvertToDouble(bp.get("change-in-buying-power")))
+                                .currentBuyingPower(safeConvertToDouble(bp.get("current-buying-power")))
+                                .newBuyingPower(safeConvertToDouble(bp.get("new-buying-power")))
+                                .buyingPowerEffectSign(safeConvertToInt(bp.get("buying-power-effect-sign")))
+                                .build() : null)
+                        .build();
+            }
 
             return OrderResponse.builder()
                     .orderId(String.valueOf(data.get("id")))
@@ -542,10 +572,10 @@ public class TastyTradeClient {
                     .build();
 
         } catch (Exception e) {
-            log.error("Bracket order submission failed", e);
+            log.error("Bracket order {} failed", dryRun ? "validation" : "submission", e);
             if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
                 refreshAccessToken();
-                return submitBracketOrderInternal(order, true);
+                return submitBracketOrderInternal(order, true, dryRun);
             }
             throw new RuntimeException("Bracket order failed: " + e.getMessage(), e);
         }
