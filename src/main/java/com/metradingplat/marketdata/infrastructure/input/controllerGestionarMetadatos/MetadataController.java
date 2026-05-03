@@ -1,7 +1,7 @@
 package com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos;
 
-import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.context.MessageSource;
 import org.springframework.context.i18n.LocaleContextHolder;
@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.metradingplat.marketdata.application.input.GestionarFundamentalsCUIntPort;
 import com.metradingplat.marketdata.application.input.GestionarMercadosCUIntPort;
-import com.metradingplat.marketdata.domain.enums.EnumMercado;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
@@ -35,9 +34,21 @@ public class MetadataController {
         private final GestionarFundamentalsCUIntPort objGestionarFundamentalsCUInt;
         private final MetadataMapper objMapper;
 
+        // Dynamic mapping for MIC codes to friendly names as TastyTrade doesn't provide them in a master list
+        private static final Map<String, String> MARKET_NAME_MAP = Map.of(
+            "XNAS", "NASDAQ",
+            "XNYS", "NYSE",
+            "XASE", "AMEX",
+            "ARCX", "NYSE ARCA (ETFs)",
+            "BATS", "CBOE BZX (ETFs)",
+            "OTC", "OTC Markets",
+            "CME", "Chicago Mercantile Exchange",
+            "CFE", "CBOE Futures Exchange"
+        );
+
         @GetMapping("/timeframes")
         public List<TimeframeDTORespuesta> getTimeframes() {
-                return Arrays.stream(EnumTimeframe.values())
+                return java.util.Arrays.stream(EnumTimeframe.values())
                                 .map(tf -> TimeframeDTORespuesta.builder()
                                                 .id(tf.name())
                                                 .codigo(tf.getLabel())
@@ -51,20 +62,17 @@ public class MetadataController {
 
         @GetMapping("/markets")
         public List<MercadoDTORespuesta> getMarkets() {
-                List<String> dynamicMarkets = this.objGestionarMercadosCUInt.obtenerMercadosDisponibles();
+                // Discovery: Get unique markets currently active in TastyTrade
+                List<String> discoveredMics = this.objGestionarMercadosCUInt.obtenerMercadosDisponibles();
                 
-                return dynamicMarkets.stream()
+                return discoveredMics.stream()
                                 .map(mic -> {
-                                        // Attempt to find a matching EnumMercado by its MIC codes
-                                        String name = Arrays.stream(EnumMercado.values())
-                                                        .filter(m -> m.getMicCodes().contains(mic))
-                                                        .map(EnumMercado::getName)
-                                                        .findFirst()
-                                                        .orElse(mic); // Fallback to MIC code if unknown
-
+                                        String upperMic = mic.toUpperCase();
+                                        String friendlyName = MARKET_NAME_MAP.getOrDefault(upperMic, upperMic);
+                                        
                                         return MercadoDTORespuesta.builder()
                                                         .id(mic.toLowerCase())
-                                                        .nombre(name)
+                                                        .nombre(friendlyName)
                                                         .build();
                                 })
                                 .toList();
