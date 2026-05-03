@@ -292,33 +292,64 @@ public class TastyTradeClient {
     }
 
     /**
-     * Obtiene detalles técnicos de un equity (shares outstanding, etc).
-     * GET /instruments/equities/{symbol}
+     * Obtiene detalles técnicos de varios equities en una sola llamada.
+     * Formato: ?symbol[]=AAPL&symbol[]=MSFT
      */
     @SuppressWarnings("unchecked")
-    public Map<String, Object> getEquityDetails(String symbol) {
-        return getEquityDetailsInternal(symbol, false);
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> getEquityDetailsInternal(String symbol, boolean isRetry) {
+    public List<Map<String, Object>> getEquitiesBatch(List<String> symbols) {
         if (accessToken == null) refreshAccessToken();
+        
         try {
             Map<String, Object> response = tastyTradeRestClient
                     .get()
-                    .uri("/instruments/equities/{symbol}", symbol)
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/instruments/equities");
+                        for (String s : symbols) {
+                            uriBuilder.queryParam("symbol[]", s);
+                        }
+                        return uriBuilder.build();
+                    })
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .body(Map.class);
-            if (response == null || !response.containsKey("data")) return Map.of();
-            return (Map<String, Object>) response.get("data");
+            
+            if (response == null || !response.containsKey("data")) return List.of();
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+            return items != null ? items : List.of();
         } catch (Exception e) {
-            log.error("Failed to get equity details for {}: {}", symbol, e.getMessage());
-            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
-                refreshAccessToken();
-                return getEquityDetailsInternal(symbol, true);
-            }
-            return Map.of();
+            log.error("Failed to get equities batch: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Obtiene cotizaciones en batch (REST).
+     * Formato: ?equity=AAPL,MSFT
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getMarketDataBatch(List<String> symbols) {
+        if (accessToken == null) refreshAccessToken();
+        
+        String commaSeparated = String.join(",", symbols);
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/market-data/by-type")
+                            .queryParam("equity", commaSeparated)
+                            .build())
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+            
+            if (response == null || !response.containsKey("data")) return List.of();
+            Map<String, Object> data = (Map<String, Object>) response.get("data");
+            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+            return items != null ? items : List.of();
+        } catch (Exception e) {
+            log.error("Failed to get market data batch: {}", e.getMessage());
+            return List.of();
         }
     }
 

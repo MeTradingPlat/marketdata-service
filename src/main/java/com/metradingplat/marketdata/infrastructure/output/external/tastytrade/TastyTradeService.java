@@ -325,8 +325,12 @@ public class TastyTradeService {
         return tastyTradeClient.getActiveEquities(pageOffset, perPage);
     }
 
-    public Map<String, Object> getEquityDetails(String symbol) {
-        return tastyTradeClient.getEquityDetails(symbol);
+    public List<Map<String, Object>> getEquitiesBatch(List<String> symbols) {
+        return tastyTradeClient.getEquitiesBatch(symbols);
+    }
+
+    public List<Map<String, Object>> getMarketDataBatch(List<String> symbols) {
+        return tastyTradeClient.getMarketDataBatch(symbols);
     }
 
     public Map<String, Object> getMarketDataByType(String symbol) {
@@ -468,21 +472,41 @@ public class TastyTradeService {
             log.warn("No se pudo enriquecer con Market Metrics REST: {}", e.getMessage());
         }
 
-        // Enriquecimiento con Instrument Details (para Shares Outstanding y Float)
+        // Enriquecimiento con Instrument Details en BATCH (para Shares Outstanding y Float)
         try {
-            for (String sym : normalizedSymbols) {
-                FundamentalData fund = fundamentalsMap.get(sym);
-                if (fund != null && (fund.getSharesOutstanding() == null || fund.getFloatShares() == null)) {
-                    Map<String, Object> details = getEquityDetails(sym);
-                    if (details != null && !details.isEmpty()) {
-                        if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(details.get("shares-outstanding")));
-                        if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(details.get("free-float")));
-                        if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(details.get("beta")));
-                    }
+            List<Map<String, Object>> instrumentItems = getEquitiesBatch(normalizedSymbols);
+            for (Map<String, Object> item : instrumentItems) {
+                String sym = (String) item.get("symbol");
+                if (sym == null) continue;
+                FundamentalData fund = fundamentalsMap.get(sym.toUpperCase());
+                if (fund != null) {
+                    if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(item.get("shares-outstanding")));
+                    if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(item.get("free-float")));
+                    if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(item.get("beta")));
                 }
             }
         } catch (Exception e) {
-            log.warn("No se pudo enriquecer con Instrument Details REST: {}", e.getMessage());
+            log.warn("No se pudo enriquecer con Instrument Details REST Batch: {}", e.getMessage());
+        }
+
+        // Fallback de Cotizaciones OHLC en BATCH (REST) si dxLink falló o está en silencio (Fin de semana)
+        try {
+            List<Map<String, Object>> ohlcItems = getMarketDataBatch(normalizedSymbols);
+            for (Map<String, Object> item : ohlcItems) {
+                String sym = (String) item.get("symbol");
+                if (sym == null) continue;
+                FundamentalData fund = fundamentalsMap.get(sym.toUpperCase());
+                if (fund != null) {
+                    if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
+                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("high")));
+                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("low")));
+                    if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
+                    // market-cap institucional desde quote REST si el calculado por dxLink falló
+                    if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(item.get("market-cap")));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("No se pudo enriquecer con Market Data REST Batch: {}", e.getMessage());
         }
 
         return fundamentalsMap;
