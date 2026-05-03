@@ -24,6 +24,8 @@ public class Candle {
     private Double low;
     private Double close;
     private Double volume;
+    private Double vwap;
+    private Double impVolatility;
 
     public LocalDateTime getLocalDateTime() {
         return LocalDateTime.ofInstant(timestamp, ZoneId.systemDefault());

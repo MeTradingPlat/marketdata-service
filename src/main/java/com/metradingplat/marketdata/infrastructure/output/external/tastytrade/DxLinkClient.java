@@ -82,6 +82,7 @@ public class DxLinkClient {
     private static final List<String> PROFILE_FIELDS = List.of("eventSymbol", "shares", "earningsPerShare", "exDividendAmount", "dividendFrequency", "tradingStatus", "statusReason", "haltStartTime", "haltEndTime", "beta", "freeFloat");
     private static final List<String> TRADE_ETH_FIELDS = List.of("eventSymbol", "dayVolume", "extendedTradingHours", "time");
     private static final List<String> GREEKS_FIELDS = List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice");
+    private static final List<String> CANDLE_FIELDS = List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility");
 
     private static final int IDX_SYMBOL = 1;
     private static final int IDX_TRADE_PRICE = 2;
@@ -111,6 +112,14 @@ public class DxLinkClient {
     private static final int IDX_GRK_VEGA = 6;
     private static final int IDX_GRK_RHO = 7;
     private static final int IDX_GRK_THEO = 8;
+    private static final int IDX_CAND_TIME = 2;
+    private static final int IDX_CAND_OPEN = 3;
+    private static final int IDX_CAND_HIGH = 4;
+    private static final int IDX_CAND_LOW = 5;
+    private static final int IDX_CAND_CLOSE = 6;
+    private static final int IDX_CAND_VOL = 7;
+    private static final int IDX_CAND_VWAP = 8;
+    private static final int IDX_CAND_IV = 9;
 
     public interface CandleCallback {
         void onCandle(String symbol, Candle candle, boolean isSnapshotComplete);
@@ -308,15 +317,25 @@ public class DxLinkClient {
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
         }
 
-        public void subscribeCandlesHistory(List<Map<String, Object>> items, long fromTime) {
-            List<Map<String, Object>> itemsWithTime = items.stream().map(item -> { Map<String, Object> ni = new java.util.HashMap<>(item); ni.put("fromTime", fromTime); return ni; }).toList();
-            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", itemsWithTime));
+        public void subscribeCandlesHistory(String symbol, String timeframe, long fromTime) {
+            String candleSymbol = String.format("%s{=%s}", symbol, timeframe);
+            log.info("📊 Solicitando Time-Series desde {} para {}", fromTime, candleSymbol);
+            
+            sendMessage(Map.of(
+                "type", "FEED_SUBSCRIPTION", 
+                "channel", id, 
+                "add", List.of(Map.of(
+                    "symbol", candleSymbol, 
+                    "type", "Candle", 
+                    "fromTime", fromTime
+                ))
+            ));
         }
 
         public void close() { sendMessage(Map.of("type", "CHANNEL_CANCEL", "channel", id)); channels.remove(id); }
 
         private void handleOpened() {
-            sendMessage(Map.of("type", "FEED_SETUP", "channel", id, "acceptAggregationPeriod", 1.5, "acceptDataFormat", "COMPACT", "acceptEventFields", Map.of("Quote", QUOTE_FIELDS, "Trade", TRADE_FIELDS, "Summary", SUMMARY_FIELDS, "Profile", PROFILE_FIELDS, "TradeETH", TRADE_ETH_FIELDS, "Greeks", GREEKS_FIELDS, "Message", List.of("eventSymbol", "eventTime", "messageType", "message"), "Candle", List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
+            sendMessage(Map.of("type", "FEED_SETUP", "channel", id, "acceptAggregationPeriod", 1.5, "acceptDataFormat", "COMPACT", "acceptEventFields", Map.of("Quote", QUOTE_FIELDS, "Trade", TRADE_FIELDS, "Summary", SUMMARY_FIELDS, "Profile", PROFILE_FIELDS, "TradeETH", TRADE_ETH_FIELDS, "Greeks", GREEKS_FIELDS, "Message", List.of("eventSymbol", "eventTime", "messageType", "message"), "Candle", CANDLE_FIELDS)));
         }
 
         private void handleConfigured() { this.ready = true; initFuture.complete(this); if (this == defaultChannel) startKeepalive(); }
@@ -359,6 +378,21 @@ public class DxLinkClient {
                     }
                     case "Profile" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).sharesOutstanding(data.path(IDX_PROF_SHARES).asLong()).eps(extractNumericSafe(data.get(IDX_PROF_EPS))).dividendAmount(extractNumericSafe(data.get(IDX_PROF_DIV_AMT))).dividendFrequency(data.path(IDX_PROF_DIV_FREQ).asText()).tradingStatus(data.path(IDX_PROF_STATUS).asText()).statusReason(data.path(IDX_PROF_STATUS_RSN).asText()).haltStartTime(data.path(IDX_PROF_HALT_START).asLong()).haltEndTime(data.path(IDX_PROF_HALT_END).asLong()).beta(extractNumericSafe(data.get(IDX_PROF_BETA))).floatShares(data.path(IDX_PROF_FLOAT).asLong()).build());
                     case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol).impliedVolatility(extractNumericSafe(data.get(IDX_GRK_IV))).delta(extractNumericSafe(data.get(IDX_GRK_DELTA))).gamma(extractNumericSafe(data.get(IDX_GRK_GAMMA))).theta(extractNumericSafe(data.get(IDX_GRK_THETA))).vega(extractNumericSafe(data.get(IDX_GRK_VEGA))).rho(extractNumericSafe(data.get(IDX_GRK_RHO))).theoreticalPrice(extractNumericSafe(data.get(IDX_GRK_THEO))).build());
+                    case "Candle" -> {
+                        long time = data.path(IDX_CAND_TIME).asLong();
+                        boolean isComplete = data.path(10).asInt() != 0; // Flags o similar si existen
+                        notifyCandle(symbol, Candle.builder()
+                                .symbol(symbol)
+                                .timestamp(Instant.ofEpochMilli(time))
+                                .open(extractNumericSafe(data.get(IDX_CAND_OPEN)))
+                                .high(extractNumericSafe(data.get(IDX_CAND_HIGH)))
+                                .low(extractNumericSafe(data.get(IDX_CAND_LOW)))
+                                .close(extractNumericSafe(data.get(IDX_CAND_CLOSE)))
+                                .volume(extractNumericSafe(data.get(IDX_CAND_VOL)))
+                                .vwap(extractNumericSafe(data.get(IDX_CAND_VWAP)))
+                                .impVolatility(extractNumericSafe(data.get(IDX_CAND_IV)))
+                                .build(), isComplete);
+                    }
                 }
             } catch (Exception e) { log.error("Compact error processing event type: " + type, e); }
         }
@@ -386,6 +420,7 @@ public class DxLinkClient {
         private void notifyMarketData(String s, MarketDataStreamDTO d) { marketDataListeners.forEach(l -> { try { l.accept(s, d); } catch (Exception e) {} }); }
         private void notifyFundamentals(String s, FundamentalData d) { fundamentalListeners.forEach(l -> { try { l.accept(s, d); } catch (Exception e) {} }); }
         private void notifyGreeks(String s, OptionContract d) { greeksListeners.forEach(l -> { try { l.accept(s, d); } catch (Exception e) {} }); }
+        private void notifyCandle(String s, Candle c, boolean complete) { candleListeners.forEach(l -> { try { l.onCandle(s, c, complete); } catch (Exception e) {} }); }
         private boolean isPreMarket(long t) { java.time.ZonedDateTime ny = Instant.ofEpochMilli(t).atZone(java.time.ZoneId.of("America/New_York")); int h = ny.getHour(); int m = ny.getMinute(); return (h < 9) || (h == 9 && m < 30); }
         void failInitialization(String r) { initFuture.completeExceptionally(new RuntimeException(r)); channels.remove(id); }
     }

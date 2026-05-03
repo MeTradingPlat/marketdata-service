@@ -169,6 +169,21 @@ public class TastyTradeService {
     }
 
     /**
+     * Suscribe a velas históricas + live streaming (Time-Series Engine).
+     */
+    public void subscribeToCandles(String symbol, EnumTimeframe timeframe, int daysBack) {
+        log.info("📊 Subscribing to Time-Series for {}: {} ({} days back)", 
+                symbol, timeframe, daysBack);
+        ensureConnected();
+        
+        long fromTime = Instant.now().minus(daysBack, ChronoUnit.DAYS).toEpochMilli();
+        // El formato dxLinkFormat ya trae "{=1m}", extraemos solo el valor "1m"
+        String tf = timeframe.getDxLinkFormat().replace("{=", "").replace("}", "");
+        
+        dxLinkClient.getDefaultChannel().subscribeCandlesHistory(symbol, tf, fromTime);
+    }
+
+    /**
      * Obtiene candles historicos de un solo simbolo. Delega al metodo batch.
      */
     public List<Candle> getCandles(String symbol, EnumTimeframe timeframe) {
