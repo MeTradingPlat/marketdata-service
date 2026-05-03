@@ -332,6 +332,15 @@ public class DxLinkClient {
             ));
         }
 
+        public void subscribeCandlesHistory(List<Map<String, Object>> items, long fromTime) {
+            List<Map<String, Object>> itemsWithTime = items.stream().map(item -> { 
+                Map<String, Object> ni = new java.util.HashMap<>(item); 
+                ni.put("fromTime", fromTime); 
+                return ni; 
+            }).toList();
+            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", itemsWithTime));
+        }
+
         public void close() { sendMessage(Map.of("type", "CHANNEL_CANCEL", "channel", id)); channels.remove(id); }
 
         private void handleOpened() {
