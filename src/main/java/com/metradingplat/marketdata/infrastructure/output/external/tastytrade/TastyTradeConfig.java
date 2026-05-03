@@ -18,6 +18,7 @@ public class TastyTradeConfig {
     private String accountNumber;
     private String apiBaseUrl = "https://api.tastyworks.com";
     private String dxlinkUrl = "wss://tasty.dxfeed.com/realtime";
+    private String accountStreamerUrl = "wss://streamer.tastyworks.com";
     
     private DxlinkConfig dxlink = new DxlinkConfig();
     private TokenRefreshConfig tokenRefresh = new TokenRefreshConfig();
