@@ -441,8 +441,20 @@ public class TastyTradeService {
                 if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(metric.get("market-cap")));
                 if (fund.getEps() == null) fund.setEps(safeConvertToDouble(metric.get("earnings-per-share")));
                 if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(metric.get("beta")));
+
+                // Dividend Enrichment
+                if (fund.getDividendAmount() == null) fund.setDividendAmount(safeConvertToDouble(metric.get("dividend-rate-per-share")));
                 
-                Object earningsDateValue = metric.get("earnings-report-date");
+                // Next Earnings Date from nested 'earnings' object
+                Object earningsObj = metric.get("earnings");
+                Object earningsDateValue = null;
+                if (earningsObj instanceof Map) {
+                    Map<String, Object> eMap = (Map<String, Object>) earningsObj;
+                    earningsDateValue = eMap.get("estimated-report-date");
+                    if (earningsDateValue == null) earningsDateValue = eMap.get("actual-report-date");
+                }
+                if (earningsDateValue == null) earningsDateValue = metric.get("earnings-report-date"); // Legacy/Defensive
+
                 if (earningsDateValue instanceof String) {
                     try {
                         LocalDate earningsDate = LocalDate.parse((String) earningsDateValue);
