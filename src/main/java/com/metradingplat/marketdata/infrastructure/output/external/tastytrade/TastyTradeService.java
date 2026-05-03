@@ -530,6 +530,7 @@ public class TastyTradeService {
         tastyTradeClient.cancelOrder(orderId);
     }
 
+    private void ensureConnected() {
         if (!dxLinkClient.isConnected()) {
             log.debug("Reconnecting to DxLink");
             String token = tastyTradeClient.getApiQuoteToken();
@@ -538,8 +539,6 @@ public class TastyTradeService {
         }
         
         // Conexión al Account Streamer
-        // En una implementación real, esto se manejaría con un flag de conexión o evento de inicio
-        // Por ahora lo aseguramos aquí
         String accessToken = tastyTradeClient.getAccessToken();
         String streamerUrl = tastyTradeClient.getAccountStreamerUrl();
         accountStreamerClient.connect(streamerUrl, accessToken);

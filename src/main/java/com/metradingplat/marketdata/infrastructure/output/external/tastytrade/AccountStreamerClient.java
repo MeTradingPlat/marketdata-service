@@ -105,10 +105,11 @@ public class AccountStreamerClient implements WebSocket.Listener {
     }
 
     @Override
-    public void onClose(WebSocket webSocket, int statusCode, String reason) {
+    public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
         log.warn("Account Streamer connection closed: {} - {}", statusCode, reason);
         this.authenticated = false;
         // TODO: Implementar reconexión automática
+        return null;
     }
 
     @Override
