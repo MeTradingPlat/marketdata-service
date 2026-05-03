@@ -126,9 +126,13 @@ public class TastyTradeService {
         });
 
         dxLinkClient.setOnGreeks((symbol, greeks) -> {
-            log.debug("Greeks received for {}: Delta={}, IV={}", symbol, greeks.getDelta(), greeks.getImpliedVolatility());
+            Double iv = greeks.getImpliedVolatility();
+            if (iv != null && iv > 1.0) { // Señal de alta volatilidad (>100% IV)
+                log.warn("🔥 [ALPHA SIGNAL] Volatilidad Extrema en {}: IV={}% | Delta={}", 
+                        symbol, Math.round(iv * 100), greeks.getDelta());
+            }
+            
             greeksCache.put(symbol, greeks);
-            // Aquí se podría publicar a Kafka si fuera necesario
         });
     }
 
@@ -139,9 +143,24 @@ public class TastyTradeService {
     }
 
     public void subscribe(String symbol) {
-        log.info("Subscribing to real-time data: {}", symbol);
+        log.info("Subscribing to real-time data and Alpha Metrics: {}", symbol);
         ensureConnected();
+        
+        // 1. Ingesta de Datos (dxLink)
         dxLinkClient.subscribe(symbol);
+        
+        // 2. Enriquecimiento Alpha (REST Market Metrics)
+        CompletableFuture.runAsync(() -> {
+            try {
+                List<Map<String, Object>> metrics = tastyTradeClient.getMarketMetricsBatch(List.of(symbol));
+                if (!metrics.isEmpty()) {
+                    log.info("📊 Alpha Metrics hídricas para {}: IV Rank={}", symbol, metrics.get(0).get("implied-volatility-index-rank"));
+                    // TODO: Actualizar caché global de fundamentales con estos datos
+                }
+            } catch (Exception e) {
+                log.warn("Falla silenciosa en Alpha Enrichment para {}", symbol);
+            }
+        });
     }
 
     public void unsubscribe(String symbol) {
