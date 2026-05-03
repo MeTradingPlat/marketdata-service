@@ -40,7 +40,8 @@
 						},
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"body": {
 							"mode": "raw",
@@ -78,7 +79,8 @@
 						},
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"body": {
 							"mode": "raw",
@@ -104,7 +106,9 @@
 					"name": "GET Candles AAPL M5 (100 barras)",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/historical/AAPL?timeframe=M5&bars=100",
 							"host": ["{{baseUrl}}"],
@@ -121,7 +125,9 @@
 					"name": "GET Candles SPY H1 (50 barras)",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/historical/SPY?timeframe=H1&bars=50",
 							"host": ["{{baseUrl}}"],
@@ -138,7 +144,9 @@
 					"name": "GET Barra en Formacion AAPL M5",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/historical/AAPL/current?timeframe=M5",
 							"host": ["{{baseUrl}}"],
@@ -154,7 +162,9 @@
 					"name": "GET Ultima Candle Cerrada TSLA M15",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/historical/TSLA/last?timeframe=M15",
 							"host": ["{{baseUrl}}"],
@@ -171,7 +181,8 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"body": {
 							"mode": "raw",
@@ -190,7 +201,8 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"body": {
 							"mode": "raw",
@@ -209,7 +221,8 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"body": {
 							"mode": "raw",
@@ -232,7 +245,9 @@
 					"name": "GET Quote AAPL",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/quote/AAPL",
 							"host": ["{{baseUrl}}"],
@@ -245,7 +260,9 @@
 					"name": "GET Quote SPY",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/quote/SPY",
 							"host": ["{{baseUrl}}"],
@@ -263,7 +280,9 @@
 					"name": "GET Earnings AAPL",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/earnings/AAPL",
 							"host": ["{{baseUrl}}"],
@@ -276,7 +295,9 @@
 					"name": "GET Earnings TSLA",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/earnings/TSLA",
 							"host": ["{{baseUrl}}"],
@@ -290,7 +311,8 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"body": {
 							"mode": "raw",
@@ -313,7 +335,9 @@
 					"name": "GET Fundamentals AAPL",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/fundamentals/AAPL",
 							"host": ["{{baseUrl}}"],
@@ -326,7 +350,9 @@
 					"name": "GET Fundamentals TSLA",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/fundamentals/TSLA",
 							"host": ["{{baseUrl}}"],
@@ -340,7 +366,8 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"body": {
 							"mode": "raw",
@@ -363,7 +390,9 @@
 					"name": "GET Option Chain AAPL",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/options/chain/AAPL",
 							"host": ["{{baseUrl}}"],
@@ -382,7 +411,8 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Accept-Language", "value": "es" }
+							{ "key": "Accept-Language", "value": "es" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/timeframes",
@@ -397,7 +427,8 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Accept-Language", "value": "en" }
+							{ "key": "Accept-Language", "value": "en" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/timeframes",
@@ -412,7 +443,8 @@
 					"request": {
 						"method": "GET",
 						"header": [
-							{ "key": "Accept-Language", "value": "es" }
+							{ "key": "Accept-Language", "value": "es" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/markets",
@@ -426,7 +458,9 @@
 					"name": "GET Symbols by Markets (US Equities)",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/symbols?markets=NYSE,NASDAQ",
 							"host": ["{{baseUrl}}"],
@@ -442,7 +476,9 @@
 					"name": "GET Symbols by Markets (ETF)",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/symbols?markets=ETF",
 							"host": ["{{baseUrl}}"],
@@ -464,7 +500,8 @@
 					"request": {
 						"method": "POST",
 						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 						],
 						"body": {
 							"mode": "raw",
@@ -482,7 +519,9 @@
 					"name": "DELETE Cancelar Orden",
 					"request": {
 						"method": "DELETE",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/orders/{{orderId}}",
 							"host": ["{{baseUrl}}"],
@@ -500,7 +539,9 @@
 					"name": "GET Estado DxLink WebSocket",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/health/dxlink/status",
 							"host": ["{{baseUrl}}"],
@@ -513,7 +554,9 @@
 					"name": "GET Spring Actuator Health",
 					"request": {
 						"method": "GET",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/actuator/health",
 							"host": ["{{baseUrl}}"],
@@ -526,7 +569,9 @@
 					"name": "POST Forzar Reconexion DxLink",
 					"request": {
 						"method": "POST",
-						"header": [],
+						"header": [
+							{ "key": "User-Agent", "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
+						],
 						"url": {
 							"raw": "{{baseUrl}}/marketdata/health/dxlink/reconnect",
 							"host": ["{{baseUrl}}"],
