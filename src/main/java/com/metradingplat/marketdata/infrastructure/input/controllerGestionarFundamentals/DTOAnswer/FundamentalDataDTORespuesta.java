@@ -30,6 +30,13 @@ public class FundamentalDataDTORespuesta {
     private String tradingStatus;
     private String statusReason;
     private Long haltStartTime;
-    private Long haltEndTime;
+    private Double haltEndTime;
     private Double beta;
+    
+    // Market Metrics
+    private Double impliedVolatilityIndex;
+    private Double impliedVolatilityRank;
+    private Double impliedVolatilityPercentile;
+    private Double liquidity;
+    private Integer liquidityRating;
 }

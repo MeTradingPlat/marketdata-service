@@ -227,6 +227,13 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
                     if (rt.getPrevClose() != null) existing.setPrevClose(rt.getPrevClose());
                     if (rt.getOpenInterest() != null) existing.setOpenInterest(rt.getOpenInterest());
 
+                    // IV and Liquidity fields from Market Metrics
+                    if (rt.getImpliedVolatilityIndex() != null) existing.setImpliedVolatilityIndex(rt.getImpliedVolatilityIndex());
+                    if (rt.getImpliedVolatilityRank() != null) existing.setImpliedVolatilityRank(rt.getImpliedVolatilityRank());
+                    if (rt.getImpliedVolatilityPercentile() != null) existing.setImpliedVolatilityPercentile(rt.getImpliedVolatilityPercentile());
+                    if (rt.getLiquidity() != null) existing.setLiquidity(rt.getLiquidity());
+                    if (rt.getLiquidityRating() != null) existing.setLiquidityRating(rt.getLiquidityRating());
+
                     // Prioritize nextEarningsDate from market-metrics if detailed fetch didn't happen or is old
                     if (rt.getNextEarningsDate() != null) {
                         existing.setNextEarningsDate(rt.getNextEarningsDate());
