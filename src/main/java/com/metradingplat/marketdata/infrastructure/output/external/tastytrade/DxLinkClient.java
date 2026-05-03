@@ -377,7 +377,7 @@ public class DxLinkClient {
                 case "Infinity" -> Double.POSITIVE_INFINITY;
                 case "-Infinity" -> Double.NEGATIVE_INFINITY;
                 default -> {
-                    try { return Double.parseDouble(textVal); } 
+                    try { yield Double.parseDouble(textVal); } 
                     catch (NumberFormatException e) { yield Double.NaN; }
                 }
             };
