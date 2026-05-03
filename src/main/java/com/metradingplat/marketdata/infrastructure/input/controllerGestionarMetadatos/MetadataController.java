@@ -11,11 +11,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.metradingplat.marketdata.application.input.GestionarFundamentalsCUIntPort;
 import com.metradingplat.marketdata.application.input.GestionarMercadosCUIntPort;
+import com.metradingplat.marketdata.domain.enums.EnumMercado;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
+import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.ActiveEquityDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.MercadoDTORespuesta;
+import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.SymbolDetailsDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.TimeframeDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.mapper.MetadataMapper;
 
@@ -28,6 +32,7 @@ public class MetadataController {
 
         private final MessageSource messageSource;
         private final GestionarMercadosCUIntPort objGestionarMercadosCUInt;
+        private final GestionarFundamentalsCUIntPort objGestionarFundamentalsCUInt;
         private final MetadataMapper objMapper;
 
         @GetMapping("/timeframes")
@@ -46,44 +51,40 @@ public class MetadataController {
 
         @GetMapping("/markets")
         public List<MercadoDTORespuesta> getMarkets() {
-                return List.of(
-                                MercadoDTORespuesta.builder()
-                                                .id("nyse")
-                                                .nombre(messageSource.getMessage("market.nyse", null, "NYSE",
+                return Arrays.stream(EnumMercado.values())
+                                .map(m -> MercadoDTORespuesta.builder()
+                                                .id(m.getCode().toLowerCase())
+                                                .nombre(messageSource.getMessage("market." + m.getCode().toLowerCase(),
+                                                                null,
+                                                                m.getName(),
                                                                 LocaleContextHolder.getLocale()))
-                                                .build(),
-                                MercadoDTORespuesta.builder()
-                                                .id("nasdaq")
-                                                .nombre(messageSource.getMessage("market.nasdaq", null, "NASDAQ",
-                                                                LocaleContextHolder.getLocale()))
-                                                .build(),
-                                MercadoDTORespuesta.builder()
-                                                .id("amex")
-                                                .nombre(messageSource.getMessage("market.amex", null, "AMEX",
-                                                                LocaleContextHolder.getLocale()))
-                                                .build(),
-                                MercadoDTORespuesta.builder()
-                                                .id("arca")
-                                                .nombre(messageSource.getMessage("market.arca", null, "ARCA",
-                                                                LocaleContextHolder.getLocale()))
-                                                .build(),
-                                MercadoDTORespuesta.builder()
-                                                .id("bats")
-                                                .nombre(messageSource.getMessage("market.bats", null, "BATS",
-                                                                LocaleContextHolder.getLocale()))
-                                                .build(),
-                                MercadoDTORespuesta.builder()
-                                                .id("otc")
-                                                .nombre(messageSource.getMessage("market.otc", null, "OTC",
-                                                                LocaleContextHolder.getLocale()))
-                                                .build());
+                                                .build())
+                                .toList();
         }
 
         @GetMapping("/symbols")
         public ResponseEntity<List<ActiveEquityDTORespuesta>> obtenerSimbolos(
-                        @RequestParam("markets") List<String> markets) {
+                        @RequestParam(value = "markets", required = false) List<String> markets) {
                 List<ActiveEquity> activeEquities = this.objGestionarMercadosCUInt.obtenerSimbolosPorMercados(markets);
                 List<ActiveEquityDTORespuesta> respuesta = this.objMapper.deActiveEquitiesARespuestas(activeEquities);
+                return ResponseEntity.ok(respuesta);
+        }
+
+        @GetMapping("/symbols/{symbol}/details")
+        public ResponseEntity<SymbolDetailsDTORespuesta> obtenerDetallesSimbolo(
+                        @org.springframework.web.bind.annotation.PathVariable("symbol") String symbol) {
+                // Get ActiveEquity info from cache/service
+                List<ActiveEquity> activeEquities = this.objGestionarMercadosCUInt.obtenerSimbolosPorMercados(null);
+                ActiveEquity activeEquity = activeEquities.stream()
+                                .filter(eq -> eq.getSymbol().equalsIgnoreCase(symbol))
+                                .findFirst()
+                                .orElse(ActiveEquity.builder().symbol(symbol).description("").listedMarket("").build());
+
+                // Get Fundamentals
+                FundamentalData fundamentals = this.objGestionarFundamentalsCUInt.obtenerFundamentals(symbol);
+
+                SymbolDetailsDTORespuesta respuesta = this.objMapper.deActiveEquityYSymbolDetailsARespuesta(activeEquity,
+                                fundamentals);
                 return ResponseEntity.ok(respuesta);
         }
 }

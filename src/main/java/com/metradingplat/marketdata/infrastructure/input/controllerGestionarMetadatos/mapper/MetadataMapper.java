@@ -10,6 +10,7 @@ import com.metradingplat.marketdata.domain.enums.EnumMercado;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.ActiveEquityDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.MercadoDTORespuesta;
+import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.SymbolDetailsDTORespuesta;
 
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.IGNORE)
 public interface MetadataMapper {
@@ -23,4 +24,11 @@ public interface MetadataMapper {
     ActiveEquityDTORespuesta deDominioARespuesta(ActiveEquity activeEquity);
 
     List<ActiveEquityDTORespuesta> deActiveEquitiesARespuestas(List<ActiveEquity> activeEquities);
+
+    default SymbolDetailsDTORespuesta deActiveEquityYSymbolDetailsARespuesta(ActiveEquity activeEquity, com.metradingplat.marketdata.domain.models.FundamentalData fundamentalData) {
+        return SymbolDetailsDTORespuesta.builder()
+                .activeEquity(deDominioARespuesta(activeEquity))
+                .fundamentalData(fundamentalData)
+                .build();
+    }
 }
