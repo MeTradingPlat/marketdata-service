@@ -39,6 +39,9 @@ public class TastyTradeClient {
     private volatile String apiQuoteToken;
     private volatile String dxlinkUrl;
 
+    private static final int MAX_RETRIES = 3;
+    private static final long INITIAL_BACKOFF_MS = 2000;
+
     /**
      * Obtiene access token usando OAuth refresh_token flow.
      */
@@ -273,6 +276,13 @@ public class TastyTradeClient {
 
         } catch (Exception e) {
             log.error("Failed to get active equities: {}", e.getMessage());
+            
+            // 429 Backoff Handling (Steering Rule)
+            if (e.getMessage() != null && e.getMessage().contains("429")) {
+                log.warn("HTTP 429 Too Many Requests in getActiveEquities. Retrying with backoff...");
+                return executeWithBackoff(() -> getActiveEquitiesInternal(pageOffset, perPage, true), 1);
+            }
+
             if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
                 refreshAccessToken();
                 return getActiveEquitiesInternal(pageOffset, perPage, true);
@@ -701,6 +711,31 @@ public class TastyTradeClient {
                 return getOptionChainNestedInternal(symbol, true);
             }
             return Map.of();
+        }
+    }
+
+    private <T> T executeWithBackoff(java.util.function.Supplier<T> action, int retryCount) {
+        if (retryCount > MAX_RETRIES) {
+            log.error("Max retries reached for 429 error.");
+            return action.get();
+        }
+        
+        long waitTime = INITIAL_BACKOFF_MS * (long) Math.pow(2, retryCount - 1);
+        log.info("Backoff retry {}/{} - waiting {}ms", retryCount, MAX_RETRIES, waitTime);
+        
+        try {
+            Thread.sleep(waitTime);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+        
+        try {
+            return action.get();
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("429")) {
+                return executeWithBackoff(action, retryCount + 1);
+            }
+            throw e;
         }
     }
 }

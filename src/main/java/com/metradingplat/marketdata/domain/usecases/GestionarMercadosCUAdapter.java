@@ -23,7 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
 
     private static final Duration CACHE_TTL = Duration.ofHours(1);
-    private static final int PAGE_SIZE = 1000;
+    private static final int PAGE_SIZE = 5000;
 
     private final GestionarComunicacionExternalGatewayIntPort objExternalGateway;
 
@@ -73,6 +73,13 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
             allEquities.addAll(batch);
             if (batch.size() < PAGE_SIZE) break;
             page++;
+            
+            try {
+                Thread.sleep(500); // Throttling preventivo base (Steering Rule)
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
         }
 
         cachedEquities = Collections.unmodifiableList(allEquities);

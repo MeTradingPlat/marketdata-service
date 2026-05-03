@@ -138,7 +138,7 @@ public class DxLinkClient {
             container.setDefaultMaxSessionIdleTimeout(120000);
             StandardWebSocketClient client = new StandardWebSocketClient(container);
             WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
-            headers.add("User-Agent", "metradingplat/1.0");
+            headers.add("User-Agent", "QuantMaestro/2.0.0");
             client.execute(new DxLinkHandler(), headers, java.net.URI.create(url)).get(30, TimeUnit.SECONDS);
 
             int waitCount = 0;
@@ -308,7 +308,7 @@ public class DxLinkClient {
         public void close() { sendMessage(Map.of("type", "CHANNEL_CANCEL", "channel", id)); channels.remove(id); }
 
         private void handleOpened() {
-            sendMessage(Map.of("type", "FEED_SETUP", "channel", id, "acceptAggregationPeriod", 0.1, "acceptDataFormat", "COMPACT", "acceptEventFields", Map.of("Quote", QUOTE_FIELDS, "Trade", TRADE_FIELDS, "Summary", SUMMARY_FIELDS, "Profile", PROFILE_FIELDS, "TradeETH", TRADE_ETH_FIELDS, "Greeks", GREEKS_FIELDS, "Message", List.of("eventSymbol", "eventTime", "messageType", "message"), "Candle", List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
+            sendMessage(Map.of("type", "FEED_SETUP", "channel", id, "acceptAggregationPeriod", 1.5, "acceptDataFormat", "COMPACT", "acceptEventFields", Map.of("Quote", QUOTE_FIELDS, "Trade", TRADE_FIELDS, "Summary", SUMMARY_FIELDS, "Profile", PROFILE_FIELDS, "TradeETH", TRADE_ETH_FIELDS, "Greeks", GREEKS_FIELDS, "Message", List.of("eventSymbol", "eventTime", "messageType", "message"), "Candle", List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "eventFlags"))));
         }
 
         private void handleConfigured() { this.ready = true; initFuture.complete(this); if (this == defaultChannel) startKeepalive(); }

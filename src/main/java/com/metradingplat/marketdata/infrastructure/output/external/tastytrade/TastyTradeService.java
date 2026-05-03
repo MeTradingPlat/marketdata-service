@@ -274,6 +274,7 @@ public class TastyTradeService {
             for (int i = 0; i < allOptionSymbols.size(); i += 100) {
                 List<String> chunk = allOptionSymbols.subList(i, Math.min(i + 100, allOptionSymbols.size()));
                 dxLinkClient.subscribe(chunk);
+                try { Thread.sleep(50); } catch (InterruptedException ignored) {} // Throttle
             }
         }
 
