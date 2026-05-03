@@ -294,63 +294,79 @@ public class TastyTradeClient {
     /**
      * Obtiene detalles técnicos de varios equities en una sola llamada.
      * Formato: ?symbol[]=AAPL&symbol[]=MSFT
+     * Particionamiento: Chunks de 250 símbolos para evitar URLs excesivamente largas.
      */
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getEquitiesBatch(List<String> symbols) {
         if (accessToken == null) refreshAccessToken();
         
-        try {
-            Map<String, Object> response = tastyTradeRestClient
-                    .get()
-                    .uri(uriBuilder -> {
-                        uriBuilder.path("/instruments/equities");
-                        for (String s : symbols) {
-                            uriBuilder.queryParam("symbol[]", s);
-                        }
-                        return uriBuilder.build();
-                    })
-                    .header("Authorization", "Bearer " + accessToken)
-                    .retrieve()
-                    .body(Map.class);
-            
-            if (response == null || !response.containsKey("data")) return List.of();
-            Map<String, Object> data = (Map<String, Object>) response.get("data");
-            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
-            return items != null ? items : List.of();
-        } catch (Exception e) {
-            log.error("Failed to get equities batch: {}", e.getMessage());
-            return List.of();
+        List<Map<String, Object>> allItems = new ArrayList<>();
+        int chunkSize = 250;
+
+        for (int i = 0; i < symbols.size(); i += chunkSize) {
+            List<String> chunk = symbols.subList(i, Math.min(i + chunkSize, symbols.size()));
+            try {
+                Map<String, Object> response = tastyTradeRestClient
+                        .get()
+                        .uri(uriBuilder -> {
+                            uriBuilder.path("/instruments/equities");
+                            for (String s : chunk) {
+                                uriBuilder.queryParam("symbol[]", s);
+                            }
+                            return uriBuilder.build();
+                        })
+                        .header("Authorization", "Bearer " + accessToken)
+                        .retrieve()
+                        .body(Map.class);
+                
+                if (response != null && response.containsKey("data")) {
+                    Map<String, Object> data = (Map<String, Object>) response.get("data");
+                    List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+                    if (items != null) allItems.addAll(items);
+                }
+            } catch (Exception e) {
+                log.error("Failed to get equities batch chunk at index {}: {}", i, e.getMessage());
+            }
         }
+        return allItems;
     }
 
     /**
      * Obtiene cotizaciones en batch (REST).
      * Formato: ?equity=AAPL,MSFT
+     * Particionamiento: Chunks de 100 símbolos (Límite rígido de la API para market-data).
      */
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> getMarketDataBatch(List<String> symbols) {
         if (accessToken == null) refreshAccessToken();
         
-        String commaSeparated = String.join(",", symbols);
-        try {
-            Map<String, Object> response = tastyTradeRestClient
-                    .get()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/market-data/by-type")
-                            .queryParam("equity", commaSeparated)
-                            .build())
-                    .header("Authorization", "Bearer " + accessToken)
-                    .retrieve()
-                    .body(Map.class);
-            
-            if (response == null || !response.containsKey("data")) return List.of();
-            Map<String, Object> data = (Map<String, Object>) response.get("data");
-            List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
-            return items != null ? items : List.of();
-        } catch (Exception e) {
-            log.error("Failed to get market data batch: {}", e.getMessage());
-            return List.of();
+        List<Map<String, Object>> allItems = new ArrayList<>();
+        int chunkSize = 100; // Límite estricto de TastyTrade para /market-data/by-type
+
+        for (int i = 0; i < symbols.size(); i += chunkSize) {
+            List<String> chunk = symbols.subList(i, Math.min(i + chunkSize, symbols.size()));
+            String commaSeparated = String.join(",", chunk);
+            try {
+                Map<String, Object> response = tastyTradeRestClient
+                        .get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path("/market-data/by-type")
+                                .queryParam("equity", commaSeparated)
+                                .build())
+                        .header("Authorization", "Bearer " + accessToken)
+                        .retrieve()
+                        .body(Map.class);
+                
+                if (response != null && response.containsKey("data")) {
+                    Map<String, Object> data = (Map<String, Object>) response.get("data");
+                    List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
+                    if (items != null) allItems.addAll(items);
+                }
+            } catch (Exception e) {
+                log.error("Failed to get market data batch chunk at index {}: {}", i, e.getMessage());
+            }
         }
+        return allItems;
     }
 
     /**
