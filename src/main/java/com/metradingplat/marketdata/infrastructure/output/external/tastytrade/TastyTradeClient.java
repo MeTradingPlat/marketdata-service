@@ -457,7 +457,7 @@ public class TastyTradeClient {
      * POST /accounts/{accountNumber}/orders
      */
     public OrderResponse submitBracketOrder(BracketOrder order) {
-        return submitBracketOrderInternal(order, false, false);
+        return (OrderResponse) submitBracketOrderInternal(order, false, false);
     }
 
     public ComplexOrderModels.DryRunResponse validateBracketOrder(BracketOrder order) {
