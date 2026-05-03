@@ -48,6 +48,7 @@ public class TastyTradeService {
 
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
+    private final AccountStreamerClient accountStreamerClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
     private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
@@ -529,13 +530,19 @@ public class TastyTradeService {
         tastyTradeClient.cancelOrder(orderId);
     }
 
-    private void ensureConnected() {
         if (!dxLinkClient.isConnected()) {
             log.debug("Reconnecting to DxLink");
             String token = tastyTradeClient.getApiQuoteToken();
             String url = tastyTradeClient.getDxlinkUrl();
             dxLinkClient.connect(url, token);
         }
+        
+        // Conexión al Account Streamer
+        // En una implementación real, esto se manejaría con un flag de conexión o evento de inicio
+        // Por ahora lo aseguramos aquí
+        String accessToken = tastyTradeClient.getAccessToken();
+        String streamerUrl = tastyTradeClient.getAccountStreamerUrl();
+        accountStreamerClient.connect(streamerUrl, accessToken);
     }
 
     private Double safeConvertToDouble(Object val) {

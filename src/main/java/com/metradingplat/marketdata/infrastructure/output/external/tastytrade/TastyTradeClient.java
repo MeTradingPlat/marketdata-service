@@ -231,6 +231,10 @@ public class TastyTradeClient {
         return accessToken;
     }
 
+    public String getAccountStreamerUrl() {
+        return config.getAccountStreamerUrl(); // wss://streamer.tastyworks.com
+    }
+
     /**
      * Obtiene equities activos (paginado) desde TastyTrade.
      * GET /instruments/equities/active?per-page={perPage}&page-offset={pageOffset}
