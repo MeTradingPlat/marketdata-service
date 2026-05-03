@@ -25,15 +25,33 @@ public class AccountStreamerClient implements WebSocket.Listener {
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private WebSocket webSocket;
     private String sessionToken;
-    private boolean authenticated = false;
+    private String currentUrl;
+    private volatile boolean authenticated = false;
+    private final java.util.concurrent.atomic.AtomicInteger reconnectAttempts = new java.util.concurrent.atomic.AtomicInteger(0);
+    private OrderEventListener orderListener;
+
+    public interface OrderEventListener {
+        void onOrderEvent(String orderId, String symbol, String status, JsonNode fullData);
+    }
+
+    public void setOrderListener(OrderEventListener listener) {
+        this.orderListener = listener;
+    }
 
     public void connect(String url, String token) {
         this.sessionToken = token;
+        this.currentUrl = url;
         log.info("Connecting to Account Streamer: {}", url);
         
-        HttpClient.newHttpClient().newWebSocketBuilder()
-                .buildAsync(URI.create(url), this)
-                .join();
+        try {
+            HttpClient.newHttpClient().newWebSocketBuilder()
+                    .buildAsync(URI.create(url), this)
+                    .join();
+            reconnectAttempts.set(0);
+        } catch (Exception e) {
+            log.error("Failed to connect to Account Streamer: {}", e.getMessage());
+            scheduleReconnect();
+        }
     }
 
     @Override
@@ -91,11 +109,14 @@ public class AccountStreamerClient implements WebSocket.Listener {
         
         log.info("Order Event: {} | Symbol: {} | Status: {}", orderId, symbol, status);
         
+        if (orderListener != null) {
+            orderListener.onOrderEvent(orderId, symbol, status, data);
+        }
+
         if ("Filled".equals(status)) {
             double remaining = data.path("remaining-quantity").asDouble();
             if (remaining == 0) {
                 log.info("⚡ [FULL FILL] Order {} for {} fully executed.", orderId, symbol);
-                // TODO: Notificar al resto del sistema vía EventBus o Callback
             } else {
                 log.info("⏳ [PARTIAL FILL] Order {} for {} has {} remaining.", orderId, symbol, remaining);
             }
@@ -108,8 +129,14 @@ public class AccountStreamerClient implements WebSocket.Listener {
     public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
         log.warn("Account Streamer connection closed: {} - {}", statusCode, reason);
         this.authenticated = false;
-        // TODO: Implementar reconexión automática
+        scheduleReconnect();
         return null;
+    }
+
+    private void scheduleReconnect() {
+        int delay = Math.min(30, (int) Math.pow(2, reconnectAttempts.getAndIncrement()));
+        log.info("Scheduling Account Streamer reconnection in {} seconds...", delay);
+        scheduler.schedule(() -> connect(currentUrl, sessionToken), delay, TimeUnit.SECONDS);
     }
 
     @Override

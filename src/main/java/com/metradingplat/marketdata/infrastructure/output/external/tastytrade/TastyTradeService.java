@@ -56,6 +56,12 @@ public class TastyTradeService {
     private final ConcurrentHashMap<String, Long> lastMarketDataUpdates = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, OptionContract> greeksCache = new ConcurrentHashMap<>();
 
+    // Cachés Globales L1 (Arquitectura de Resiliencia)
+    private final ConcurrentHashMap<String, FundamentalData> fundamentalsCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Double> lastPricesCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Map<String, Object>> positionsCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Map<String, Object>> liveOrdersCache = new ConcurrentHashMap<>();
+
     @PostConstruct
     public void init() {
         log.info("Initializing TastyTrade service and Synchronizing State...");
@@ -154,8 +160,17 @@ public class TastyTradeService {
             try {
                 List<Map<String, Object>> metrics = tastyTradeClient.getMarketMetricsBatch(List.of(symbol));
                 if (!metrics.isEmpty()) {
-                    log.info("📊 Alpha Metrics hídricas para {}: IV Rank={}", symbol, metrics.get(0).get("implied-volatility-index-rank"));
-                    // TODO: Actualizar caché global de fundamentales con estos datos
+                    Map<String, Object> m = metrics.get(0);
+                    log.info("📊 Alpha Metrics hídricas para {}: IV Rank={}", symbol, m.get("implied-volatility-index-rank"));
+                    
+                    String upperSym = symbol.toUpperCase();
+                    FundamentalData fund = fundamentalsCache.computeIfAbsent(upperSym, k -> FundamentalData.builder().symbol(k).build());
+                    fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
+                    fund.setImpliedVolatilityRank(safeConvertToDouble(m.get("implied-volatility-index-rank")));
+                    fund.setImpliedVolatilityPercentile(safeConvertToDouble(m.get("implied-volatility-percentile")));
+                    fund.setLiquidity(safeConvertToDouble(m.get("liquidity-value")));
+                    fund.setLiquidityRating(safeConvertToInt(m.get("liquidity-rating")));
+                    fund.setShortRatio(safeConvertToDouble(m.get("short-ratio")));
                 }
             } catch (Exception e) {
                 log.warn("Falla silenciosa en Alpha Enrichment para {}", symbol);
@@ -389,18 +404,14 @@ public class TastyTradeService {
         
         log.info("Batch fundamentals: {} simbolos via dxLink", normalizedSymbols.size());
         ensureConnected();
-
-        ConcurrentHashMap<String, FundamentalData> fundamentalsMap = new ConcurrentHashMap<>();
-        ConcurrentHashMap<String, Double> lastPrices = new ConcurrentHashMap<>();
+        
         CompletableFuture<Void> snapshotReceived = new CompletableFuture<>();
         Set<String> symbolsWithProfile = ConcurrentHashMap.newKeySet();
 
-        try (DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS)) {
-            
-            // Listener para capturar todo: Profile, Summary y Quotes (para el Market Cap)
+        try (DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel()) {
             channel.addFundamentalListener((sym, data) -> {
                 String upperSym = sym.toUpperCase();
-                fundamentalsMap.merge(upperSym, data, (v1, v2) -> {
+                fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
                     // Combinar datos de Profile y Summary
                     if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
                     if (v2.getEps() != null) v1.setEps(v2.getEps());
@@ -422,20 +433,16 @@ public class TastyTradeService {
                     if (v2.getPostMarketVolume() != null) v1.setPostMarketVolume(v2.getPostMarketVolume());
                     return v1;
                 });
-
-                // Si recibimos acciones, marcamos como perfil recibido
-                if (data.getSharesOutstanding() != null) {
-                    symbolsWithProfile.add(upperSym);
-                    if (symbolsWithProfile.size() >= normalizedSymbols.size()) {
-                        snapshotReceived.complete(null);
-                    }
+                symbolsWithProfile.add(upperSym);
+                if (symbolsWithProfile.size() >= normalizedSymbols.size()) {
+                    snapshotReceived.complete(null);
                 }
             });
 
             // También escuchamos el precio en vivo para calcular el Market Cap (Punto 2 del notebook)
             channel.addMarketDataListener((sym, data) -> {
                 if (data.getLastPrice() != null) {
-                    lastPrices.put(sym.toUpperCase(), data.getLastPrice());
+                    lastPricesCache.put(sym.toUpperCase(), data.getLastPrice());
                 }
             });
 
@@ -450,12 +457,15 @@ public class TastyTradeService {
             }
 
             // Calculamos el Market Cap dinámico: Shares * Last Price (con fallback a prevClose)
-            fundamentalsMap.forEach((sym, fund) -> {
-                Double lastPrice = lastPrices.get(sym);
-                Double basePrice = (lastPrice != null) ? lastPrice : fund.getPrevClose();
-                
-                if (basePrice != null && fund.getSharesOutstanding() != null) {
-                    fund.setMarketCap(fund.getSharesOutstanding() * basePrice);
+            normalizedSymbols.forEach(sym -> {
+                FundamentalData fund = fundamentalsCache.get(sym);
+                if (fund != null) {
+                    Double lastPrice = lastPricesCache.get(sym);
+                    Double basePrice = (lastPrice != null) ? lastPrice : fund.getPrevClose();
+                    
+                    if (basePrice != null && fund.getSharesOutstanding() != null) {
+                        fund.setMarketCap(fund.getSharesOutstanding() * basePrice);
+                    }
                 }
             });
 
@@ -471,7 +481,7 @@ public class TastyTradeService {
                 if (sym == null) continue;
                 String finalSym = sym.toUpperCase();
                 
-                FundamentalData fund = fundamentalsMap.computeIfAbsent(finalSym, k -> FundamentalData.builder().symbol(k).build());
+                FundamentalData fund = fundamentalsCache.computeIfAbsent(finalSym, k -> FundamentalData.builder().symbol(k).build());
 
                 if (metric.get("implied-volatility-index") != null) fund.setImpliedVolatilityIndex(safeConvertToDouble(metric.get("implied-volatility-index")));
                 if (metric.get("implied-volatility-index-rank") != null) fund.setImpliedVolatilityRank(safeConvertToDouble(metric.get("implied-volatility-index-rank")));
@@ -549,7 +559,11 @@ public class TastyTradeService {
             log.warn("No se pudo enriquecer con Market Data REST Batch: {}", e.getMessage());
         }
 
-        return fundamentalsMap;
+        return normalizedSymbols.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                    s -> s,
+                    s -> fundamentalsCache.getOrDefault(s, FundamentalData.builder().symbol(s).build())
+                ));
     }
 
     public List<Map<String, Object>> getEarningsReports(String symbol, String startDate) {
@@ -591,7 +605,18 @@ public class TastyTradeService {
                         log.info("✅ Sincronización Exitosa: {} posiciones y {} órdenes conciliadas.", 
                                 positions.size(), orders.size());
                         
-                        // TODO: Hidratar caché L1 de posiciones y órdenes en memoria
+                        // Hidratar caché L1 de posiciones y órdenes en memoria
+                        positionsCache.clear();
+                        positions.forEach(p -> {
+                            Object sym = p.get("symbol");
+                            if (sym != null) positionsCache.put(sym.toString(), p);
+                        });
+
+                        liveOrdersCache.clear();
+                        orders.forEach(o -> {
+                            Object id = o.get("id");
+                            if (id != null) liveOrdersCache.put(id.toString(), o);
+                        });
                     }).get(10, TimeUnit.SECONDS);
                     
         } catch (Exception e) {

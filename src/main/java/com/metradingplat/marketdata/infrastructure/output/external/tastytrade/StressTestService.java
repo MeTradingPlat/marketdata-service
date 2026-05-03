@@ -1,5 +1,6 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
+import com.metradingplat.marketdata.domain.enums.EnumOrderAction;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -54,11 +55,11 @@ public class StressTestService {
         com.metradingplat.marketdata.domain.models.BracketOrder dummyOrder = 
             com.metradingplat.marketdata.domain.models.BracketOrder.builder()
                 .symbol("AAPL")
-                .action("BUY")
-                .quantity(1.0)
-                .price(150.0)
-                .takeProfitPrice(160.0)
-                .stopLossPrice(140.0)
+                .action(EnumOrderAction.BUY_TO_OPEN)
+                .quantity(1)
+                .entryPrice(java.math.BigDecimal.valueOf(150.0))
+                .takeProfitPrice(java.math.BigDecimal.valueOf(160.0))
+                .stopLossPrice(java.math.BigDecimal.valueOf(140.0))
                 .build();
 
         for (int i = 0; i < count; i++) {
