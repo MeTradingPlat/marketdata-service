@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.metradingplat.marketdata.application.input.GestionarFundamentalsCUIntPort;
 import com.metradingplat.marketdata.application.input.GestionarMercadosCUIntPort;
+import com.metradingplat.marketdata.domain.enums.EnumMercado;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
@@ -50,11 +51,22 @@ public class MetadataController {
 
         @GetMapping("/markets")
         public List<MercadoDTORespuesta> getMarkets() {
-                return this.objGestionarMercadosCUInt.obtenerMercadosDisponibles().stream()
-                                .map(m -> MercadoDTORespuesta.builder()
-                                                .id(m.toLowerCase())
-                                                .nombre(m)
-                                                .build())
+                List<String> dynamicMarkets = this.objGestionarMercadosCUInt.obtenerMercadosDisponibles();
+                
+                return dynamicMarkets.stream()
+                                .map(mic -> {
+                                        // Attempt to find a matching EnumMercado by its MIC codes
+                                        String name = Arrays.stream(EnumMercado.values())
+                                                        .filter(m -> m.getMicCodes().contains(mic))
+                                                        .map(EnumMercado::getName)
+                                                        .findFirst()
+                                                        .orElse(mic); // Fallback to MIC code if unknown
+
+                                        return MercadoDTORespuesta.builder()
+                                                        .id(mic.toLowerCase())
+                                                        .nombre(name)
+                                                        .build();
+                                })
                                 .toList();
         }
 
