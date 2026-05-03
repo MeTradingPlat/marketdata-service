@@ -396,9 +396,9 @@ public class TastyTradeService {
             dxLinkClient.subscribe(normalizedSymbols); 
 
             try {
-                snapshotReceived.get(5 + (normalizedSymbols.size() / 50), TimeUnit.SECONDS);
+                snapshotReceived.get(8 + (normalizedSymbols.size() / 20), TimeUnit.SECONDS);
             } catch (TimeoutException e) {
-                log.warn("Timeout esperando snapshots de fundamentals. Recibidos {}/{}", symbolsWithProfile.size(), normalizedSymbols.size());
+                log.warn("Timeout esperando snapshots de fundamentals via dxLink. Recibidos {}/{}", symbolsWithProfile.size(), normalizedSymbols.size());
             }
 
             // Calculamos el Market Cap dinámico: Shares * Last Price (con fallback a prevClose)
@@ -425,14 +425,18 @@ public class TastyTradeService {
                 
                 FundamentalData fund = fundamentalsMap.computeIfAbsent(finalSym, k -> FundamentalData.builder().symbol(k).build());
 
-                if (metric.get("implied-volatility-index") != null) fund.setImpliedVolatilityIndex(((Number) metric.get("implied-volatility-index")).doubleValue());
-                if (metric.get("implied-volatility-index-rank") != null) fund.setImpliedVolatilityRank(((Number) metric.get("implied-volatility-index-rank")).doubleValue());
-                if (metric.get("implied-volatility-percentile") != null) fund.setImpliedVolatilityPercentile(((Number) metric.get("implied-volatility-percentile")).doubleValue());
-                if (metric.get("liquidity-value") != null) fund.setLiquidity(((Number) metric.get("liquidity-value")).doubleValue());
-                if (metric.get("liquidity-rating") != null) fund.setLiquidityRating(((Number) metric.get("liquidity-rating")).intValue());
+                if (metric.get("implied-volatility-index") != null) fund.setImpliedVolatilityIndex(safeConvertToDouble(metric.get("implied-volatility-index")));
+                if (metric.get("implied-volatility-index-rank") != null) fund.setImpliedVolatilityRank(safeConvertToDouble(metric.get("implied-volatility-index-rank")));
+                if (metric.get("implied-volatility-percentile") != null) fund.setImpliedVolatilityPercentile(safeConvertToDouble(metric.get("implied-volatility-percentile")));
+                if (metric.get("liquidity-value") != null) fund.setLiquidity(safeConvertToDouble(metric.get("liquidity-value")));
+                if (metric.get("liquidity-rating") != null) fund.setLiquidityRating(safeConvertToInt(metric.get("liquidity-rating")));
 
-                Object shortRatioValue = metric.get("short-ratio");
-                if (shortRatioValue instanceof Number) fund.setShortRatio(((Number) shortRatioValue).doubleValue());
+                fund.setShortRatio(safeConvertToDouble(metric.get("short-ratio")));
+                
+                // REST as primary fallback if dxLink failed
+                if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(metric.get("market-cap")));
+                if (fund.getEps() == null) fund.setEps(safeConvertToDouble(metric.get("earnings-per-share")));
+                if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(metric.get("beta")));
                 
                 Object earningsDateValue = metric.get("earnings-report-date");
                 if (earningsDateValue instanceof String) {
@@ -475,5 +479,26 @@ public class TastyTradeService {
             String url = tastyTradeClient.getDxlinkUrl();
             dxLinkClient.connect(url, token);
         }
+    }
+
+    private Double safeConvertToDouble(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).doubleValue();
+        try { return Double.parseDouble(val.toString()); } 
+        catch (Exception e) { return null; }
+    }
+
+    private Long safeConvertToLong(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).longValue();
+        try { return Long.parseLong(val.toString()); } 
+        catch (Exception e) { return null; }
+    }
+
+    private Integer safeConvertToInt(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).intValue();
+        try { return Integer.parseInt(val.toString()); } 
+        catch (Exception e) { return null; }
     }
 }
