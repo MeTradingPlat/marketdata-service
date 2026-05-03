@@ -60,10 +60,8 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
 
         // If market exists in EnumMercado, use its MIC codes. 
         // Otherwise, assume the user provided the MIC code directly (dynamic case).
-        Set<String> micFilter = EnumMercado.toMicCodes(userMarkets);
-        if (micFilter.isEmpty()) {
-            micFilter = userMarkets;
-        }
+        Set<String> initialMicFilter = EnumMercado.toMicCodes(userMarkets);
+        final Set<String> micFilter = initialMicFilter.isEmpty() ? userMarkets : initialMicFilter;
 
         log.info("Filtrando equities por mercados: {} -> MIC codes: {}, total en cache: {}", userMarkets, micFilter, cachedEquities.size());
 
