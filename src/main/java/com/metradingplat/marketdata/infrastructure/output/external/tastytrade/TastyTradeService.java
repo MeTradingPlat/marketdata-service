@@ -488,12 +488,6 @@ public class TastyTradeService {
         catch (Exception e) { return null; }
     }
 
-    private Long safeConvertToLong(Object val) {
-        if (val == null) return null;
-        if (val instanceof Number) return ((Number) val).longValue();
-        try { return Long.parseLong(val.toString()); } 
-        catch (Exception e) { return null; }
-    }
 
     private Integer safeConvertToInt(Object val) {
         if (val == null) return null;
