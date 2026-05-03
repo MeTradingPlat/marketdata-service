@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.metradingplat.marketdata.application.input.GestionarFundamentalsCUIntPort;
 import com.metradingplat.marketdata.application.input.GestionarMercadosCUIntPort;
-import com.metradingplat.marketdata.domain.enums.EnumMercado;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
@@ -51,13 +50,10 @@ public class MetadataController {
 
         @GetMapping("/markets")
         public List<MercadoDTORespuesta> getMarkets() {
-                return Arrays.stream(EnumMercado.values())
+                return this.objGestionarMercadosCUInt.obtenerMercadosDisponibles().stream()
                                 .map(m -> MercadoDTORespuesta.builder()
-                                                .id(m.getCode().toLowerCase())
-                                                .nombre(messageSource.getMessage("market." + m.getCode().toLowerCase(),
-                                                                null,
-                                                                m.getName(),
-                                                                LocaleContextHolder.getLocale()))
+                                                .id(m.toLowerCase())
+                                                .nombre(m)
                                                 .build())
                                 .toList();
         }

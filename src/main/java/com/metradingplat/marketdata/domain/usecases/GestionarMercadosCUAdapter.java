@@ -36,6 +36,17 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
     }
 
     @Override
+    public List<String> obtenerMercadosDisponibles() {
+        cargarEquitiesSiNecesario();
+        return cachedEquities.stream()
+                .map(ActiveEquity::getListedMarket)
+                .filter(m -> m != null && !m.isBlank())
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
+    }
+
+    @Override
     public List<ActiveEquity> obtenerSimbolosPorMercados(List<String> markets) {
         cargarEquitiesSiNecesario();
 
@@ -47,8 +58,12 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
             return new ArrayList<>(cachedEquities);
         }
 
-        // Convert user-facing codes (NYSE, NASDAQ) to TastyTrade MIC codes (XNYS, XNAS)
+        // If market exists in EnumMercado, use its MIC codes. 
+        // Otherwise, assume the user provided the MIC code directly (dynamic case).
         Set<String> micFilter = EnumMercado.toMicCodes(userMarkets);
+        if (micFilter.isEmpty()) {
+            micFilter = userMarkets;
+        }
 
         log.info("Filtrando equities por mercados: {} -> MIC codes: {}, total en cache: {}", userMarkets, micFilter, cachedEquities.size());
 

@@ -9,5 +9,7 @@ public interface GestionarMercadosCUIntPort {
 
     List<EnumMercado> listarMercados();
 
+    List<String> obtenerMercadosDisponibles();
+
     List<ActiveEquity> obtenerSimbolosPorMercados(List<String> markets);
 }
