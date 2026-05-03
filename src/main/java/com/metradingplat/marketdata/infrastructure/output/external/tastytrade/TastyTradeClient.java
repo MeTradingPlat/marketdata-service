@@ -593,6 +593,76 @@ public class TastyTradeClient {
         cancelOrderInternal(orderId, false);
     }
 
+    /**
+     * Obtiene las posiciones actuales del broker.
+     * GET /accounts/{accountNumber}/positions
+     */
+    public List<Map<String, Object>> getPositions() {
+        return getPositionsInternal(false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> getPositionsInternal(boolean isRetry) {
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri("/accounts/{accountNumber}/positions", config.getAccountNumber())
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response != null && response.containsKey("data")) {
+                Map<String, Object> data = (Map<String, Object>) response.get("data");
+                return (List<Map<String, Object>>) data.get("items");
+            }
+            return new ArrayList<>();
+        } catch (Exception e) {
+            log.error("Failed to fetch positions", e);
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
+                refreshAccessToken();
+                return getPositionsInternal(true);
+            }
+            throw new RuntimeException("Positions fetch failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Obtiene todas las órdenes que interactuaron hoy (Live, Filled, Cancelled).
+     * GET /accounts/{accountNumber}/orders/live
+     */
+    public List<Map<String, Object>> getLiveOrders() {
+        return getLiveOrdersInternal(false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> getLiveOrdersInternal(boolean isRetry) {
+        if (accessToken == null) refreshAccessToken();
+
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri("/accounts/{accountNumber}/orders/live", config.getAccountNumber())
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+
+            if (response != null && response.containsKey("data")) {
+                Map<String, Object> data = (Map<String, Object>) response.get("data");
+                return (List<Map<String, Object>>) data.get("items");
+            }
+            return new ArrayList<>();
+        } catch (Exception e) {
+            log.error("Failed to fetch live orders", e);
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
+                refreshAccessToken();
+                return getLiveOrdersInternal(true);
+            }
+            throw new RuntimeException("Live orders fetch failed: " + e.getMessage(), e);
+        }
+    }
+
     private void cancelOrderInternal(String orderId, boolean isRetry) {
         log.info("Cancelling order: {}", orderId);
 

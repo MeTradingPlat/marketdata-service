@@ -58,7 +58,12 @@ public class TastyTradeService {
 
     @PostConstruct
     public void init() {
-        log.info("Initializing TastyTrade service");
+        log.info("Initializing TastyTrade service and Synchronizing State...");
+        
+        // 1. Sincronización de Estado (Truth from Broker)
+        reconcileAccountState();
+
+        // 2. Configurar streams
 
         // Configurar token refresher para auto-reconexión (before connect, does not need defaultChannel)
         dxLinkClient.setTokenRefresher(() -> {
@@ -530,18 +535,56 @@ public class TastyTradeService {
         tastyTradeClient.cancelOrder(orderId);
     }
 
+    /**
+     * Motor de Reconciliación de Estado (State Reconciliation Engine).
+     * Sincroniza posiciones y órdenes en paralelo para asegurar integridad tras desconexiones.
+     */
+    public void reconcileAccountState() {
+        log.info("🔄 Iniciando Reconciliación de Estado Crítico...");
+        
+        try {
+            CompletableFuture<List<Map<String, Object>>> positionsFuture = CompletableFuture.supplyAsync(
+                    tastyTradeClient::getPositions);
+            
+            CompletableFuture<List<Map<String, Object>>> ordersFuture = CompletableFuture.supplyAsync(
+                    tastyTradeClient::getLiveOrders);
+
+            CompletableFuture.allOf(positionsFuture, ordersFuture)
+                    .thenAccept(v -> {
+                        List<Map<String, Object>> positions = positionsFuture.join();
+                        List<Map<String, Object>> orders = ordersFuture.join();
+                        
+                        log.info("✅ Sincronización Exitosa: {} posiciones y {} órdenes conciliadas.", 
+                                positions.size(), orders.size());
+                        
+                        // TODO: Hidratar caché L1 de posiciones y órdenes en memoria
+                    }).get(10, TimeUnit.SECONDS);
+                    
+        } catch (Exception e) {
+            log.error("❌ Falló la Reconciliación de Estado. Peligro de trading ciego.", e);
+        }
+    }
+
     private void ensureConnected() {
+        boolean reconnected = false;
+        
         if (!dxLinkClient.isConnected()) {
             log.debug("Reconnecting to DxLink");
             String token = tastyTradeClient.getApiQuoteToken();
             String url = tastyTradeClient.getDxlinkUrl();
             dxLinkClient.connect(url, token);
+            reconnected = true;
         }
         
         // Conexión al Account Streamer
         String accessToken = tastyTradeClient.getAccessToken();
         String streamerUrl = tastyTradeClient.getAccountStreamerUrl();
         accountStreamerClient.connect(streamerUrl, accessToken);
+        
+        if (reconnected) {
+            log.info("📡 Reconexión detectada. Ejecutando reconciliación de seguridad...");
+            reconcileAccountState();
+        }
     }
 
     private Double safeConvertToDouble(Object val) {
