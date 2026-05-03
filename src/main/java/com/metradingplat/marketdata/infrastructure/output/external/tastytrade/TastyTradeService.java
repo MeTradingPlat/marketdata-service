@@ -325,6 +325,10 @@ public class TastyTradeService {
         return tastyTradeClient.getActiveEquities(pageOffset, perPage);
     }
 
+    public Map<String, Object> getEquityDetails(String symbol) {
+        return tastyTradeClient.getEquityDetails(symbol);
+    }
+
     public Map<String, Object> getMarketDataByType(String symbol) {
         return tastyTradeClient.getMarketDataByType(symbol);
     }
@@ -452,6 +456,23 @@ public class TastyTradeService {
             log.warn("No se pudo enriquecer con Market Metrics REST: {}", e.getMessage());
         }
 
+        // Enriquecimiento con Instrument Details (para Shares Outstanding y Float)
+        try {
+            for (String sym : normalizedSymbols) {
+                FundamentalData fund = fundamentalsMap.get(sym);
+                if (fund != null && (fund.getSharesOutstanding() == null || fund.getFloatShares() == null)) {
+                    Map<String, Object> details = getEquityDetails(sym);
+                    if (details != null && !details.isEmpty()) {
+                        if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(details.get("shares-outstanding")));
+                        if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(details.get("free-float")));
+                        if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(details.get("beta")));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("No se pudo enriquecer con Instrument Details REST: {}", e.getMessage());
+        }
+
         return fundamentalsMap;
     }
 
@@ -484,15 +505,30 @@ public class TastyTradeService {
     private Double safeConvertToDouble(Object val) {
         if (val == null) return null;
         if (val instanceof Number) return ((Number) val).doubleValue();
-        try { return Double.parseDouble(val.toString()); } 
-        catch (Exception e) { return null; }
+        try {
+            return Double.parseDouble(val.toString());
+        } catch (Exception e) {
+            return null;
+        }
     }
 
+    private Long safeConvertToLong(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).longValue();
+        try {
+            return Long.parseLong(val.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     private Integer safeConvertToInt(Object val) {
         if (val == null) return null;
         if (val instanceof Number) return ((Number) val).intValue();
-        try { return Integer.parseInt(val.toString()); } 
-        catch (Exception e) { return null; }
+        try {
+            return Integer.parseInt(val.toString());
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

@@ -292,6 +292,37 @@ public class TastyTradeClient {
     }
 
     /**
+     * Obtiene detalles técnicos de un equity (shares outstanding, etc).
+     * GET /instruments/equities/{symbol}
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getEquityDetails(String symbol) {
+        return getEquityDetailsInternal(symbol, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> getEquityDetailsInternal(String symbol, boolean isRetry) {
+        if (accessToken == null) refreshAccessToken();
+        try {
+            Map<String, Object> response = tastyTradeRestClient
+                    .get()
+                    .uri("/instruments/equities/{symbol}", symbol)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .body(Map.class);
+            if (response == null || !response.containsKey("data")) return Map.of();
+            return (Map<String, Object>) response.get("data");
+        } catch (Exception e) {
+            log.error("Failed to get equity details for {}: {}", symbol, e.getMessage());
+            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
+                refreshAccessToken();
+                return getEquityDetailsInternal(symbol, true);
+            }
+            return Map.of();
+        }
+    }
+
+    /**
      * Obtiene quote actual via TastyTrade market data.
      * GET /market-data/by-type?equity={symbol}
      */
