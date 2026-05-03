@@ -58,6 +58,9 @@ public class DxLinkClient {
     private final Map<Integer, DxLinkChannel> channels = new ConcurrentHashMap<>();
     private final AtomicInteger nextChannelId = new AtomicInteger(-1);
     private DxLinkChannel defaultChannel;
+    
+    private final java.util.concurrent.atomic.AtomicLong messageCounter = new java.util.concurrent.atomic.AtomicLong(0);
+    private final long startTime = System.currentTimeMillis();
 
     private volatile boolean authenticated = false;
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
@@ -223,7 +226,14 @@ public class DxLinkClient {
                 "channels", channels.size(),
                 "activeSubscriptions", subscribedSymbols.size(),
                 "reconnectAttempts", reconnectAttempts.get(),
-                "reconnecting", reconnecting.get());
+                "reconnecting", reconnecting.get(),
+                "totalMessages", messageCounter.get(),
+                "avgMessagesPerSecond", calculateAvgThroughput());
+    }
+
+    private double calculateAvgThroughput() {
+        long elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000;
+        return elapsedSeconds > 0 ? (double) messageCounter.get() / elapsedSeconds : 0;
     }
 
     @PreDestroy
@@ -240,6 +250,7 @@ public class DxLinkClient {
     }
 
     private void processRawMessage(String payload) {
+        messageCounter.incrementAndGet();
         try {
             JsonNode msg = objectMapper.readTree(payload);
             String type = msg.path("type").asText();
