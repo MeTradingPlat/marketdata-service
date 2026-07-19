@@ -103,6 +103,39 @@ public class TastyTradeService {
             log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
         }
 
+        // Configurar listener de fundamentales en el canal DEFAULT
+        // Profile y Summary events llenan el cache automáticamente en tiempo real
+        if (dxLinkClient.getDefaultChannel() != null) {
+            dxLinkClient.getDefaultChannel().addFundamentalListener((sym, data) -> {
+            String upperSym = sym.toUpperCase();
+            fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
+                if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
+                if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
+                if (v2.getEps() != null) v1.setEps(v2.getEps());
+                if (v2.getDividendAmount() != null) v1.setDividendAmount(v2.getDividendAmount());
+                if (v2.getDividendFrequency() != null) v1.setDividendFrequency(v2.getDividendFrequency());
+                if (v2.getTradingStatus() != null) v1.setTradingStatus(v2.getTradingStatus());
+                if (v2.getStatusReason() != null) v1.setStatusReason(v2.getStatusReason());
+                if (v2.getHaltStartTime() != null) v1.setHaltStartTime(v2.getHaltStartTime());
+                if (v2.getHaltEndTime() != null) v1.setHaltEndTime(v2.getHaltEndTime());
+                if (v2.getBeta() != null) v1.setBeta(v2.getBeta());
+                if (v2.getOpen() != null) v1.setOpen(v2.getOpen());
+                if (v2.getHigh() != null) v1.setHigh(v2.getHigh());
+                if (v2.getLow() != null) v1.setLow(v2.getLow());
+                if (v2.getPrevClose() != null) v1.setPrevClose(v2.getPrevClose());
+                if (v2.getOpenInterest() != null) v1.setOpenInterest(v2.getOpenInterest());
+                if (v2.getPreMarketVolume() != null) v1.setPreMarketVolume(v2.getPreMarketVolume());
+                if (v2.getPostMarketVolume() != null) v1.setPostMarketVolume(v2.getPostMarketVolume());
+                if (v2.getImpliedVolatilityIndex() != null) v1.setImpliedVolatilityIndex(v2.getImpliedVolatilityIndex());
+                if (v2.getImpliedVolatilityRank() != null) v1.setImpliedVolatilityRank(v2.getImpliedVolatilityRank());
+                if (v2.getImpliedVolatilityPercentile() != null) v1.setImpliedVolatilityPercentile(v2.getImpliedVolatilityPercentile());
+                if (v2.getLiquidity() != null) v1.setLiquidity(v2.getLiquidity());
+                if (v2.getLiquidityRating() != null) v1.setLiquidityRating(v2.getLiquidityRating());
+                return v1;
+            });
+            });
+        }
+
         // Configurar callbacks AFTER connect() so defaultChannel exists
         dxLinkClient.setOnMarketData((symbol, data) -> {
             log.debug("Market data received for {}: bid={}, ask={}, last={}",
