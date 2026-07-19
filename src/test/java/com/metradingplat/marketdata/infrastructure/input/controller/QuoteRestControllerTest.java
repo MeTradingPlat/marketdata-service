@@ -20,7 +20,6 @@ import com.metradingplat.marketdata.infrastructure.input.controllerGestionarQuot
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarQuote.controller.QuoteRestController;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarQuote.mapper.QuoteMapper;
 import com.metradingplat.marketdata.infrastructure.input.filter.GatewayHeaderFilter;
-import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeClient;
 
 @WebMvcTest(
     controllers = QuoteRestController.class,
@@ -36,9 +35,6 @@ class QuoteRestControllerTest {
 
     @MockitoBean
     private QuoteMapper mapper;
-
-    @MockitoBean
-    private TastyTradeClient tastyTradeClient;
 
     @BeforeEach
     void setUpMapper() {
