@@ -3,6 +3,7 @@ package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -103,6 +104,16 @@ public class TastyTradeService {
             log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
         }
 
+        // Suscribir todos los símbolos US al iniciar
+        CompletableFuture.runAsync(() -> {
+            try {
+                Thread.sleep(5000);
+                subscribeAllMarkets();
+            } catch (Exception e) {
+                log.error("Failed to auto-subscribe markets: {}", e.getMessage());
+            }
+        });
+
         // Configurar listener de fundamentales en el canal DEFAULT
         // Profile y Summary events llenan el cache automáticamente en tiempo real
         if (dxLinkClient.getDefaultChannel() != null) {
@@ -189,6 +200,26 @@ public class TastyTradeService {
         log.info("Sending order: {} {} {} @ {}",
                 request.getAction(), request.getQuantity(), request.getSymbol(), request.getPrice());
         tastyTradeClient.submitOrder(request);
+    }
+
+    private static final List<String> ALL_US_MARKETS = List.of("XNAS", "XNYS", "XASE", "ARCX", "BATS", "OTC");
+
+    private void subscribeAllMarkets() {
+        log.info("Auto-subscribing to all US equity markets: {}", ALL_US_MARKETS);
+        List<String> allSymbols = new ArrayList<>();
+        for (String market : ALL_US_MARKETS) {
+            try {
+                List<String> marketSymbols = tastyTradeClient.getActiveEquitySymbols(market);
+                allSymbols.addAll(marketSymbols);
+                log.info("Loaded {} symbols from {}", marketSymbols.size(), market);
+            } catch (Exception e) {
+                log.warn("Failed to load symbols for market {}: {}", market, e.getMessage());
+            }
+        }
+        if (!allSymbols.isEmpty()) {
+            subscribeBatch(allSymbols);
+            log.info("Auto-subscribed {} total symbols across all US markets", allSymbols.size());
+        }
     }
 
     public void subscribeBatch(List<String> symbols) {
