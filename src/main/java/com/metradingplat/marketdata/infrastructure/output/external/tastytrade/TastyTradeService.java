@@ -408,7 +408,7 @@ public class TastyTradeService {
         CompletableFuture<Void> snapshotReceived = new CompletableFuture<>();
         Set<String> symbolsWithProfile = ConcurrentHashMap.newKeySet();
 
-        try (DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel()) {
+        try (DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().join()) {
             channel.addFundamentalListener((sym, data) -> {
                 String upperSym = sym.toUpperCase();
                 fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
@@ -528,7 +528,7 @@ public class TastyTradeService {
             for (Map<String, Object> item : instrumentItems) {
                 String sym = (String) item.get("symbol");
                 if (sym == null) continue;
-                FundamentalData fund = fundamentalsMap.get(sym.toUpperCase());
+                FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
                 if (fund != null) {
                     if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(item.get("shares-outstanding")));
                     if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(item.get("free-float")));
@@ -545,7 +545,7 @@ public class TastyTradeService {
             for (Map<String, Object> item : ohlcItems) {
                 String sym = (String) item.get("symbol");
                 if (sym == null) continue;
-                FundamentalData fund = fundamentalsMap.get(sym.toUpperCase());
+                FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
                 if (fund != null) {
                     if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
                     if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("high")));
