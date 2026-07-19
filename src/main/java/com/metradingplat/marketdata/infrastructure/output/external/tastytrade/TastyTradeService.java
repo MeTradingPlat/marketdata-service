@@ -198,6 +198,18 @@ public class TastyTradeService {
         log.info("Batch subscribe complete: {} symbols now streaming", symbols.size());
     }
 
+    public void unsubscribeBatch(List<String> symbols) {
+        log.info("Batch unsubscribing {} symbols from DxLink", symbols.size());
+        for (String sym : symbols) {
+            dxLinkClient.unsubscribe(sym);
+        }
+        log.info("Batch unsubscribe complete: {} symbols removed", symbols.size());
+    }
+
+    public int getActiveSubscriptionCount() {
+        return dxLinkClient.getActiveSubscriptionCount();
+    }
+
     public Map<String, Double> getCachedPrices(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
         for (String sym : symbols) {

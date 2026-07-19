@@ -211,6 +211,7 @@ public class DxLinkClient {
     public void subscribe(String symbol) { if (defaultChannel != null) defaultChannel.subscribe(symbol); subscribedSymbols.add(symbol); }
     public void subscribe(List<String> symbols) { if (defaultChannel != null) symbols.forEach(this::subscribe); }
     public void unsubscribe(String symbol) { if (defaultChannel != null) defaultChannel.unsubscribe(symbol); subscribedSymbols.remove(symbol); }
+    public int getActiveSubscriptionCount() { return subscribedSymbols.size(); }
     public boolean isConnected() { return session != null && session.isOpen() && authenticated; }
 
     public void forceReconnect() {

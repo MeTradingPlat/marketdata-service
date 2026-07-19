@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -30,6 +31,23 @@ public class StreamingController {
         return ResponseEntity.ok(Map.of(
             "status", "subscribed",
             "count", String.valueOf(symbols.size())
+        ));
+    }
+
+    @PostMapping("/unsubscribe")
+    public ResponseEntity<Map<String, String>> unsubscribeBatch(@RequestBody List<String> symbols) {
+        log.info("Unsubscribe request: {} symbols", symbols.size());
+        tastyTradeService.unsubscribeBatch(symbols);
+        return ResponseEntity.ok(Map.of(
+            "status", "unsubscribed",
+            "count", String.valueOf(symbols.size())
+        ));
+    }
+
+    @GetMapping("/subscriptions/count")
+    public ResponseEntity<Map<String, Object>> subscriptionCount() {
+        return ResponseEntity.ok(Map.of(
+            "activeSubscriptions", tastyTradeService.getActiveSubscriptionCount()
         ));
     }
 
