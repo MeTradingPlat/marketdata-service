@@ -307,15 +307,25 @@ public class DxLinkClient {
 
         public void subscribe(String symbol) {
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", List.of(
-                Map.of("symbol", symbol, "type", "Quote"), 
-                Map.of("symbol", symbol, "type", "Trade"), 
-                Map.of("symbol", symbol, "type", "TradeETH"), // Always include ETH for continuous liquidity
+                Map.of("symbol", symbol, "type", "Quote"),
+                Map.of("symbol", symbol, "type", "Trade"),
+                Map.of("symbol", symbol, "type", "TradeETH"),
+                Map.of("symbol", symbol, "type", "Summary"),
+                Map.of("symbol", symbol, "type", "Profile"),
                 Map.of("symbol", symbol, "type", "Message")
             )));
         }
 
         public void unsubscribe(String symbol) {
-            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "remove", List.of(Map.of("symbol", symbol, "type", "Quote"), Map.of("symbol", symbol, "type", "Trade"), Map.of("symbol", symbol, "type", "Summary"), Map.of("symbol", symbol, "type", "Profile"))));
+            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "remove", List.of(
+                Map.of("symbol", symbol, "type", "Quote"),
+                Map.of("symbol", symbol, "type", "Trade"),
+                Map.of("symbol", symbol, "type", "TradeETH"),
+                Map.of("symbol", symbol, "type", "Summary"),
+                Map.of("symbol", symbol, "type", "Profile"),
+                Map.of("symbol", symbol, "type", "Message")
+            )));
+        }
         }
 
         public void subscribeFundamentalsBatch(List<String> symbols) {
