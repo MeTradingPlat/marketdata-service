@@ -62,6 +62,16 @@ public class TastyTradeService {
     private final ConcurrentHashMap<String, Map<String, Object>> positionsCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Map<String, Object>> liveOrdersCache = new ConcurrentHashMap<>();
 
+    public Map<String, FundamentalData> getCachedFundamentals(List<String> symbols) {
+        Map<String, FundamentalData> result = new ConcurrentHashMap<>();
+        for (String sym : symbols) {
+            String upper = sym.toUpperCase();
+            FundamentalData cached = fundamentalsCache.get(upper);
+            if (cached != null) result.put(upper, cached);
+        }
+        return result;
+    }
+
     @PostConstruct
     public void init() {
         log.info("Initializing TastyTrade service and Synchronizing State...");

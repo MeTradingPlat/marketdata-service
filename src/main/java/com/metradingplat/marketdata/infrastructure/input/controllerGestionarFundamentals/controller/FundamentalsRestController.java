@@ -13,11 +13,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.metradingplat.marketdata.application.input.GestionarFundamentalsCUIntPort;
+import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarFundamentals.DTOAnswer.FundamentalDataDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarFundamentals.mapper.FundamentalsMapper;
+import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @RestController
 @RequestMapping("/marketdata/fundamentals")
 @RequiredArgsConstructor
@@ -25,6 +29,7 @@ public class FundamentalsRestController {
 
     private final GestionarFundamentalsCUIntPort objGestionarFundamentalsCU;
     private final FundamentalsMapper objMapper;
+    private final TastyTradeService tastyTradeService;
 
     @GetMapping("/{symbol}")
     public ResponseEntity<FundamentalDataDTORespuesta> obtenerFundamentals(@PathVariable String symbol) {
@@ -35,5 +40,15 @@ public class FundamentalsRestController {
     public ResponseEntity<Map<String, FundamentalDataDTORespuesta>> obtenerFundamentalsBatch(@RequestBody List<String> symbols) {
         return ResponseEntity.ok(objGestionarFundamentalsCU.obtenerFundamentalsBatch(symbols).entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> objMapper.toDTORespuesta(e.getValue()))));
+    }
+
+    @PostMapping("/realtime")
+    public ResponseEntity<Map<String, FundamentalDataDTORespuesta>> obtenerRealtimeFundamentals(@RequestBody List<String> symbols) {
+        log.info("Realtime fundamentals: {} symbols from DxLink cache", symbols.size());
+        Map<String, FundamentalData> data = tastyTradeService.getCachedFundamentals(symbols);
+        Map<String, FundamentalDataDTORespuesta> response = data.entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, e -> objMapper.toDTORespuesta(e.getValue())));
+        log.info("Realtime fundamentals: returned {}/{} symbols from cache", response.size(), symbols.size());
+        return ResponseEntity.ok(response);
     }
 }
