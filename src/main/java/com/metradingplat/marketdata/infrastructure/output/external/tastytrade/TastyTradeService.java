@@ -191,10 +191,27 @@ public class TastyTradeService {
         tastyTradeClient.submitOrder(request);
     }
 
+    public void subscribeBatch(List<String> symbols) {
+        log.info("Batch subscribing {} symbols to DxLink", symbols.size());
+        ensureConnected();
+        dxLinkClient.subscribe(symbols);
+        log.info("Batch subscribe complete: {} symbols now streaming", symbols.size());
+    }
+
+    public Map<String, Double> getCachedPrices(List<String> symbols) {
+        Map<String, Double> result = new ConcurrentHashMap<>();
+        for (String sym : symbols) {
+            String upper = sym.toUpperCase();
+            Double price = lastPricesCache.get(upper);
+            if (price != null) result.put(upper, price);
+        }
+        return result;
+    }
+
     public void subscribe(String symbol) {
         log.info("Subscribing to real-time data and Alpha Metrics: {}", symbol);
         ensureConnected();
-        
+
         // 1. Ingesta de Datos (dxLink)
         dxLinkClient.subscribe(symbol);
         
