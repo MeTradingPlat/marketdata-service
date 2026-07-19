@@ -18,4 +18,6 @@ public class CandleDTORespuesta {
     private Double low;
     private Double close;
     private Double volume;
+    private Double vwap;
+    private Double impVolatility;
 }
