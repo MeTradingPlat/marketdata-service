@@ -326,7 +326,6 @@ public class DxLinkClient {
                 Map.of("symbol", symbol, "type", "Message")
             )));
         }
-        }
 
         public void subscribeFundamentalsBatch(List<String> symbols) {
             List<Map<String, Object>> items = new java.util.ArrayList<>();
