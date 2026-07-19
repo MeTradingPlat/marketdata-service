@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -206,19 +207,18 @@ public class TastyTradeService {
 
     private void subscribeAllMarkets() {
         log.info("Auto-subscribing to all US equity markets: {}", ALL_US_MARKETS);
-        List<String> allSymbols = new ArrayList<>();
-        for (String market : ALL_US_MARKETS) {
-            try {
-                List<String> marketSymbols = tastyTradeClient.getActiveEquitySymbols(market);
-                allSymbols.addAll(marketSymbols);
-                log.info("Loaded {} symbols from {}", marketSymbols.size(), market);
-            } catch (Exception e) {
-                log.warn("Failed to load symbols for market {}: {}", market, e.getMessage());
+        List<ActiveEquity> allEquities = tastyTradeClient.getAllActiveEquities();
+        Set<String> targetMarkets = new HashSet<>(ALL_US_MARKETS);
+        List<String> symbols = new ArrayList<>();
+        for (ActiveEquity eq : allEquities) {
+            if (eq.getListedMarket() != null && targetMarkets.contains(eq.getListedMarket().toUpperCase())) {
+                symbols.add(eq.getSymbol());
             }
         }
-        if (!allSymbols.isEmpty()) {
-            subscribeBatch(allSymbols);
-            log.info("Auto-subscribed {} total symbols across all US markets", allSymbols.size());
+        if (!symbols.isEmpty()) {
+            symbols = symbols.stream().distinct().toList();
+            subscribeBatch(symbols);
+            log.info("Auto-subscribed {} unique symbols from {} markets", symbols.size(), ALL_US_MARKETS.size());
         }
     }
 

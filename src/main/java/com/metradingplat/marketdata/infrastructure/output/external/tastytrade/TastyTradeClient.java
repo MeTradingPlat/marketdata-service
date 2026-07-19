@@ -239,20 +239,18 @@ public class TastyTradeClient {
      * Obtiene equities activos (paginado) desde TastyTrade.
      * GET /instruments/equities/active?per-page={perPage}&page-offset={pageOffset}
      */
-    public List<String> getActiveEquitySymbols(String marketMic) {
-        List<String> symbols = new ArrayList<>();
+    public List<ActiveEquity> getAllActiveEquities() {
+        List<ActiveEquity> all = new ArrayList<>();
         int perPage = 500;
-        for (int offset = 0; offset < 10000; offset += perPage) {
+        int maxPages = 20;
+        for (int offset = 0; offset < maxPages * perPage; offset += perPage) {
             List<ActiveEquity> page = getActiveEquities(offset, perPage);
             if (page.isEmpty()) break;
-            for (ActiveEquity eq : page) {
-                if (eq.getListedMarket() != null && eq.getListedMarket().equalsIgnoreCase(marketMic)) {
-                    symbols.add(eq.getSymbol());
-                }
-            }
+            all.addAll(page);
             if (page.size() < perPage) break;
         }
-        return symbols;
+        log.info("Fetched {} total active equities from TastyTrade", all.size());
+        return all;
     }
 
     public List<ActiveEquity> getActiveEquities(int pageOffset, int perPage) {
