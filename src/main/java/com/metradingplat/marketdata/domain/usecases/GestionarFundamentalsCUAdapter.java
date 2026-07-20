@@ -206,11 +206,11 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
                 if (existing != null && rt != null) {
                     // Update real-time fields
                     existing.setMarketCap(rt.getMarketCap());
-                    existing.setSharesOutstanding(rt.getSharesOutstanding());
-                    existing.setFloatShares(rt.getFloatShares());
-                    existing.setDayVolume(rt.getDayVolume());
-                    existing.setPreMarketVolume(rt.getPreMarketVolume());
-                    existing.setPostMarketVolume(rt.getPostMarketVolume());
+                    if (rt.getSharesOutstanding() != null && rt.getSharesOutstanding() > 0) existing.setSharesOutstanding(rt.getSharesOutstanding());
+                    if (rt.getFloatShares() != null && rt.getFloatShares() > 0) existing.setFloatShares(rt.getFloatShares());
+                    if (rt.getDayVolume() != null && rt.getDayVolume() > 0) existing.setDayVolume(rt.getDayVolume());
+                    if (rt.getPreMarketVolume() != null && rt.getPreMarketVolume() > 0) existing.setPreMarketVolume(rt.getPreMarketVolume());
+                    if (rt.getPostMarketVolume() != null && rt.getPostMarketVolume() > 0) existing.setPostMarketVolume(rt.getPostMarketVolume());
                     
                     // New fields from dxLink
                     if (rt.getEps() != null) existing.setEps(rt.getEps());
