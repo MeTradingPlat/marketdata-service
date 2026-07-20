@@ -372,6 +372,8 @@ public class TastyTradeService {
             AtomicBoolean snapshotComplete = new AtomicBoolean(false);
 
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
+                log.info("Ephemeral candle channel {}: received {} O={} C={} complete={}",
+                    channel.getId(), symbol, candle.getOpen(), candle.getClose(), isSnapshotComplete);
                 candle.setTimeframe(timeframe);
                 resultado.computeIfAbsent(symbol, k -> new java.util.ArrayList<>()).add(candle);
                 if (isSnapshotComplete) {
