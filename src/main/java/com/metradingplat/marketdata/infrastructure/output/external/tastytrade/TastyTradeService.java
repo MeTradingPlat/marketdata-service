@@ -12,6 +12,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.springframework.stereotype.Service;
 
@@ -366,14 +368,19 @@ public class TastyTradeService {
         try {
             DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
             
+            AtomicInteger pendingSnapshots = new AtomicInteger(symbols.size());
+            AtomicBoolean snapshotComplete = new AtomicBoolean(false);
+
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 candle.setTimeframe(timeframe);
                 resultado.computeIfAbsent(symbol, k -> new java.util.ArrayList<>()).add(candle);
+                if (isSnapshotComplete) {
+                    pendingSnapshots.decrementAndGet();
+                }
             });
 
             List<Map<String, Object>> subscriptionItems = symbols.stream()
                 .map(s -> {
-                    // Sintaxis dxLink: Symbol{=periodType} ej: AAPL{=5m}
                     String dxSymbol = String.format("%s{=%s%s}", s, period, type);
                     Map<String, Object> item = new java.util.HashMap<>();
                     item.put("symbol", dxSymbol);
@@ -384,23 +391,18 @@ public class TastyTradeService {
 
             channel.subscribeCandlesHistory(subscriptionItems, fromTime.toEpochMilli());
 
-            // Esperamos a que se llene el snapshot
             scheduler.schedule(() -> {
-                channel.close();
-                
-                // RECORTE FINAL (Simulando el parámetro 'limit')
-                resultado.forEach((symbol, candles) -> {
-                    // Ordenar por tiempo (por si acaso dxLink los manda desordenados, aunque no suele pasar)
-                    candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
-                    
-                    // Si tenemos más de las pedidas, nos quedamos con las últimas 'bars'
-                    if (candles.size() > bars) {
-                        List<Candle> truncated = new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size()));
-                        resultado.put(symbol, truncated);
-                    }
-                });
-                
-                future.complete(resultado);
+                if (!snapshotComplete.getAndSet(true)) {
+                    channel.close();
+                    resultado.forEach((symbol, candles) -> {
+                        candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
+                        if (candles.size() > bars) {
+                            List<Candle> truncated = new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size()));
+                            resultado.put(symbol, truncated);
+                        }
+                    });
+                    future.complete(resultado);
+                }
             }, 10 + (symbols.size() / 2), TimeUnit.SECONDS);
 
             return future.get(20, TimeUnit.SECONDS);
