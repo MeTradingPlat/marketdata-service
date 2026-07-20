@@ -53,13 +53,13 @@ public class QuoteRestController {
                         toDouble(item.get("ask")),
                         toDouble(item.get("last")),
                         toDouble(item.get("open")),
-                        toDouble(item.get("high")),
-                        toDouble(item.get("low")),
+                        toDouble(item.get("day-high-price")),
+                        toDouble(item.get("day-low-price")),
                         toDouble(item.get("close")),
-                        toDouble(item.get("prevClose")),
+                        toDouble(item.get("prev-close")),
                         toDouble(item.get("volume")),
-                        toBoolean(item.get("tradingHalted")),
-                        (String) item.get("tradingHaltedReason"),
+                        item.get("is-trading-halted") != null ? (Boolean) item.get("is-trading-halted") : false,
+                        item.get("halt-reason") != null ? item.get("halt-reason").toString() : null,
                         toDouble(item.get("beta"))
                 ))
                 .collect(Collectors.toList());
