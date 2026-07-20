@@ -231,8 +231,7 @@ public class TastyTradeService {
         }
     }
 
-    private static final int SUBSCRIBE_CHUNK_SIZE = 50;
-    private static final long SUBSCRIBE_CHUNK_DELAY_MS = 2000;
+    private static final int SUBSCRIBE_CHUNK_SIZE = 150;
 
     public void subscribeBatch(List<String> symbols) {
         log.info("Batch subscribing {} symbols (chunks of {})", symbols.size(), SUBSCRIBE_CHUNK_SIZE);
@@ -243,10 +242,9 @@ public class TastyTradeService {
         }
         for (int i = 0; i < symbols.size(); i += SUBSCRIBE_CHUNK_SIZE) {
             int end = Math.min(i + SUBSCRIBE_CHUNK_SIZE, symbols.size());
-            List<String> chunk = symbols.subList(i, end);
-            dxLinkClient.subscribe(chunk);
+            dxLinkClient.subscribeBatch(symbols.subList(i, end));
             if (end < symbols.size()) {
-                try { Thread.sleep(SUBSCRIBE_CHUNK_DELAY_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
         }
         int active = dxLinkClient.getActiveSubscriptionCount();

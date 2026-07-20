@@ -190,14 +190,12 @@ public class DxLinkClient {
     private void resubscribeAll() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         List<String> symbols = new ArrayList<>(subscribedSymbols);
-        int chunkSize = 50;
+        int chunkSize = 150;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
-            for (int j = i; j < end; j++) {
-                defaultChannel.subscribe(symbols.get(j));
-            }
+            defaultChannel.subscribeBatch(symbols.subList(i, end));
             if (end < symbols.size()) {
-                try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
         }
     }
@@ -221,6 +219,11 @@ public class DxLinkClient {
 
     public void subscribe(String symbol) { if (defaultChannel != null) defaultChannel.subscribe(symbol); subscribedSymbols.add(symbol); }
     public void subscribe(List<String> symbols) { if (defaultChannel != null) symbols.forEach(this::subscribe); }
+    public void subscribeBatch(List<String> symbols) {
+        if (defaultChannel == null || !defaultChannel.isReady()) return;
+        defaultChannel.subscribeBatch(symbols);
+        subscribedSymbols.addAll(symbols);
+    }
     public void unsubscribe(String symbol) { if (defaultChannel != null) defaultChannel.unsubscribe(symbol); subscribedSymbols.remove(symbol); }
     public int getActiveSubscriptionCount() { return subscribedSymbols.size(); }
     public boolean isConnected() { return session != null && session.isOpen() && authenticated; }
@@ -326,6 +329,19 @@ public class DxLinkClient {
                 Map.of("symbol", symbol, "type", "Profile"),
                 Map.of("symbol", symbol, "type", "Message")
             )));
+        }
+
+        public void subscribeBatch(List<String> symbols) {
+            List<Map<String, Object>> items = new java.util.ArrayList<>();
+            for (String s : symbols) {
+                items.add(Map.of("symbol", s, "type", "Quote"));
+                items.add(Map.of("symbol", s, "type", "Trade"));
+                items.add(Map.of("symbol", s, "type", "TradeETH"));
+                items.add(Map.of("symbol", s, "type", "Summary"));
+                items.add(Map.of("symbol", s, "type", "Profile"));
+                items.add(Map.of("symbol", s, "type", "Message"));
+            }
+            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
         }
 
         public void unsubscribe(String symbol) {
