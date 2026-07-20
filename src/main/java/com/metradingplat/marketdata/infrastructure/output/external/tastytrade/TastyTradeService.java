@@ -105,14 +105,19 @@ public class TastyTradeService {
             log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
         }
 
-        // Suscribir todos los símbolos US al iniciar
+        // Suscribir todos los símbolos US al iniciar (con reintentos)
         CompletableFuture.runAsync(() -> {
-            try {
-                Thread.sleep(5000);
-                subscribeAllMarkets();
-            } catch (Exception e) {
-                log.error("Failed to auto-subscribe markets: {}", e.getMessage());
+            for (int attempt = 1; attempt <= 5; attempt++) {
+                try {
+                    Thread.sleep(3000);
+                    if (!dxLinkClient.isConnected()) continue;
+                    subscribeAllMarkets();
+                    return;
+                } catch (Exception e) {
+                    log.warn("Auto-subscribe attempt {}/5 failed: {}", attempt, e.getMessage());
+                }
             }
+            log.error("Auto-subscribe failed after 5 attempts");
         });
 
         // Configurar listener de fundamentales en el canal DEFAULT
@@ -228,8 +233,13 @@ public class TastyTradeService {
     public void subscribeBatch(List<String> symbols) {
         log.info("Batch subscribing {} symbols to DxLink", symbols.size());
         ensureConnected();
+        if (!dxLinkClient.isConnected()) {
+            log.error("Cannot subscribe: DxLink not connected");
+            return;
+        }
         dxLinkClient.subscribe(symbols);
-        log.info("Batch subscribe complete: {} symbols now streaming", symbols.size());
+        int active = dxLinkClient.getActiveSubscriptionCount();
+        log.info("Batch subscribe done: requested {} symbols, {} now active", symbols.size(), active);
     }
 
     public void unsubscribeBatch(List<String> symbols) {
