@@ -188,6 +188,20 @@ public class TastyTradeService {
             
             greeksCache.put(symbol, greeks);
         });
+
+        log.info("DxLink initialized. Auto-subscribe will start in 5s...");
+        CompletableFuture.runAsync(() -> {
+            try {
+                Thread.sleep(5000);
+                if (dxLinkClient.isConnected()) {
+                    subscribeAllMarkets();
+                } else {
+                    log.warn("Auto-subscribe skipped: DxLink not connected after init");
+                }
+            } catch (Exception e) {
+                log.error("Auto-subscribe failed: {}", e.getMessage());
+            }
+        });
     }
 
     public void sendOrder(OrderRequest request) {
