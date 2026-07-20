@@ -161,6 +161,9 @@ public class TastyTradeService {
                 }
             }
 
+            if (data.getLastPrice() != null && data.getLastPrice() > 0) {
+                lastPricesCache.put(symbol.toUpperCase(), data.getLastPrice());
+            }
             lastMarketDataUpdates.put(symbol, System.currentTimeMillis());
             kafkaProducer.publishMarketData(data);
         });
