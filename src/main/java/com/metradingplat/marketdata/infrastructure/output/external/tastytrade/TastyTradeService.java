@@ -232,9 +232,10 @@ public class TastyTradeService {
     }
 
     private static final int SUBSCRIBE_CHUNK_SIZE = 150;
+    private static final long SUBSCRIBE_CHUNK_DELAY_MS = 3000;
 
     public void subscribeBatch(List<String> symbols) {
-        log.info("Batch subscribing {} symbols (chunks of {})", symbols.size(), SUBSCRIBE_CHUNK_SIZE);
+        log.info("Batch subscribing {} symbols (chunks of {}, {}ms delay)", symbols.size(), SUBSCRIBE_CHUNK_SIZE, SUBSCRIBE_CHUNK_DELAY_MS);
         ensureConnected();
         if (!dxLinkClient.isConnected()) {
             log.error("Cannot subscribe: DxLink not connected");
@@ -244,7 +245,7 @@ public class TastyTradeService {
             int end = Math.min(i + SUBSCRIBE_CHUNK_SIZE, symbols.size());
             dxLinkClient.subscribeBatch(symbols.subList(i, end));
             if (end < symbols.size()) {
-                try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                try { Thread.sleep(SUBSCRIBE_CHUNK_DELAY_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
         }
         int active = dxLinkClient.getActiveSubscriptionCount();
