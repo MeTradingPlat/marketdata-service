@@ -105,21 +105,6 @@ public class TastyTradeService {
             log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
         }
 
-        // Suscribir todos los símbolos US al iniciar (con reintentos)
-        CompletableFuture.runAsync(() -> {
-            for (int attempt = 1; attempt <= 5; attempt++) {
-                try {
-                    Thread.sleep(3000);
-                    if (!dxLinkClient.isConnected()) continue;
-                    subscribeAllMarkets();
-                    return;
-                } catch (Exception e) {
-                    log.warn("Auto-subscribe attempt {}/5 failed: {}", attempt, e.getMessage());
-                }
-            }
-            log.error("Auto-subscribe failed after 5 attempts");
-        });
-
         // Configurar listener de fundamentales en el canal DEFAULT
         // Profile y Summary events llenan el cache automáticamente en tiempo real
         if (dxLinkClient.getDefaultChannel() != null) {
@@ -230,14 +215,24 @@ public class TastyTradeService {
         }
     }
 
+    private static final int SUBSCRIBE_CHUNK_SIZE = 200;
+    private static final long SUBSCRIBE_CHUNK_DELAY_MS = 1000;
+
     public void subscribeBatch(List<String> symbols) {
-        log.info("Batch subscribing {} symbols to DxLink", symbols.size());
+        log.info("Batch subscribing {} symbols (chunks of {})", symbols.size(), SUBSCRIBE_CHUNK_SIZE);
         ensureConnected();
         if (!dxLinkClient.isConnected()) {
             log.error("Cannot subscribe: DxLink not connected");
             return;
         }
-        dxLinkClient.subscribe(symbols);
+        for (int i = 0; i < symbols.size(); i += SUBSCRIBE_CHUNK_SIZE) {
+            int end = Math.min(i + SUBSCRIBE_CHUNK_SIZE, symbols.size());
+            List<String> chunk = symbols.subList(i, end);
+            dxLinkClient.subscribe(chunk);
+            if (end < symbols.size()) {
+                try { Thread.sleep(SUBSCRIBE_CHUNK_DELAY_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            }
+        }
         int active = dxLinkClient.getActiveSubscriptionCount();
         log.info("Batch subscribe done: requested {} symbols, {} now active", symbols.size(), active);
     }
