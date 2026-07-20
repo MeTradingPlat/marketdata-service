@@ -368,16 +368,26 @@ public class TastyTradeService {
         try {
             DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
             
-            AtomicInteger pendingSnapshots = new AtomicInteger(symbols.size());
-            AtomicBoolean snapshotComplete = new AtomicBoolean(false);
+            AtomicInteger receivedSnapshots = new AtomicInteger(0);
+            AtomicInteger expectedSnapshots = new AtomicInteger(symbols.size());
 
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 log.info("Ephemeral candle channel {}: received {} O={} C={} complete={}",
                     channel.getId(), symbol, candle.getOpen(), candle.getClose(), isSnapshotComplete);
                 candle.setTimeframe(timeframe);
                 resultado.computeIfAbsent(symbol, k -> new java.util.ArrayList<>()).add(candle);
-                if (isSnapshotComplete) {
-                    pendingSnapshots.decrementAndGet();
+                if (isSnapshotComplete && receivedSnapshots.incrementAndGet() >= expectedSnapshots.get()) {
+                    log.info("All candle snapshots received ({}), completing future", receivedSnapshots.get());
+                    scheduler.schedule(() -> {
+                        channel.close();
+                        resultado.forEach((sym, candles) -> {
+                            candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
+                            if (candles.size() > bars) {
+                                resultado.put(sym, new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size())));
+                            }
+                        });
+                        future.complete(resultado);
+                    }, 100, TimeUnit.MILLISECONDS);
                 }
             });
 
@@ -394,20 +404,19 @@ public class TastyTradeService {
             channel.subscribeCandlesHistory(subscriptionItems, fromTime.toEpochMilli());
 
             scheduler.schedule(() -> {
-                if (!snapshotComplete.getAndSet(true)) {
+                if (!future.isDone()) {
                     channel.close();
                     resultado.forEach((symbol, candles) -> {
                         candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
                         if (candles.size() > bars) {
-                            List<Candle> truncated = new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size()));
-                            resultado.put(symbol, truncated);
+                            resultado.put(symbol, new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size())));
                         }
                     });
                     future.complete(resultado);
                 }
             }, 10 + (symbols.size() / 2), TimeUnit.SECONDS);
 
-            return future.get(20, TimeUnit.SECONDS);
+            return future.get(15, TimeUnit.SECONDS);
 
         } catch (Exception e) {
             log.error("Failed to fetch candles via WebSocket", e);
