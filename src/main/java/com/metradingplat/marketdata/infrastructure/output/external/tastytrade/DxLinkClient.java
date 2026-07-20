@@ -370,6 +370,8 @@ public class DxLinkClient {
 
         private void handleConfigured() { this.ready = true; initFuture.complete(this); if (this == defaultChannel) startKeepalive(); }
 
+        private int eventCount = 0;
+
         private void processData(JsonNode data) {
             int i = 0;
             while (i < data.size()) {
@@ -377,12 +379,17 @@ public class DxLinkClient {
                 if (item.isTextual()) { String type = item.asText(); if (i + 1 < data.size()) processCompactEvent(type, data.get(++i)); }
                 i++;
             }
+            eventCount++;
+            if (eventCount % 100 == 1) log.info("DxLink channel {} received {} events so far", id, eventCount);
         }
 
         private void processCompactEvent(String type, JsonNode data) {
             try {
                 String symbol = data.path(IDX_SYMBOL).asText();
                 if (symbol == null || symbol.isEmpty()) return;
+
+                if ("Profile".equals(type)) log.info("DxLink Profile received for {}", symbol);
+                if ("Summary".equals(type)) log.debug("DxLink Summary received for {}", symbol);
 
                 switch (type) {
                     case "Quote" -> {
