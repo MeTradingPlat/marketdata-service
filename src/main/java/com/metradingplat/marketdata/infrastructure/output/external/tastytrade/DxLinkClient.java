@@ -190,14 +190,14 @@ public class DxLinkClient {
     private void resubscribeAll() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         List<String> symbols = new ArrayList<>(subscribedSymbols);
-        int chunkSize = 200;
+        int chunkSize = 50;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             for (int j = i; j < end; j++) {
                 defaultChannel.subscribe(symbols.get(j));
             }
             if (end < symbols.size()) {
-                try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                try { Thread.sleep(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
         }
     }
