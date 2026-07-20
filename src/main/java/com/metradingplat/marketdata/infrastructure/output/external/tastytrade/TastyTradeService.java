@@ -401,9 +401,9 @@ public class TastyTradeService {
                 });
                 
                 future.complete(resultado);
-            }, 3 + (symbols.size() / 10), TimeUnit.SECONDS);
+            }, 10 + (symbols.size() / 2), TimeUnit.SECONDS);
 
-            return future.get(15, TimeUnit.SECONDS);
+            return future.get(20, TimeUnit.SECONDS);
 
         } catch (Exception e) {
             log.error("Failed to fetch candles via WebSocket", e);
