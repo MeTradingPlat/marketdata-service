@@ -372,10 +372,11 @@ public class TastyTradeService {
             AtomicInteger expectedSnapshots = new AtomicInteger(symbols.size());
 
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
+                String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 log.info("Ephemeral candle channel {}: received {} O={} C={} complete={}",
-                    channel.getId(), symbol, candle.getOpen(), candle.getClose(), isSnapshotComplete);
+                    channel.getId(), cleanSymbol, candle.getOpen(), candle.getClose(), isSnapshotComplete);
                 candle.setTimeframe(timeframe);
-                resultado.computeIfAbsent(symbol, k -> new java.util.ArrayList<>()).add(candle);
+                resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>()).add(candle);
                 if (isSnapshotComplete && receivedSnapshots.incrementAndGet() >= expectedSnapshots.get()) {
                     log.info("All candle snapshots received ({}), completing future", receivedSnapshots.get());
                     scheduler.schedule(() -> {
