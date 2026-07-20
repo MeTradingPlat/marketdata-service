@@ -87,42 +87,42 @@ public class DxLinkClient {
     private static final List<String> GREEKS_FIELDS = List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice");
     private static final List<String> CANDLE_FIELDS = List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility");
 
-    private static final int IDX_SYMBOL = 1;
-    private static final int IDX_TRADE_PRICE = 2;
-    private static final int IDX_TRADE_VOLUME = 3;
-    private static final int IDX_TRADE_TIME = 4;
-    private static final int IDX_SUMM_OPEN = 2;
-    private static final int IDX_SUMM_HIGH = 3;
-    private static final int IDX_SUMM_LOW = 4;
-    private static final int IDX_SUMM_PREV_CLOSE = 5;
-    private static final int IDX_SUMM_OI = 6;
-    private static final int IDX_PROF_SHARES = 2;
-    private static final int IDX_PROF_EPS = 3;
-    private static final int IDX_PROF_DIV_AMT = 4;
-    private static final int IDX_PROF_DIV_FREQ = 5;
-    private static final int IDX_PROF_STATUS = 6;
-    private static final int IDX_PROF_STATUS_RSN = 7;
-    private static final int IDX_PROF_HALT_START = 8;
-    private static final int IDX_PROF_HALT_END = 9;
-    private static final int IDX_PROF_BETA = 10;
-    private static final int IDX_PROF_FLOAT = 11;
-    private static final int IDX_ETH_VOL = 2;
-    private static final int IDX_ETH_TIME = 4;
-    private static final int IDX_GRK_IV = 2;
-    private static final int IDX_GRK_DELTA = 3;
-    private static final int IDX_GRK_GAMMA = 4;
-    private static final int IDX_GRK_THETA = 5;
-    private static final int IDX_GRK_VEGA = 6;
-    private static final int IDX_GRK_RHO = 7;
-    private static final int IDX_GRK_THEO = 8;
-    private static final int IDX_CAND_TIME = 2;
-    private static final int IDX_CAND_OPEN = 3;
-    private static final int IDX_CAND_HIGH = 4;
-    private static final int IDX_CAND_LOW = 5;
-    private static final int IDX_CAND_CLOSE = 6;
-    private static final int IDX_CAND_VOL = 7;
-    private static final int IDX_CAND_VWAP = 8;
-    private static final int IDX_CAND_IV = 9;
+    private static final int IDX_SYMBOL = 0;
+    private static final int IDX_TRADE_PRICE = 1;
+    private static final int IDX_TRADE_VOLUME = 2;
+    private static final int IDX_TRADE_TIME = 3;
+    private static final int IDX_SUMM_OPEN = 1;
+    private static final int IDX_SUMM_HIGH = 2;
+    private static final int IDX_SUMM_LOW = 3;
+    private static final int IDX_SUMM_PREV_CLOSE = 4;
+    private static final int IDX_SUMM_OI = 5;
+    private static final int IDX_PROF_SHARES = 1;
+    private static final int IDX_PROF_EPS = 2;
+    private static final int IDX_PROF_DIV_AMT = 3;
+    private static final int IDX_PROF_DIV_FREQ = 4;
+    private static final int IDX_PROF_STATUS = 5;
+    private static final int IDX_PROF_STATUS_RSN = 6;
+    private static final int IDX_PROF_HALT_START = 7;
+    private static final int IDX_PROF_HALT_END = 8;
+    private static final int IDX_PROF_BETA = 9;
+    private static final int IDX_PROF_FLOAT = 10;
+    private static final int IDX_ETH_VOL = 1;
+    private static final int IDX_ETH_TIME = 3;
+    private static final int IDX_GRK_IV = 1;
+    private static final int IDX_GRK_DELTA = 2;
+    private static final int IDX_GRK_GAMMA = 3;
+    private static final int IDX_GRK_THETA = 4;
+    private static final int IDX_GRK_VEGA = 5;
+    private static final int IDX_GRK_RHO = 6;
+    private static final int IDX_GRK_THEO = 7;
+    private static final int IDX_CAND_TIME = 1;
+    private static final int IDX_CAND_OPEN = 2;
+    private static final int IDX_CAND_HIGH = 3;
+    private static final int IDX_CAND_LOW = 4;
+    private static final int IDX_CAND_CLOSE = 5;
+    private static final int IDX_CAND_VOL = 6;
+    private static final int IDX_CAND_VWAP = 7;
+    private static final int IDX_CAND_IV = 8;
 
     public interface CandleCallback {
         void onCandle(String symbol, Candle candle, boolean isSnapshotComplete);
@@ -393,8 +393,8 @@ public class DxLinkClient {
 
                 switch (type) {
                     case "Quote" -> {
-                        double bid = extractNumericSafe(data.get(2));
-                        double ask = extractNumericSafe(data.get(3));
+                        double bid = extractNumericSafe(data.get(1));
+                        double ask = extractNumericSafe(data.get(2));
                         notifyMarketData(symbol, MarketDataStreamDTO.builder().symbol(symbol).bid(bid).ask(ask).timestamp(Instant.now()).build());
                     }
                     case "Trade" -> {
