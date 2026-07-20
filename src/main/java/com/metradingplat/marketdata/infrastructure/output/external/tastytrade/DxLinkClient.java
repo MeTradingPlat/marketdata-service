@@ -190,12 +190,12 @@ public class DxLinkClient {
     private void resubscribeAll() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         List<String> symbols = new ArrayList<>(subscribedSymbols);
-        int chunkSize = 50;
+        int chunkSize = 150;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             defaultChannel.subscribeBatch(symbols.subList(i, end));
             if (end < symbols.size()) {
-                try { Thread.sleep(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
         }
     }
@@ -288,7 +288,14 @@ public class DxLinkClient {
                     if (ch != null) ch.processData(msg.path("data"));
                 }
                 case "KEEPALIVE" -> sendMessage(Map.of("type", "KEEPALIVE", "channel", 0));
-                case "ERROR" -> log.error("DxLink error: {}", msg);
+                case "ERROR" -> {
+                    String errorType = msg.path("error").asText("");
+                    if ("BAD_ACTION".equals(errorType)) {
+                        log.debug("DxLink BAD_ACTION (informational): {}", msg.path("message").asText());
+                    } else {
+                        log.error("DxLink error: {}", msg);
+                    }
+                }
             }
         } catch (Exception e) { log.error("Message error", e); }
     }
