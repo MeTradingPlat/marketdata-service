@@ -135,6 +135,12 @@ public class DxLinkClient {
     public void setOnCandle(CandleCallback callback) { if (defaultChannel != null) defaultChannel.addCandleListener(callback); }
     public void setOnMessage(BiConsumer<String, JsonNode> callback) { if (defaultChannel != null) defaultChannel.addMessageListener(callback); }
     public void setOnGreeks(BiConsumer<String, OptionContract> callback) { if (defaultChannel != null) defaultChannel.addGreeksListener(callback); }
+    private BiConsumer<String, FundamentalData> fundamentalCallback;
+
+    public void setOnFundamentalData(BiConsumer<String, FundamentalData> callback) {
+        this.fundamentalCallback = callback;
+        if (defaultChannel != null) defaultChannel.addFundamentalListener(callback);
+    }
     public void setTokenRefresher(Supplier<String> tokenRefresher) { this.tokenRefresher = tokenRefresher; }
 
     public CompletableFuture<DxLinkChannel> openNewChannel() {
@@ -184,7 +190,15 @@ public class DxLinkClient {
     private void performReconnect() {
         cleanupConnection();
         String token = (tokenRefresher != null) ? tokenRefresher.get() : apiQuoteToken;
-        try { connect(dxLinkUrl, token); if (authenticated) resubscribeAll(); } catch (Exception e) { scheduleReconnect(); }
+        try {
+            connect(dxLinkUrl, token);
+            if (authenticated) {
+                if (fundamentalCallback != null && defaultChannel != null) {
+                    defaultChannel.addFundamentalListener(fundamentalCallback);
+                }
+                resubscribeAll();
+            }
+        } catch (Exception e) { scheduleReconnect(); }
     }
 
     private void resubscribeAll() {

@@ -108,9 +108,8 @@ public class TastyTradeService {
         }
 
         // Configurar listener de fundamentales en el canal DEFAULT
-        // Profile y Summary events llenan el cache automáticamente en tiempo real
-        if (dxLinkClient.getDefaultChannel() != null) {
-            dxLinkClient.getDefaultChannel().addFundamentalListener((sym, data) -> {
+        // Usa setOnFundamentalData que se re-aplica en cada reconnect
+        dxLinkClient.setOnFundamentalData((sym, data) -> {
             String upperSym = sym.toUpperCase();
             fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
                 if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
@@ -137,8 +136,7 @@ public class TastyTradeService {
                 if (v2.getLiquidityRating() != null) v1.setLiquidityRating(v2.getLiquidityRating());
                 return v1;
             });
-            });
-        }
+        });
 
         // Configurar callbacks AFTER connect() so defaultChannel exists
         dxLinkClient.setOnMarketData((symbol, data) -> {
