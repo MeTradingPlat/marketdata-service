@@ -225,7 +225,7 @@ public class TastyTradeService {
         if (!symbols.isEmpty()) {
             symbols = symbols.stream().distinct().toList();
             subscribeBatch(symbols);
-            log.info("Auto-subscribed {} unique symbols from {} markets", symbols.size(), ALL_US_MARKETS.size());
+            log.info("Auto-subscribed {} unique symbols for real-time prices. Fundamentals load on-demand.", symbols.size());
         }
     }
 
