@@ -762,12 +762,21 @@ public class TastyTradeService {
         CompletableFuture<Map<String, List<Candle>>> future = new CompletableFuture<>();
         try {
             DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
+            java.util.Set<String> completedSnapshots = new java.util.HashSet<>();
+            int expectedCount = symbols.size();
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
                 candle.setTimeframe(timeframe);
                 List<Candle> list = resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>());
                 if (list.stream().noneMatch(c -> c.getTimestamp().equals(candle.getTimestamp()))) list.add(candle);
+                if (isSnapshotComplete) {
+                    completedSnapshots.add(cleanSymbol.toUpperCase());
+                    if (completedSnapshots.size() >= expectedCount && !future.isDone()) {
+                        channel.close();
+                        future.complete(resultado);
+                    }
+                }
             });
             List<Map<String, Object>> items = new java.util.ArrayList<>();
             for (String s : symbols) {
@@ -777,7 +786,7 @@ public class TastyTradeService {
                 items.add(item);
             }
             channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
-            int timeoutSec = Math.min(10 + symbols.size() / 10, 20);
+            int timeoutSec = Math.min(10 + symbols.size() / 10, 30);
             scheduler.schedule(() -> {
                 if (!future.isDone()) { channel.close(); future.complete(resultado); }
             }, timeoutSec, TimeUnit.SECONDS);
