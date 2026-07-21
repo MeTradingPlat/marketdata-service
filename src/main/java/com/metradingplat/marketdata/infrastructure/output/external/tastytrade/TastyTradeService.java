@@ -223,10 +223,10 @@ public class TastyTradeService {
             }
         }
         if (!symbols.isEmpty()) {
-            symbols = symbols.stream().distinct().toList();
-            subscribeBatch(symbols);
-            log.info("Auto-subscribed {} symbols for real-time prices. Starting fundamentals preload...", symbols.size());
-            CompletableFuture.runAsync(() -> preloadFundamentalsFromRest(symbols));
+            List<String> distinctSymbols = symbols.stream().distinct().toList();
+            subscribeBatch(distinctSymbols);
+            log.info("Auto-subscribed {} symbols for real-time prices. Starting fundamentals preload...", distinctSymbols.size());
+            CompletableFuture.runAsync(() -> preloadFundamentalsFromRest(distinctSymbols));
         }
     }
 
