@@ -327,6 +327,24 @@ public class TastyTradeService {
         log.info("Preload OHLC: {} loaded", ohlcLoaded);
 
         log.info("Bulk preload REST totals: market-metrics={}, equities={}, ohlc={}. Starting DxLink phase in background.", loaded, equityLoaded, ohlcLoaded);
+
+        int calculatedShares = 0;
+        for (String sym : symbols) {
+            FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
+            if (fund == null) continue;
+            if (fund.getSharesOutstanding() == null) {
+                Double price = fund.getPrevClose();
+                if (price == null) price = fund.getOpen();
+                if (price != null && price > 0 && fund.getMarketCap() != null && fund.getMarketCap() > 0) {
+                    long shares = Math.round(fund.getMarketCap() / price);
+                    if (shares > 0) {
+                        fund.setSharesOutstanding(shares);
+                        calculatedShares++;
+                    }
+                }
+            }
+        }
+        log.info("Calculated sharesOutstanding for {} symbols from marketCap/price", calculatedShares);
         CompletableFuture.runAsync(() -> {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
