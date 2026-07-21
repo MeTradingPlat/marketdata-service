@@ -234,12 +234,16 @@ public class TastyTradeService {
         log.info("Bulk preloading REST fundamentals for {} symbols", symbols.size());
         int chunkSize = 250;
         int loaded = 0;
+        int emptyChunks = 0;
 
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             List<String> chunk = symbols.subList(i, end);
             try {
                 List<Map<String, Object>> metrics = tastyTradeClient.getMarketMetricsBatch(chunk);
+                if (metrics.isEmpty()) {
+                    emptyChunks++;
+                }
                 for (Map<String, Object> m : metrics) {
                     String sym = (String) m.get("symbol");
                     if (sym == null) continue;
@@ -259,7 +263,9 @@ public class TastyTradeService {
                 log.warn("Preload market-metrics chunk at {} failed: {}", i, e.getMessage());
             }
         }
+        log.info("Preload market-metrics: {} loaded, {} empty chunks", loaded, emptyChunks);
 
+        int equityLoaded = 0;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             try {
@@ -271,12 +277,15 @@ public class TastyTradeService {
                     if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(eq.get("shares-outstanding")));
                     if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(eq.get("free-float")));
                     if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(eq.get("beta")));
+                    equityLoaded++;
                 }
             } catch (Exception e) {
                 log.warn("Preload equities chunk at {} failed: {}", i, e.getMessage());
             }
         }
+        log.info("Preload equities: {} loaded", equityLoaded);
 
+        int ohlcLoaded = 0;
         int ohlcChunkSize = 100;
         for (int i = 0; i < symbols.size(); i += ohlcChunkSize) {
             int end = Math.min(i + ohlcChunkSize, symbols.size());
@@ -291,13 +300,15 @@ public class TastyTradeService {
                     if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("low")));
                     if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
                     if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(item.get("market-cap")));
+                    ohlcLoaded++;
                 }
             } catch (Exception e) {
                 log.warn("Preload OHLC chunk at {} failed: {}", i, e.getMessage());
             }
         }
+        log.info("Preload OHLC: {} loaded", ohlcLoaded);
 
-        log.info("Bulk preload complete: {} fundamentals enriched from REST. Starting DxLink phase in background.", loaded);
+        log.info("Bulk preload REST totals: market-metrics={}, equities={}, ohlc={}. Starting DxLink phase in background.", loaded, equityLoaded, ohlcLoaded);
         CompletableFuture.runAsync(() -> {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
