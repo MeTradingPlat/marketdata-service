@@ -722,11 +722,12 @@ public class TastyTradeClient {
             List<String> chunk = symbols.subList(i, Math.min(i + chunkSize, symbols.size()));
             
             try {
+                String commaSeparated = String.join(",", chunk);
                 Map<String, Object> response = tastyTradeRestClient
                         .get()
                         .uri(uriBuilder -> uriBuilder
                                 .path("/market-metrics")
-                                .queryParam("symbols", chunk)
+                                .queryParam("symbols", commaSeparated)
                                 .build())
                         .header("Authorization", "Bearer " + accessToken)
                         .retrieve()
