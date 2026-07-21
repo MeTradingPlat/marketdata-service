@@ -471,10 +471,13 @@ public class TastyTradeService {
             EnumTimeframe tf;
             try { tf = EnumTimeframe.valueOf(tfName); }
             catch (IllegalArgumentException e) { continue; }
-            long maxIdle = tf.getDuration().multipliedBy(3).toMillis();
-            if (maxIdle < 600_000) maxIdle = 600_000;
+            long maxIdle = tf.getDuration().multipliedBy(2).toMillis();
+            if (maxIdle < 300_000) maxIdle = 300_000;
             if (now - lastAccess > maxIdle) {
                 toRemove.add(key);
+                log.debug("Candle auto-unsubscribe: {} (idle {}s > {}s)", key,
+                        (now - lastAccess) / 1000, maxIdle / 1000);
+            }
             }
         }
         if (!toRemove.isEmpty()) {
