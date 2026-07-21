@@ -54,6 +54,7 @@ public class TastyTradeService {
     private final DxLinkClient dxLinkClient;
     private final AccountStreamerClient accountStreamerClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
+    private final com.metradingplat.marketdata.infrastructure.output.external.finra.FinraClient finraClient;
     private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     // Trackers para la heuristica de Halt Status (Punto 5)
@@ -264,7 +265,7 @@ public class TastyTradeService {
                     fund.setLendability((String) m.get("lendability"));
                     Object earnObj = m.get("earnings");
                     if (earnObj instanceof Map<?,?> earnMap && fund.getNextEarningsDate() == null) {
-                        Object earnDate = earnMap.get("estimated-report-date");
+                        Object earnDate = earnMap.get("expected-report-date");
                         if (earnDate instanceof String dateStr) {
                             try {
                                 fund.setNextEarningsDate(LocalDate.parse(dateStr));
@@ -367,6 +368,8 @@ public class TastyTradeService {
         }
         log.info("Calculated sharesOutstanding for {} symbols, floatShares for {} symbols",
                 calculatedShares, calculatedFloat);
+
+        CompletableFuture.runAsync(this::updateShortInterestFromFinra);
         CompletableFuture.runAsync(() -> {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
@@ -388,6 +391,34 @@ public class TastyTradeService {
     }
 
     private static final int SUBSCRIBE_CHUNK_SIZE = 33;
+    private void updateShortInterestFromFinra() {
+        log.info("Downloading FINRA short interest data...");
+        try {
+            Map<String, FinraClient.ShortInterestRecord> finraData = finraClient.downloadLatest();
+            if (finraData.isEmpty()) return;
+
+            int updated = 0;
+            for (var entry : finraData.entrySet()) {
+                String sym = entry.getKey();
+                FinraClient.ShortInterestRecord rec = entry.getValue();
+                FundamentalData fund = fundamentalsCache.computeIfAbsent(sym,
+                        k -> FundamentalData.builder().symbol(k).build());
+
+                fund.setShortRatio(rec.daysToCover > 0 ? rec.daysToCover : null);
+                fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
+
+                if (fund.getFloatShares() != null && fund.getFloatShares() > 0 && rec.sharesShorted > 0) {
+                    double shortPct = (double) rec.sharesShorted / fund.getFloatShares() * 100.0;
+                    fund.setShortInterest(Math.round(shortPct * 100.0) / 100.0);
+                }
+                updated++;
+            }
+            log.info("FINRA short interest updated for {} symbols", updated);
+        } catch (Exception e) {
+            log.warn("FINRA short interest update failed: {}", e.getMessage());
+        }
+    }
+
     private static final long SUBSCRIBE_CHUNK_DELAY_MS = 500;
 
     public void subscribeBatch(List<String> symbols) {
