@@ -263,15 +263,20 @@ public class TastyTradeService {
                     fund.setBorrowRate(safeConvertToDouble(m.get("borrow-rate")));
                     fund.setLendability((String) m.get("lendability"));
                     Object earnObj = m.get("earnings");
-                    if (earnObj instanceof Map<?,?> earnMap) {
+                    if (earnObj instanceof Map<?,?> earnMap && fund.getNextEarningsDate() == null) {
                         Object earnDate = earnMap.get("estimated-report-date");
-                        if (earnDate instanceof String dateStr && fund.getNextEarningsDate() == null) {
+                        if (earnDate instanceof String dateStr) {
                             try {
                                 fund.setNextEarningsDate(LocalDate.parse(dateStr));
                                 long days = java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(), LocalDate.parse(dateStr));
                                 fund.setDaysUntilEarnings((int) Math.max(0, days));
                             } catch (Exception ignored) {}
+                        } else if (loaded < 3) {
+                            log.info("Earnings object for {}: keys={}, estimated-report-date type={}",
+                                    sym, earnMap.keySet(), earnDate == null ? "null" : earnDate.getClass().getSimpleName());
                         }
+                    } else if (earnObj != null && loaded < 3) {
+                        log.info("Earnings field for {}: type={}, value={}", sym, earnObj.getClass().getSimpleName(), earnObj);
                     }
                     fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
                     fund.setImpliedVolatilityRank(safeConvertToDouble(m.get("implied-volatility-index-rank")));
