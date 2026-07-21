@@ -633,7 +633,11 @@ public class TastyTradeService {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
                 candle.setTimeframe(timeframe);
-                resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>()).add(candle);
+                List<Candle> list = resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>());
+                boolean isDuplicate = list.stream().anyMatch(c -> c.getTimestamp().equals(candle.getTimestamp()));
+                if (!isDuplicate) {
+                    list.add(candle);
+                }
             });
 
             List<Map<String, Object>> items = new java.util.ArrayList<>();
