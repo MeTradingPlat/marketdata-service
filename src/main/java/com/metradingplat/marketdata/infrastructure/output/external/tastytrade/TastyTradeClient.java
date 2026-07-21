@@ -241,16 +241,15 @@ public class TastyTradeClient {
      */
     public List<ActiveEquity> getAllActiveEquities() {
         List<ActiveEquity> all = new ArrayList<>();
-        int perPage = 500;
-        int maxPages = 20;
+        int perPage = 1000;
+        int maxPages = 100;
         for (int page = 0; page < maxPages; page++) {
             List<ActiveEquity> batch = getActiveEquities(page, perPage);
             if (batch.isEmpty()) break;
             all.addAll(batch);
             if (batch.size() < perPage) break;
         }
-        int totalPages = (all.size() + perPage - 1) / perPage;
-        log.info("Fetched {} total active equities from TastyTrade ({} pages)", all.size(), totalPages);
+        log.info("Fetched {} total active equities from TastyTrade ({} pages of {})", all.size(), (all.size() + perPage - 1) / perPage, perPage);
         return all;
     }
 
