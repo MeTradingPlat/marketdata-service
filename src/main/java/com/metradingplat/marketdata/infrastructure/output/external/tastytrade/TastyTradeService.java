@@ -706,8 +706,8 @@ public class TastyTradeService {
             candleChannel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
-                String tfPattern = java.util.regex.Pattern.compile("\\{=(.*?)\\}").matcher(symbol);
-                String tfLabel = tfPattern.find() ? tfPattern.group(1) : "UNKNOWN";
+                java.util.regex.Matcher tfMatcher = java.util.regex.Pattern.compile("\\{=(.*?)\\}").matcher(symbol);
+                String tfLabel = tfMatcher.find() ? tfMatcher.group(1) : "UNKNOWN";
                 EnumTimeframe tf = parseTimeframeFromLabel(tfLabel);
                 if (tf != null) candle.setTimeframe(tf);
                 String key = cleanSymbol.toUpperCase() + "|" + (tf != null ? tf.name() : "UNKNOWN");
