@@ -762,13 +762,26 @@ public class TastyTradeService {
 
     private void ensureConnected() {
         boolean reconnected = false;
-        
+
         if (!dxLinkClient.isConnected()) {
-            log.debug("Reconnecting to DxLink");
+            log.info("Reconnecting to DxLink");
             String token = tastyTradeClient.getApiQuoteToken();
             String url = tastyTradeClient.getDxlinkUrl();
             dxLinkClient.connect(url, token);
             reconnected = true;
+        }
+        if (reconnected && dxLinkClient.getDefaultChannel() != null) {
+            dxLinkClient.getDefaultChannel().addFundamentalListener((sym, data) -> {
+                String upperSym = sym.toUpperCase();
+                fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
+                    if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
+                    if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
+                    if (v2.getEps() != null) v1.setEps(v2.getEps());
+                    if (v2.getBeta() != null) v1.setBeta(v2.getBeta());
+                    if (v2.getTradingStatus() != null) v1.setTradingStatus(v2.getTradingStatus());
+                    return v1;
+                });
+            });
         }
         
         // Conexión al Account Streamer
