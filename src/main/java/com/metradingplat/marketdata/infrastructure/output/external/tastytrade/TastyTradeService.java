@@ -669,13 +669,15 @@ public class TastyTradeService {
             String key = sym.toUpperCase() + "|" + timeframe.name();
             candleLastAccess.put(key, System.currentTimeMillis());
             List<Candle> cached = candleCache.get(key);
-            if (cached != null && !cached.isEmpty()) {
-                List<Candle> sorted = cached.stream()
-                        .filter(c -> c.getTimestamp() != null)
-                        .sorted(java.util.Comparator.comparing(Candle::getTimestamp))
-                        .collect(java.util.stream.Collectors.toList());
-                if (sorted.size() > bars) sorted = sorted.subList(sorted.size() - bars, sorted.size());
-                result.put(sym.toUpperCase(), sorted);
+            if (cached != null) {
+                if (!cached.isEmpty()) {
+                    List<Candle> sorted = cached.stream()
+                            .filter(c -> c.getTimestamp() != null)
+                            .sorted(java.util.Comparator.comparing(Candle::getTimestamp))
+                            .collect(java.util.stream.Collectors.toList());
+                    if (sorted.size() > bars) sorted = sorted.subList(sorted.size() - bars, sorted.size());
+                    result.put(sym.toUpperCase(), sorted);
+                }
             } else {
                 missing.add(sym);
             }
