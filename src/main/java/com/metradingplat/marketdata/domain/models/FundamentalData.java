@@ -42,6 +42,9 @@ public class FundamentalData {
     private Instant lastShortInterestUpdated;
     private Instant lastUpdated;
     
+    private Double borrowRate;
+    private String lendability;
+
     // Market Metrics Fields
     private Double impliedVolatilityIndex;
     private Double impliedVolatilityRank;
