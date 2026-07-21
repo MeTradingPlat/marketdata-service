@@ -414,7 +414,7 @@ public class TastyTradeService {
     private void refreshMarketMetrics() {
         log.info("Scheduled market-metrics refresh starting...");
         try {
-            List<String> allSymbols = new ArrayList<>(subscribedSymbols);
+            List<String> allSymbols = new ArrayList<>(fundamentalsCache.keySet());
             if (allSymbols.isEmpty()) return;
             int updated = 0;
             for (int i = 0; i < allSymbols.size(); i += 250) {
