@@ -72,10 +72,11 @@ public class StreamingController {
         }
 
         if (!missing.isEmpty()) {
-            log.info("Cache miss for {}/{} symbols, loading async", missing.size(), symbols.size());
-            java.util.concurrent.CompletableFuture.runAsync(() -> {
-                tastyTradeService.getFundamentalsBatch(missing);
-            });
+            log.info("Cache miss for {}/{} symbols, loading now", missing.size(), symbols.size());
+            Map<String, FundamentalData> loaded = tastyTradeService.getFundamentalsBatch(missing);
+            for (var entry : loaded.entrySet()) {
+                cached.put(entry.getKey(), entry.getValue());
+            }
         }
 
         for (String sym : symbols) {

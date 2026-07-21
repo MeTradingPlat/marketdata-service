@@ -36,8 +36,9 @@ public class FundamentalsRestController {
         FundamentalData data = cached.getOrDefault(symbol.toUpperCase(),
                 FundamentalData.builder().symbol(symbol).build());
         if (!cached.containsKey(symbol.toUpperCase())) {
-            java.util.concurrent.CompletableFuture.runAsync(() ->
-                    tastyTradeService.getFundamentalsBatch(List.of(symbol)));
+            Map<String, FundamentalData> loaded = tastyTradeService.getFundamentalsBatch(List.of(symbol));
+            FundamentalData loadedData = loaded.get(symbol.toUpperCase());
+            if (loadedData != null) data = loadedData;
         }
         return ResponseEntity.ok(objMapper.toDTORespuesta(data));
     }
@@ -61,9 +62,11 @@ public class FundamentalsRestController {
         }
 
         if (!missing.isEmpty()) {
-            log.info("Fundamentals batch: {} cache misses loading async", missing.size());
-            java.util.concurrent.CompletableFuture.runAsync(() ->
-                    tastyTradeService.getFundamentalsBatch(missing));
+            log.info("Fundamentals batch: {} cache misses loading now", missing.size());
+            Map<String, FundamentalData> loaded = tastyTradeService.getFundamentalsBatch(missing);
+            for (var entry : loaded.entrySet()) {
+                result.put(entry.getKey(), objMapper.toDTORespuesta(entry.getValue()));
+            }
         }
 
         return ResponseEntity.ok(result);
