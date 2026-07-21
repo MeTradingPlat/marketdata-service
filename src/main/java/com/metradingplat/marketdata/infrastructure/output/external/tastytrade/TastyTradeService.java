@@ -408,7 +408,7 @@ public class TastyTradeService {
                 FundamentalData fund = fundamentalsCache.computeIfAbsent(sym,
                         k -> FundamentalData.builder().symbol(k).build());
 
-                fund.setShortRatio(rec.daysToCover > 0 ? rec.daysToCover : null);
+                fund.setShortRatio(rec.daysToCover > 0 && rec.daysToCover < 999 ? rec.daysToCover : null);
                 fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
 
                 if (updated < 3) {
