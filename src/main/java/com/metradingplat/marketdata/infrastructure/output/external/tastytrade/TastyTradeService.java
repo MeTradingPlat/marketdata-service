@@ -259,6 +259,14 @@ public class TastyTradeService {
                     if (fund.getEps() == null) fund.setEps(safeConvertToDouble(m.get("earnings-per-share")));
                     if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(m.get("market-cap")));
                     if (fund.getShortRatio() == null) fund.setShortRatio(safeConvertToDouble(m.get("short-ratio")));
+                    if (fund.getDividendAmount() == null) fund.setDividendAmount(safeConvertToDouble(m.get("dividend-rate-per-share")));
+                    Object earnObj = m.get("earnings");
+                    if (earnObj instanceof Map<?,?> earnMap) {
+                        Object earnDate = earnMap.get("estimated-report-date");
+                        if (earnDate instanceof String dateStr && fund.getNextEarningsDate() == null) {
+                            try { fund.setNextEarningsDate(LocalDate.parse(dateStr)); } catch (Exception ignored) {}
+                        }
+                    }
                     fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
                     fund.setImpliedVolatilityRank(safeConvertToDouble(m.get("implied-volatility-index-rank")));
                     fund.setImpliedVolatilityPercentile(safeConvertToDouble(m.get("implied-volatility-percentile")));
