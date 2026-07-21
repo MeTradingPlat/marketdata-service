@@ -297,25 +297,25 @@ public class TastyTradeService {
             }
         }
 
-        log.info("Bulk preload complete: {} fundamentals enriched from REST", loaded);
-
-        List<String> stillMissing = new ArrayList<>();
-        for (String sym : symbols) {
-            FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
-            if (fund == null || fund.getBeta() == null) {
-                stillMissing.add(sym);
+        log.info("Bulk preload complete: {} fundamentals enriched from REST. Starting DxLink phase in background.", loaded);
+        CompletableFuture.runAsync(() -> {
+            List<String> stillMissing = new ArrayList<>();
+            for (String sym : symbols) {
+                FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
+                if (fund == null || fund.getBeta() == null) {
+                    stillMissing.add(sym);
+                }
             }
-        }
-
-        if (!stillMissing.isEmpty()) {
-            log.info("DxLink ephemeral preload for {} symbols still missing beta", stillMissing.size());
-            try {
-                getFundamentalsBatch(stillMissing);
-                log.info("DxLink ephemeral preload complete for {} symbols", stillMissing.size());
-            } catch (Exception e) {
-                log.warn("DxLink ephemeral preload failed: {}", e.getMessage());
+            if (!stillMissing.isEmpty()) {
+                log.info("DxLink ephemeral background preload for {} symbols", stillMissing.size());
+                try {
+                    getFundamentalsBatch(stillMissing);
+                    log.info("DxLink ephemeral background preload complete");
+                } catch (Exception e) {
+                    log.warn("DxLink ephemeral background preload failed: {}", e.getMessage());
+                }
             }
-        }
+        });
     }
 
     private static final int SUBSCRIBE_CHUNK_SIZE = 33;
