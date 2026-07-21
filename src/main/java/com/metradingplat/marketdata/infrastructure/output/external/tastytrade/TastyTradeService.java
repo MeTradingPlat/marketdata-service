@@ -691,7 +691,18 @@ public class TastyTradeService {
                     String key = entry.getKey() + "|" + timeframe.name();
                     if (entry.getValue() != null && !entry.getValue().isEmpty()) {
                         candleCache.put(key, entry.getValue());
-                        result.put(entry.getKey(), entry.getValue());
+                    }
+                }
+                for (String sym : missing) {
+                    String key = sym.toUpperCase() + "|" + timeframe.name();
+                    List<Candle> fromCache = candleCache.get(key);
+                    if (fromCache != null && !fromCache.isEmpty()) {
+                        List<Candle> sorted = fromCache.stream()
+                                .filter(c -> c.getTimestamp() != null)
+                                .sorted(java.util.Comparator.comparing(Candle::getTimestamp))
+                                .collect(java.util.stream.Collectors.toList());
+                        if (sorted.size() > bars) sorted = sorted.subList(sorted.size() - bars, sorted.size());
+                        result.put(sym.toUpperCase(), sorted);
                     }
                 }
             }
