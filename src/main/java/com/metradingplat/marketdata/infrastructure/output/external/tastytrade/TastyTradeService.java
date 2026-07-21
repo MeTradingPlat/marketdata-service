@@ -408,6 +408,11 @@ public class TastyTradeService {
                 fund.setShortRatio(rec.daysToCover > 0 ? rec.daysToCover : null);
                 fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
 
+                if (updated < 3) {
+                    log.info("FINRA sample {}: sharesShorted={}, avgVol={}, daysToCover={}, floatShares={}",
+                            sym, rec.sharesShorted, rec.avgDailyVolume, rec.daysToCover, fund.getFloatShares());
+                }
+
                 if (fund.getFloatShares() != null && fund.getFloatShares() > 0 && rec.sharesShorted > 0) {
                     double shortPct = (double) rec.sharesShorted / fund.getFloatShares() * 100.0;
                     fund.setShortInterest(Math.round(shortPct * 100.0) / 100.0);
