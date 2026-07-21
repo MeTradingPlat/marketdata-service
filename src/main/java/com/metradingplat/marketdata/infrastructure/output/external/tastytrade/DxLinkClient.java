@@ -462,7 +462,7 @@ public class DxLinkClient {
                         if (isPreMarket(t)) f.setPreMarketVolume(v); else f.setPostMarketVolume(v);
                         notifyFundamentals(symbol, f);
                     }
-                    case "Profile" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).sharesOutstanding(data.path(IDX_PROF_SHARES).asLong()).eps(extractNullableDouble(data.get(IDX_PROF_EPS))).dividendAmount(extractNullableDouble(data.get(IDX_PROF_DIV_AMT))).dividendFrequency(data.path(IDX_PROF_DIV_FREQ).asText()).tradingStatus(data.path(IDX_PROF_STATUS).asText()).statusReason(data.path(IDX_PROF_STATUS_RSN).asText()).haltStartTime(data.path(IDX_PROF_HALT_START).asLong()).haltEndTime(data.path(IDX_PROF_HALT_END).asLong()).beta(extractNullableDouble(data.get(IDX_PROF_BETA))).floatShares(data.path(IDX_PROF_FLOAT).asLong()).build());
+                    case "Profile" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).sharesOutstanding(asNullableLong(data.get(IDX_PROF_SHARES))).eps(extractNullableDouble(data.get(IDX_PROF_EPS))).dividendAmount(extractNullableDouble(data.get(IDX_PROF_DIV_AMT))).dividendFrequency(asNullableString(data.get(IDX_PROF_DIV_FREQ))).tradingStatus(asNullableString(data.get(IDX_PROF_STATUS))).statusReason(asNullableString(data.get(IDX_PROF_STATUS_RSN))).haltStartTime(data.path(IDX_PROF_HALT_START).asLong()).haltEndTime(data.path(IDX_PROF_HALT_END).asLong()).beta(extractNullableDouble(data.get(IDX_PROF_BETA))).floatShares(asNullableLong(data.get(IDX_PROF_FLOAT))).build());
                     case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol).impliedVolatility(extractNullableDouble(data.get(IDX_GRK_IV))).delta(extractNullableDouble(data.get(IDX_GRK_DELTA))).gamma(extractNullableDouble(data.get(IDX_GRK_GAMMA))).theta(extractNullableDouble(data.get(IDX_GRK_THETA))).vega(extractNullableDouble(data.get(IDX_GRK_VEGA))).rho(extractNullableDouble(data.get(IDX_GRK_RHO))).theoreticalPrice(extractNullableDouble(data.get(IDX_GRK_THEO))).build());
                     case "Candle" -> {
                         long time = data.path(IDX_CAND_TIME).asLong();
@@ -506,6 +506,18 @@ public class DxLinkClient {
         private Double extractNullableDouble(JsonNode node) {
             double v = extractNumericSafe(node);
             return Double.isFinite(v) ? v : null;
+        }
+
+        private Long asNullableLong(JsonNode node) {
+            if (node == null || node.isMissingNode() || node.isNull()) return null;
+            long v = node.asLong();
+            return v > 0 ? v : null;
+        }
+
+        private String asNullableString(JsonNode node) {
+            if (node == null || node.isMissingNode() || node.isNull()) return null;
+            String v = node.asText();
+            return (v == null || v.isEmpty() || "null".equals(v) || "NaN".equals(v)) ? null : v;
         }
 
         private void notifyMarketData(String s, MarketDataStreamDTO d) { marketDataListeners.forEach(l -> { try { l.accept(s, d); } catch (Exception e) {} }); }
