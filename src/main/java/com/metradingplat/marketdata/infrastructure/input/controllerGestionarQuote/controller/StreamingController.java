@@ -38,11 +38,9 @@ public class StreamingController {
 
     @PostMapping("/unsubscribe")
     public ResponseEntity<Map<String, String>> unsubscribeBatch(@RequestBody List<String> symbols) {
-        log.info("Unsubscribe request: {} symbols", symbols.size());
-        tastyTradeService.unsubscribeBatch(symbols);
-        return ResponseEntity.ok(Map.of(
-            "status", "unsubscribed",
-            "count", String.valueOf(symbols.size())
+        return ResponseEntity.status(403).body(Map.of(
+            "status", "blocked",
+            "message", "Fundamentals auto-subscribe is permanent. Unsubscribe not allowed."
         ));
     }
 

@@ -609,24 +609,109 @@ public class TastyTradeService {
         return result.getOrDefault(symbol, List.of());
     }
 
-    /**
-     * Obtiene candles históricos de múltiples símbolos (Punto 2).
-     * Reemplaza WebSocket por llamadas REST para asegurar la alineación temporal.
-     */
+    private DxLinkClient.DxLinkChannel candleChannel;
+    private final ConcurrentHashMap<String, List<Candle>> candleCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> candleLastAccess = new ConcurrentHashMap<>();
+    private final Set<String> subscribedCandleSymbols = ConcurrentHashMap.newKeySet();
+
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Candles batch: {} symbols, timeframe={}, bars={}", symbols.size(), timeframe, bars);
+        Map<String, List<Candle>> result = new ConcurrentHashMap<>();
+        List<String> missing = new ArrayList<>();
+
+        for (String sym : symbols) {
+            String key = sym.toUpperCase() + "|" + timeframe.name();
+            candleLastAccess.put(key, System.currentTimeMillis());
+            List<Candle> cached = candleCache.get(key);
+            if (cached != null && !cached.isEmpty()) {
+                List<Candle> sorted = cached.stream()
+                        .filter(c -> c.getTimestamp() != null)
+                        .sorted(java.util.Comparator.comparing(Candle::getTimestamp))
+                        .collect(java.util.stream.Collectors.toList());
+                if (sorted.size() > bars) sorted = sorted.subList(sorted.size() - bars, sorted.size());
+                result.put(sym.toUpperCase(), sorted);
+            } else {
+                missing.add(sym);
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            log.info("Candle cache miss for {}/{} symbols, fetching via persistent channel", missing.size(), symbols.size());
+            ensureCandleChannel();
+            if (candleChannel != null) {
+                subscribeToCandles(missing, timeframe);
+                Map<String, List<Candle>> fetched = fetchCandlesFromDxLink(missing, timeframe, 700);
+                for (var entry : fetched.entrySet()) {
+                    String key = entry.getKey() + "|" + timeframe.name();
+                    if (entry.getValue() != null && !entry.getValue().isEmpty()) {
+                        candleCache.put(key, entry.getValue());
+                        result.put(entry.getKey(), entry.getValue());
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    private synchronized void ensureCandleChannel() {
+        if (candleChannel != null && candleChannel.isReady()) return;
+        try {
+            candleChannel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
+            candleChannel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
+                String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
+                candle.setSymbol(cleanSymbol);
+                String tf = candle.getTimeframe() != null ? candle.getTimeframe().name() : "UNKNOWN";
+                String key = cleanSymbol.toUpperCase() + "|" + tf;
+                List<Candle> list = candleCache.computeIfAbsent(key, k -> new java.util.ArrayList<>());
+                if (list.stream().noneMatch(c -> c.getTimestamp().equals(candle.getTimestamp()))) {
+                    if (list.size() >= 2000) list.remove(0);
+                    list.add(candle);
+                }
+            });
+            log.info("Persistent candle channel opened");
+        } catch (Exception e) {
+            log.error("Failed to open candle channel", e);
+            candleChannel = null;
+        }
+    }
+
+    private void subscribeToCandles(List<String> symbols, EnumTimeframe timeframe) {
+        String label = timeframe.getLabel();
+        String type = label.substring(label.length() - 1);
+        String period = label.substring(0, label.length() - 1);
+        List<String> newSymbols = new ArrayList<>();
+        for (String s : symbols) {
+            if (subscribedCandleSymbols.add(s.toUpperCase() + "|" + timeframe.name())) {
+                newSymbols.add(s);
+            }
+        }
+        if (newSymbols.isEmpty()) return;
+        log.info("Subscribing {} candle symbols to persistent channel", newSymbols.size());
+        for (int i = 0; i < newSymbols.size(); i += 200) {
+            int end = Math.min(i + 200, newSymbols.size());
+            List<Map<String, Object>> items = new java.util.ArrayList<>();
+            for (String s : newSymbols.subList(i, end)) {
+                Map<String, Object> item = new java.util.HashMap<>();
+                item.put("symbol", String.format("%s{=%s%s}", s, period, type));
+                item.put("type", "Candle");
+                items.add(item);
+            }
+            Instant fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(1400L));
+            candleChannel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
+        }
+    }
+
+    private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        log.info("Fetching candles via DxLink: {} symbols, timeframe={}", symbols.size(), timeframe);
         Instant now = Instant.now();
         Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
         if (java.time.Duration.between(fromTime, now).toDays() > 270)
             fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
-
         String label = timeframe.getLabel();
         String type = label.substring(label.length() - 1);
         String period = label.substring(0, label.length() - 1);
         ensureConnected();
         Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
         CompletableFuture<Map<String, List<Candle>>> future = new CompletableFuture<>();
-
         try {
             DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
@@ -634,12 +719,8 @@ public class TastyTradeService {
                 candle.setSymbol(cleanSymbol);
                 candle.setTimeframe(timeframe);
                 List<Candle> list = resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>());
-                boolean isDuplicate = list.stream().anyMatch(c -> c.getTimestamp().equals(candle.getTimestamp()));
-                if (!isDuplicate) {
-                    list.add(candle);
-                }
+                if (list.stream().noneMatch(c -> c.getTimestamp().equals(candle.getTimestamp()))) list.add(candle);
             });
-
             List<Map<String, Object>> items = new java.util.ArrayList<>();
             for (String s : symbols) {
                 Map<String, Object> item = new java.util.HashMap<>();
@@ -648,18 +729,9 @@ public class TastyTradeService {
                 items.add(item);
             }
             channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
-
             int timeoutSec = 15 + (symbols.size() / 2);
             scheduler.schedule(() -> {
-                if (!future.isDone()) {
-                    channel.close();
-                    resultado.forEach((sym, candles) -> {
-                        candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
-                        if (candles.size() > bars)
-                            resultado.put(sym, new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size())));
-                    });
-                    future.complete(resultado);
-                }
+                if (!future.isDone()) { channel.close(); future.complete(resultado); }
             }, timeoutSec, TimeUnit.SECONDS);
             return future.get(timeoutSec + 5, TimeUnit.SECONDS);
         } catch (Exception e) {
