@@ -64,27 +64,27 @@ public class StreamingController {
     public ResponseEntity<Map<String, FundamentalData>> getRealtimeFundamentals(@RequestBody List<String> symbols) {
         Map<String, FundamentalData> cached = tastyTradeService.getCachedFundamentals(symbols);
         List<String> missing = new ArrayList<>();
-        Map<String, FundamentalData> result = new ConcurrentHashMap<>();
 
         for (String sym : symbols) {
-            String upper = sym.toUpperCase();
-            FundamentalData d = cached.get(upper);
-            if (d != null) {
-                result.put(upper, d);
-            } else {
+            if (!cached.containsKey(sym.toUpperCase())) {
                 missing.add(sym);
             }
         }
 
         if (!missing.isEmpty()) {
-            log.info("Cache miss for {}/{} symbols, loading via REST+DxLink", missing.size(), symbols.size());
-            Map<String, FundamentalData> loaded = tastyTradeService.getFundamentalsBatch(missing);
-            result.putAll(loaded);
+            log.info("Cache miss for {}/{} symbols, loading async", missing.size(), symbols.size());
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                tastyTradeService.getFundamentalsBatch(missing);
+            });
         }
 
-        log.info("Realtime fundamentals: {}/{} symbols ({})",
-                result.size(), symbols.size(),
-                missing.isEmpty() ? "all from cache" : missing.size() + " loaded");
-        return ResponseEntity.ok(result);
+        for (String sym : symbols) {
+            cached.computeIfAbsent(sym.toUpperCase(),
+                    k -> FundamentalData.builder().symbol(k).build());
+        }
+
+        log.info("Realtime fundamentals: {}/{} from cache ({} loading async)",
+                cached.size(), symbols.size(), missing.size());
+        return ResponseEntity.ok(cached);
     }
 }
