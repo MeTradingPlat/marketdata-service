@@ -189,17 +189,24 @@ public class TastyTradeService {
             greeksCache.put(symbol, greeks);
         });
 
-        log.info("DxLink initialized. Auto-subscribe will start in 5s...");
+        log.info("DxLink initialized. Auto-subscribe and REST preload will start in 5s...");
         CompletableFuture.runAsync(() -> {
             try {
                 Thread.sleep(5000);
                 if (dxLinkClient.isConnected()) {
                     subscribeAllMarkets();
                 } else {
-                    log.warn("Auto-subscribe skipped: DxLink not connected after init");
+                    log.warn("DxLink not connected, running REST-only preload");
+                    List<ActiveEquity> allEquities = tastyTradeClient.getAllActiveEquities();
+                    List<String> symbols = allEquities.stream()
+                            .map(ActiveEquity::getSymbol)
+                            .distinct()
+                            .toList();
+                    log.info("REST-only preload for {} symbols (no DxLink)", symbols.size());
+                    preloadFundamentalsFromRest(symbols);
                 }
             } catch (Exception e) {
-                log.error("Auto-subscribe failed: {}", e.getMessage());
+                log.error("Auto-subscribe/preload failed: {}", e.getMessage());
             }
         });
     }
