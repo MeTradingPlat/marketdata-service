@@ -614,13 +614,44 @@ public class TastyTradeService {
      * Reemplaza WebSocket por llamadas REST para asegurar la alineación temporal.
      */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Batch candles: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
+        boolean isIntraday = timeframe.getLabel().contains("m") || timeframe.getLabel().contains("h");
+        if (isIntraday) {
+            return getCandlesBatchViaWebSocket(symbols, timeframe, bars);
+        }
+        return getCandlesBatchViaRest(symbols, timeframe, bars);
+    }
+
+    private Map<String, List<Candle>> getCandlesBatchViaRest(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        Map<String, List<Candle>> result = new ConcurrentHashMap<>();
+        Instant now = Instant.now();
+        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy(bars * 2L));
+
+        for (String sym : symbols) {
+            try {
+                String dxSymbol = String.format("%s{=%s}", sym, timeframe.getLabel());
+                List<Candle> candles = tastyTradeClient.getHistoricalCandles(sym, dxSymbol, fromTime, now);
+                if (candles != null && !candles.isEmpty()) {
+                    candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
+                    if (candles.size() > bars) {
+                        candles = candles.subList(candles.size() - bars, candles.size());
+                    }
+                    candles.forEach(c -> { c.setSymbol(sym); c.setTimeframe(timeframe); });
+                    result.put(sym, candles);
+                }
+            } catch (Exception e) {
+                log.warn("REST candles failed for {}: {}", sym, e.getMessage());
+            }
+        }
+        log.info("REST candles: {}/{} symbols returned", result.size(), symbols.size());
+        return result;
+    }
+
+    private Map<String, List<Candle>> getCandlesBatchViaWebSocket(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        log.info("WebSocket candles: {} symbols, timeframe={}", symbols.size(), timeframe);
         Instant now = Instant.now();
         Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
         long daysBetween = java.time.Duration.between(fromTime, now).toDays();
-        boolean isIntraday = timeframe.getLabel().contains("m") || timeframe.getLabel().contains("h");
-        if (isIntraday && daysBetween > 270) fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
-        if (!isIntraday && daysBetween > 3650) fromTime = now.minus(3650, java.time.temporal.ChronoUnit.DAYS);
+        if (daysBetween > 270) fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
 
         String label = timeframe.getLabel();
         String type = label.substring(label.length() - 1);
@@ -657,7 +688,7 @@ public class TastyTradeService {
             }, 10 + (symbols.size() / 2), TimeUnit.SECONDS);
             return future.get(15, TimeUnit.SECONDS);
         } catch (Exception e) {
-            log.error("Candles failed", e);
+            log.error("WebSocket candles failed", e);
             return Map.of();
         }
     }
