@@ -192,6 +192,10 @@ public class TastyTradeService {
         });
 
         log.info("DxLink initialized. Auto-subscribe and REST preload will start in 5s...");
+
+        scheduler.scheduleAtFixedRate(this::refreshMarketMetrics, 4, 4, TimeUnit.HOURS);
+        scheduler.scheduleAtFixedRate(this::checkFinraForUpdate, 1, 12, TimeUnit.HOURS);
+
         CompletableFuture.runAsync(() -> {
             try {
                 Thread.sleep(5000);
@@ -395,6 +399,72 @@ public class TastyTradeService {
     }
 
     private static final int SUBSCRIBE_CHUNK_SIZE = 33;
+    private volatile String lastFinraSettlement;
+
+    private void refreshMarketMetrics() {
+        log.info("Scheduled market-metrics refresh starting...");
+        try {
+            List<String> allSymbols = new ArrayList<>(subscribedSymbols);
+            if (allSymbols.isEmpty()) return;
+            int updated = 0;
+            for (int i = 0; i < allSymbols.size(); i += 250) {
+                int end = Math.min(i + 250, allSymbols.size());
+                List<String> chunk = allSymbols.subList(i, end);
+                List<Map<String, Object>> metrics = tastyTradeClient.getMarketMetricsBatch(chunk);
+                for (Map<String, Object> m : metrics) {
+                    String sym = (String) m.get("symbol");
+                    if (sym == null) continue;
+                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(),
+                            k -> FundamentalData.builder().symbol(k).build());
+                    fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
+                    fund.setImpliedVolatilityRank(safeConvertToDouble(m.get("implied-volatility-index-rank")));
+                    fund.setImpliedVolatilityPercentile(safeConvertToDouble(m.get("implied-volatility-percentile")));
+                    fund.setLiquidity(safeConvertToDouble(m.get("liquidity-value")));
+                    fund.setLiquidityRating(safeConvertToInt(m.get("liquidity-rating")));
+                    fund.setBorrowRate(safeConvertToDouble(m.get("borrow-rate")));
+                    fund.setLendability((String) m.get("lendability"));
+                    updated++;
+                }
+            }
+            log.info("Market-metrics refresh: {} symbols updated", updated);
+        } catch (Exception e) {
+            log.warn("Market-metrics refresh failed: {}", e.getMessage());
+        }
+    }
+
+    private void checkFinraForUpdate() {
+        log.info("Checking FINRA for new short interest data...");
+        try {
+            Map<String, FinraClient.ShortInterestRecord> finraData = finraClient.downloadLatest();
+            if (finraData.isEmpty()) return;
+
+            String newSettlement = finraData.values().iterator().next().settlementDate;
+            if (newSettlement.equals(lastFinraSettlement)) {
+                log.debug("FINRA data unchanged (settlement {})", lastFinraSettlement);
+                return;
+            }
+
+            int updated = 0;
+            for (var entry : finraData.entrySet()) {
+                String sym = entry.getKey();
+                FinraClient.ShortInterestRecord rec = entry.getValue();
+                FundamentalData fund = fundamentalsCache.computeIfAbsent(sym,
+                        k -> FundamentalData.builder().symbol(k).build());
+                fund.setShortRatio(rec.daysToCover > 0 && rec.daysToCover < 999 ? rec.daysToCover : null);
+                fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
+                if (fund.getFloatShares() != null && fund.getFloatShares() > 0 && rec.sharesShorted > 0) {
+                    double shortPct = (double) rec.sharesShorted / fund.getFloatShares() * 100.0;
+                    fund.setShortInterest(Math.round(shortPct * 100.0) / 100.0);
+                }
+                updated++;
+            }
+            lastFinraSettlement = newSettlement;
+            log.info("FINRA short interest refreshed: {} symbols (settlement {})", updated, newSettlement);
+        } catch (Exception e) {
+            log.warn("FINRA check failed: {}", e.getMessage());
+        }
+    }
+
     private void updateShortInterestFromFinra() {
         log.info("Downloading FINRA short interest data...");
         try {

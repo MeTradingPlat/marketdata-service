@@ -25,10 +25,12 @@ public class FinraClient {
         public long sharesShorted;
         public long avgDailyVolume;
         public double daysToCover;
+        public String settlementDate;
     }
 
     public Map<String, ShortInterestRecord> downloadLatest() {
         Map<String, ShortInterestRecord> result = new HashMap<>();
+        String firstSettlementDate = null;
 
         for (int offset = 0; offset < MAX_RETRY_DAYS; offset++) {
             LocalDate candidate = findSettlementDate(offset);
@@ -52,6 +54,8 @@ public class FinraClient {
                     rec.sharesShorted = parseLong(cols[5]);
                     rec.avgDailyVolume = parseLong(cols[8]);
                     rec.daysToCover = parseDouble(cols[9]);
+                    rec.settlementDate = cols.length > 13 ? cols[13].trim() : "";
+                    if (firstSettlementDate == null) firstSettlementDate = rec.settlementDate;
                     result.put(symbol, rec);
                 }
 
