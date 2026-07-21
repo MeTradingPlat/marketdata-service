@@ -472,7 +472,7 @@ public class TastyTradeService {
             try { tf = EnumTimeframe.valueOf(tfName); }
             catch (IllegalArgumentException e) { continue; }
             long maxIdle = tf.getDuration().multipliedBy(3).toMillis();
-            if (maxIdle < 180_000) maxIdle = 180_000;
+            if (maxIdle < 600_000) maxIdle = 600_000;
             if (now - lastAccess > maxIdle) {
                 toRemove.add(key);
             }
