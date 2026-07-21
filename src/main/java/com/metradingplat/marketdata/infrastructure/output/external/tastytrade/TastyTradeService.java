@@ -777,7 +777,7 @@ public class TastyTradeService {
                 items.add(item);
             }
             channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
-            int timeoutSec = 15 + (symbols.size() / 2);
+            int timeoutSec = Math.min(10 + symbols.size() / 10, 20);
             scheduler.schedule(() -> {
                 if (!future.isDone()) { channel.close(); future.complete(resultado); }
             }, timeoutSec, TimeUnit.SECONDS);
