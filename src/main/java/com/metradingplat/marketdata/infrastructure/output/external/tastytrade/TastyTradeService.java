@@ -193,8 +193,10 @@ public class TastyTradeService {
 
         log.info("DxLink initialized. Auto-subscribe and REST preload will start in 5s...");
 
-        scheduler.scheduleAtFixedRate(this::refreshMarketMetrics, 4, 4, TimeUnit.HOURS);
-        scheduler.scheduleAtFixedRate(this::checkFinraForUpdate, 1, 12, TimeUnit.HOURS);
+        scheduler.scheduleAtFixedRate(this::refreshMarketMetrics,
+                millisUntilNextHour(8), 4 * 3600_000, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
+                millisUntilNextHour(9), 24 * 3600_000, TimeUnit.MILLISECONDS);
 
         CompletableFuture.runAsync(() -> {
             try {
@@ -399,6 +401,14 @@ public class TastyTradeService {
     }
 
     private static final int SUBSCRIBE_CHUNK_SIZE = 33;
+    private static long millisUntilNextHour(int targetHour) {
+        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(java.time.ZoneId.of("America/New_York"));
+        java.time.ZonedDateTime next = now.withMinute(5).withSecond(0).withNano(0);
+        if (next.getHour() >= targetHour) next = next.plusDays(1);
+        next = next.withHour(targetHour).withMinute(0);
+        return java.time.Duration.between(now, next).toMillis();
+    }
+
     private volatile String lastFinraSettlement;
 
     private void refreshMarketMetrics() {
