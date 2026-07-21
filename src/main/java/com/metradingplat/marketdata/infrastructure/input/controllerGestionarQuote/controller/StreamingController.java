@@ -1,7 +1,9 @@
 package com.metradingplat.marketdata.infrastructure.input.controllerGestionarQuote.controller;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,7 +12,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.metradingplat.marketdata.application.input.GestionarFundamentalsCUIntPort;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
@@ -24,7 +25,6 @@ import lombok.extern.slf4j.Slf4j;
 public class StreamingController {
 
     private final TastyTradeService tastyTradeService;
-    private final GestionarFundamentalsCUIntPort fundamentalsCU;
 
     @PostMapping("/subscribe")
     public ResponseEntity<Map<String, String>> subscribeBatch(@RequestBody List<String> symbols) {
@@ -62,8 +62,29 @@ public class StreamingController {
 
     @PostMapping("/fundamentals/realtime")
     public ResponseEntity<Map<String, FundamentalData>> getRealtimeFundamentals(@RequestBody List<String> symbols) {
-        Map<String, FundamentalData> data = fundamentalsCU.obtenerFundamentalsBatch(symbols);
-        log.info("Realtime fundamentals: {}/{} symbols (full pipeline)", data.size(), symbols.size());
-        return ResponseEntity.ok(data);
+        Map<String, FundamentalData> cached = tastyTradeService.getCachedFundamentals(symbols);
+        List<String> missing = new ArrayList<>();
+        Map<String, FundamentalData> result = new ConcurrentHashMap<>();
+
+        for (String sym : symbols) {
+            String upper = sym.toUpperCase();
+            FundamentalData d = cached.get(upper);
+            if (d != null) {
+                result.put(upper, d);
+            } else {
+                missing.add(sym);
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            log.info("Cache miss for {}/{} symbols, loading via REST+DxLink", missing.size(), symbols.size());
+            Map<String, FundamentalData> loaded = tastyTradeService.getFundamentalsBatch(missing);
+            result.putAll(loaded);
+        }
+
+        log.info("Realtime fundamentals: {}/{} symbols ({})",
+                result.size(), symbols.size(),
+                missing.isEmpty() ? "all from cache" : missing.size() + " loaded");
+        return ResponseEntity.ok(result);
     }
 }
