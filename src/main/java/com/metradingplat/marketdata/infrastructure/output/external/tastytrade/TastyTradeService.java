@@ -270,6 +270,9 @@ public class TastyTradeService {
             int end = Math.min(i + chunkSize, symbols.size());
             try {
                 List<Map<String, Object>> equities = tastyTradeClient.getEquitiesBatch(symbols.subList(i, end));
+                if (i == 0 && !equities.isEmpty()) {
+                    log.info("Equities keys sample for {}: {}", equities.get(0).get("symbol"), equities.get(0).keySet());
+                }
                 for (Map<String, Object> eq : equities) {
                     String sym = (String) eq.get("symbol");
                     if (sym == null) continue;
