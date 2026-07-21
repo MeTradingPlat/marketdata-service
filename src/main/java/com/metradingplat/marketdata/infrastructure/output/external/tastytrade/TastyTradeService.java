@@ -197,6 +197,8 @@ public class TastyTradeService {
                 millisUntilNextHour(8), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
                 millisUntilNextHour(9), 4 * 3600_000, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::cleanupStaleCandles,
+                5, 5, TimeUnit.MINUTES);
 
         CompletableFuture.runAsync(() -> {
             try {
@@ -439,6 +441,34 @@ public class TastyTradeService {
             log.info("Market-metrics refresh: {} symbols updated", updated);
         } catch (Exception e) {
             log.warn("Market-metrics refresh failed: {}", e.getMessage());
+        }
+    }
+
+    private void cleanupStaleCandles() {
+        long now = System.currentTimeMillis();
+        List<String> toRemove = new ArrayList<>();
+        for (var entry : candleLastAccess.entrySet()) {
+            String key = entry.getKey();
+            long lastAccess = entry.getValue();
+            String[] parts = key.split("\\|");
+            if (parts.length != 2) continue;
+            String tfName = parts[1];
+            EnumTimeframe tf;
+            try { tf = EnumTimeframe.valueOf(tfName); }
+            catch (IllegalArgumentException e) { continue; }
+            long maxIdle = tf.getDuration().multipliedBy(3).toMillis();
+            if (maxIdle < 180_000) maxIdle = 180_000;
+            if (now - lastAccess > maxIdle) {
+                toRemove.add(key);
+            }
+        }
+        if (!toRemove.isEmpty()) {
+            log.info("Auto-unsubscribing {} stale candle symbols", toRemove.size());
+            for (String key : toRemove) {
+                candleCache.remove(key);
+                candleLastAccess.remove(key);
+                subscribedCandleSymbols.remove(key);
+            }
         }
     }
 
