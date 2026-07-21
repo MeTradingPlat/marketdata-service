@@ -478,7 +478,6 @@ public class TastyTradeService {
                 log.debug("Candle auto-unsubscribe: {} (idle {}s > {}s)", key,
                         (now - lastAccess) / 1000, maxIdle / 1000);
             }
-            }
         }
         if (!toRemove.isEmpty()) {
             log.info("Auto-unsubscribing {} stale candle symbols", toRemove.size());
