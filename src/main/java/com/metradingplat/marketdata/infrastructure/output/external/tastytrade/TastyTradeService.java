@@ -225,8 +225,40 @@ public class TastyTradeService {
         if (!symbols.isEmpty()) {
             symbols = symbols.stream().distinct().toList();
             subscribeBatch(symbols);
-            log.info("Auto-subscribed {} unique symbols for real-time prices. Fundamentals load on-demand.", symbols.size());
+            log.info("Auto-subscribed {} symbols for real-time prices. Starting fundamentals preload...", symbols.size());
+            CompletableFuture.runAsync(() -> preloadFundamentalsFromRest(symbols));
         }
+    }
+
+    private void preloadFundamentalsFromRest(List<String> symbols) {
+        log.info("Bulk preloading REST fundamentals for {} symbols", symbols.size());
+        int chunkSize = 250;
+        int loaded = 0;
+        for (int i = 0; i < symbols.size(); i += chunkSize) {
+            int end = Math.min(i + chunkSize, symbols.size());
+            List<String> chunk = symbols.subList(i, end);
+            try {
+                List<Map<String, Object>> metrics = tastyTradeClient.getMarketMetricsBatch(chunk);
+                for (Map<String, Object> m : metrics) {
+                    String sym = (String) m.get("symbol");
+                    if (sym == null) continue;
+                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
+                    if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(m.get("beta")));
+                    if (fund.getEps() == null) fund.setEps(safeConvertToDouble(m.get("earnings-per-share")));
+                    if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(m.get("market-cap")));
+                    if (fund.getShortRatio() == null) fund.setShortRatio(safeConvertToDouble(m.get("short-ratio")));
+                    fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
+                    fund.setImpliedVolatilityRank(safeConvertToDouble(m.get("implied-volatility-index-rank")));
+                    fund.setImpliedVolatilityPercentile(safeConvertToDouble(m.get("implied-volatility-percentile")));
+                    fund.setLiquidity(safeConvertToDouble(m.get("liquidity-value")));
+                    fund.setLiquidityRating(safeConvertToInt(m.get("liquidity-rating")));
+                    loaded++;
+                }
+            } catch (Exception e) {
+                log.warn("Preload market-metrics chunk failed at {}: {}", i, e.getMessage());
+            }
+        }
+        log.info("Bulk preload complete: {} fundamentals enriched from REST", loaded);
     }
 
     private static final int SUBSCRIBE_CHUNK_SIZE = 33;
