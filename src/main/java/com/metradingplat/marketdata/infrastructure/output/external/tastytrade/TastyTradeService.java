@@ -234,6 +234,7 @@ public class TastyTradeService {
         log.info("Bulk preloading REST fundamentals for {} symbols", symbols.size());
         int chunkSize = 250;
         int loaded = 0;
+
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             List<String> chunk = symbols.subList(i, end);
@@ -255,9 +256,47 @@ public class TastyTradeService {
                     loaded++;
                 }
             } catch (Exception e) {
-                log.warn("Preload market-metrics chunk failed at {}: {}", i, e.getMessage());
+                log.warn("Preload market-metrics chunk at {} failed: {}", i, e.getMessage());
             }
         }
+
+        for (int i = 0; i < symbols.size(); i += chunkSize) {
+            int end = Math.min(i + chunkSize, symbols.size());
+            try {
+                List<Map<String, Object>> equities = tastyTradeClient.getEquitiesBatch(symbols.subList(i, end));
+                for (Map<String, Object> eq : equities) {
+                    String sym = (String) eq.get("symbol");
+                    if (sym == null) continue;
+                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
+                    if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(eq.get("shares-outstanding")));
+                    if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(eq.get("free-float")));
+                    if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(eq.get("beta")));
+                }
+            } catch (Exception e) {
+                log.warn("Preload equities chunk at {} failed: {}", i, e.getMessage());
+            }
+        }
+
+        int ohlcChunkSize = 100;
+        for (int i = 0; i < symbols.size(); i += ohlcChunkSize) {
+            int end = Math.min(i + ohlcChunkSize, symbols.size());
+            try {
+                List<Map<String, Object>> ohlc = tastyTradeClient.getMarketDataBatch(symbols.subList(i, end));
+                for (Map<String, Object> item : ohlc) {
+                    String sym = (String) item.get("symbol");
+                    if (sym == null) continue;
+                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
+                    if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
+                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("high")));
+                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("low")));
+                    if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
+                    if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(item.get("market-cap")));
+                }
+            } catch (Exception e) {
+                log.warn("Preload OHLC chunk at {} failed: {}", i, e.getMessage());
+            }
+        }
+
         log.info("Bulk preload complete: {} fundamentals enriched from REST", loaded);
     }
 
