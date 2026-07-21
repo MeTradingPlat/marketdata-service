@@ -27,6 +27,7 @@ import com.metradingplat.marketdata.domain.models.OptionChain;
 import com.metradingplat.marketdata.domain.models.OptionContract;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
+import com.metradingplat.marketdata.infrastructure.output.external.finra.FinraClient;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -54,7 +55,7 @@ public class TastyTradeService {
     private final DxLinkClient dxLinkClient;
     private final AccountStreamerClient accountStreamerClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
-    private final com.metradingplat.marketdata.infrastructure.output.external.finra.FinraClient finraClient;
+    private final FinraClient finraClient;
     private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     // Trackers para la heuristica de Halt Status (Punto 5)
