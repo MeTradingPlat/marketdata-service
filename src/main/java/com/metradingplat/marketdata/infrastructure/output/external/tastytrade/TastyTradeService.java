@@ -444,6 +444,21 @@ public class TastyTradeService {
         }
     }
 
+    private EnumTimeframe parseTimeframeFromLabel(String label) {
+        if (label == null) return null;
+        return switch (label) {
+            case "1m" -> EnumTimeframe.M1;
+            case "5m" -> EnumTimeframe.M5;
+            case "15m" -> EnumTimeframe.M15;
+            case "30m" -> EnumTimeframe.M30;
+            case "1h" -> EnumTimeframe.H1;
+            case "1d" -> EnumTimeframe.D1;
+            case "1w" -> EnumTimeframe.W1;
+            case "1mo" -> EnumTimeframe.MO1;
+            default -> null;
+        };
+    }
+
     private void cleanupStaleCandles() {
         long now = System.currentTimeMillis();
         List<String> toRemove = new ArrayList<>();
@@ -689,8 +704,11 @@ public class TastyTradeService {
             candleChannel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
-                String tf = candle.getTimeframe() != null ? candle.getTimeframe().name() : "UNKNOWN";
-                String key = cleanSymbol.toUpperCase() + "|" + tf;
+                String tfPattern = java.util.regex.Pattern.compile("\\{=(.*?)\\}").matcher(symbol);
+                String tfLabel = tfPattern.find() ? tfPattern.group(1) : "UNKNOWN";
+                EnumTimeframe tf = parseTimeframeFromLabel(tfLabel);
+                if (tf != null) candle.setTimeframe(tf);
+                String key = cleanSymbol.toUpperCase() + "|" + (tf != null ? tf.name() : "UNKNOWN");
                 List<Candle> list = candleCache.computeIfAbsent(key, k -> new java.util.ArrayList<>());
                 if (list.stream().noneMatch(c -> c.getTimestamp().equals(candle.getTimestamp()))) {
                     if (list.size() >= 2000) list.remove(0);
