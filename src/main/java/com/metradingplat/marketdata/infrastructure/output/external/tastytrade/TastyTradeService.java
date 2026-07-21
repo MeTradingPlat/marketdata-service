@@ -257,9 +257,12 @@ public class TastyTradeService {
                     String sym = (String) m.get("symbol");
                     if (sym == null) continue;
                     FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
-                    if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(m.get("beta")));
-                    if (fund.getEps() == null) fund.setEps(safeConvertToDouble(m.get("earnings-per-share")));
-                    if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(m.get("market-cap")));
+                    Double betaVal = safeConvertToDouble(m.get("beta"));
+                    if (betaVal != null && betaVal != 0.0) fund.setBeta(betaVal);
+                    Double epsVal = safeConvertToDouble(m.get("earnings-per-share"));
+                    if (epsVal != null && epsVal != 0.0) fund.setEps(epsVal);
+                    Double mcVal = safeConvertToDouble(m.get("market-cap"));
+                    if (mcVal != null && mcVal > 0) fund.setMarketCap(mcVal);
                     if (fund.getShortRatio() == null) fund.setShortRatio(safeConvertToDouble(m.get("short-ratio")));
                     if (fund.getDividendAmount() == null) fund.setDividendAmount(safeConvertToDouble(m.get("dividend-rate-per-share")));
                     fund.setBorrowRate(safeConvertToDouble(m.get("borrow-rate")));
