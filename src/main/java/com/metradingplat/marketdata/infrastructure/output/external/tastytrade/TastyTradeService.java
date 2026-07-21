@@ -797,9 +797,13 @@ public class TastyTradeService {
 
     private Double safeConvertToDouble(Object val) {
         if (val == null) return null;
-        if (val instanceof Number) return ((Number) val).doubleValue();
+        if (val instanceof Number n) {
+            double d = n.doubleValue();
+            return Double.isFinite(d) ? d : null;
+        }
         try {
-            return Double.parseDouble(val.toString());
+            double d = Double.parseDouble(val.toString());
+            return Double.isFinite(d) ? d : null;
         } catch (Exception e) {
             return null;
         }
@@ -807,7 +811,10 @@ public class TastyTradeService {
 
     private Long safeConvertToLong(Object val) {
         if (val == null) return null;
-        if (val instanceof Number) return ((Number) val).longValue();
+        if (val instanceof Number n) {
+            long l = n.longValue();
+            return Double.isFinite((double) l) ? l : null;
+        }
         try {
             return Long.parseLong(val.toString());
         } catch (Exception e) {
@@ -817,7 +824,10 @@ public class TastyTradeService {
 
     private Integer safeConvertToInt(Object val) {
         if (val == null) return null;
-        if (val instanceof Number) return ((Number) val).intValue();
+        if (val instanceof Number n) {
+            int i = n.intValue();
+            return Double.isFinite((double) i) ? i : null;
+        }
         try {
             return Integer.parseInt(val.toString());
         } catch (Exception e) {

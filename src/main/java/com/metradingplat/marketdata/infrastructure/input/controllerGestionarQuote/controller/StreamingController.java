@@ -63,19 +63,17 @@ public class StreamingController {
 
     @PostMapping("/fundamentals/realtime")
     public ResponseEntity<Map<String, FundamentalData>> getRealtimeFundamentals(@RequestBody List<String> symbols) {
-        Map<String, FundamentalData> data = tastyTradeService.getCachedFundamentals(symbols);
+        Map<String, FundamentalData> data = tastyTradeService.getFundamentalsBatch(symbols);
         for (String sym : symbols) {
             FundamentalData d = data.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
             Optional<FundamentalData> cached = persistenceGateway.findBySymbol(sym.toUpperCase());
             cached.ifPresent(db -> {
                 if (d.getFloatShares() == null && db.getFloatShares() != null) d.setFloatShares(db.getFloatShares());
-                if (d.getSharesOutstanding() == null && db.getSharesOutstanding() != null) d.setSharesOutstanding(db.getSharesOutstanding());
                 if (d.getShortInterest() == null && db.getShortInterest() != null) d.setShortInterest(db.getShortInterest());
                 if (d.getShortRatio() == null && db.getShortRatio() != null) d.setShortRatio(db.getShortRatio());
-                if (d.getMarketCap() == null && db.getMarketCap() != null) d.setMarketCap(db.getMarketCap());
             });
         }
-        log.debug("Realtime fundamentals: {}/{} symbols (enriched from DB)", data.size(), symbols.size());
+        log.info("Realtime fundamentals: {}/{} symbols (DxLink + REST + DB)", data.size(), symbols.size());
         return ResponseEntity.ok(data);
     }
 }
