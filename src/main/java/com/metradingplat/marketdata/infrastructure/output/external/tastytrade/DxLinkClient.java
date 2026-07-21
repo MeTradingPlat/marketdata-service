@@ -203,6 +203,9 @@ public class DxLinkClient {
 
     private void resubscribeAll() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
+        if (fundamentalCallback != null) {
+            defaultChannel.addFundamentalListener(fundamentalCallback);
+        }
         List<String> symbols = new ArrayList<>(subscribedSymbols);
         int chunkSize = 33;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
