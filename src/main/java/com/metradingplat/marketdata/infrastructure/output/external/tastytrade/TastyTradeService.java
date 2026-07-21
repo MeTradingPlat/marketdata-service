@@ -791,14 +791,18 @@ public class TastyTradeService {
                     }
                 }
             });
-            List<Map<String, Object>> items = new java.util.ArrayList<>();
-            for (String s : symbols) {
-                Map<String, Object> item = new java.util.HashMap<>();
-                item.put("symbol", String.format("%s{=%s%s}", s, period, type));
-                item.put("type", "Candle");
-                items.add(item);
+            List<String> symList = new ArrayList<>(symbols);
+            for (int i = 0; i < symList.size(); i += 10) {
+                int end = Math.min(i + 10, symList.size());
+                List<Map<String, Object>> items = new java.util.ArrayList<>();
+                for (String s : symList.subList(i, end)) {
+                    Map<String, Object> item = new java.util.HashMap<>();
+                    item.put("symbol", String.format("%s{=%s%s}", s, period, type));
+                    item.put("type", "Candle");
+                    items.add(item);
+                }
+                channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
             }
-            channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
             int timeoutSec = Math.min(10 + symbols.size() / 10, 30);
             scheduler.schedule(() -> {
                 if (!future.isDone()) { channel.close(); future.complete(resultado); }
