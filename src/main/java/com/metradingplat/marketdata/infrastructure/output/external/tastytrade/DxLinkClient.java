@@ -204,12 +204,12 @@ public class DxLinkClient {
     private void resubscribeAll() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         List<String> symbols = new ArrayList<>(subscribedSymbols);
-        int chunkSize = 150;
+        int chunkSize = 33;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             defaultChannel.subscribeBatch(symbols.subList(i, end));
             if (end < symbols.size()) {
-                try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
         }
     }

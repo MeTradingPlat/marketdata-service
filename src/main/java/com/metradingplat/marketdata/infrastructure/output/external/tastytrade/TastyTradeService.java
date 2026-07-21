@@ -229,8 +229,8 @@ public class TastyTradeService {
         }
     }
 
-    private static final int SUBSCRIBE_CHUNK_SIZE = 150;
-    private static final long SUBSCRIBE_CHUNK_DELAY_MS = 1000;
+    private static final int SUBSCRIBE_CHUNK_SIZE = 33;
+    private static final long SUBSCRIBE_CHUNK_DELAY_MS = 500;
 
     public void subscribeBatch(List<String> symbols) {
         log.info("Batch subscribing {} symbols (chunks of {}, {}ms delay)", symbols.size(), SUBSCRIBE_CHUNK_SIZE, SUBSCRIBE_CHUNK_DELAY_MS);
