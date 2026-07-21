@@ -109,10 +109,8 @@ public class TastyTradeService {
 
         // Configurar listener de fundamentales en el canal DEFAULT
         // Usa setOnFundamentalData que se re-aplica en cada reconnect
-        log.info("Registering fundamental data listener");
         dxLinkClient.setOnFundamentalData((sym, data) -> {
             String upperSym = sym.toUpperCase();
-            log.info("Fundamental listener called for {} beta={} shares={}", upperSym, data.getBeta(), data.getSharesOutstanding());
             fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
                 if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
                 if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
