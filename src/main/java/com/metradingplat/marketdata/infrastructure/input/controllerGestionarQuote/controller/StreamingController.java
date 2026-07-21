@@ -2,7 +2,6 @@ package com.metradingplat.marketdata.infrastructure.input.controllerGestionarQuo
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,7 +10,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.metradingplat.marketdata.application.output.FundamentalsPersistenceGatewayIntPort;
+import com.metradingplat.marketdata.application.input.GestionarFundamentalsCUIntPort;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
@@ -25,7 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 public class StreamingController {
 
     private final TastyTradeService tastyTradeService;
-    private final FundamentalsPersistenceGatewayIntPort persistenceGateway;
+    private final GestionarFundamentalsCUIntPort fundamentalsCU;
 
     @PostMapping("/subscribe")
     public ResponseEntity<Map<String, String>> subscribeBatch(@RequestBody List<String> symbols) {
@@ -63,17 +62,8 @@ public class StreamingController {
 
     @PostMapping("/fundamentals/realtime")
     public ResponseEntity<Map<String, FundamentalData>> getRealtimeFundamentals(@RequestBody List<String> symbols) {
-        Map<String, FundamentalData> data = tastyTradeService.getFundamentalsBatch(symbols);
-        for (String sym : symbols) {
-            FundamentalData d = data.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
-            Optional<FundamentalData> cached = persistenceGateway.findBySymbol(sym.toUpperCase());
-            cached.ifPresent(db -> {
-                if (d.getFloatShares() == null && db.getFloatShares() != null) d.setFloatShares(db.getFloatShares());
-                if (d.getShortInterest() == null && db.getShortInterest() != null) d.setShortInterest(db.getShortInterest());
-                if (d.getShortRatio() == null && db.getShortRatio() != null) d.setShortRatio(db.getShortRatio());
-            });
-        }
-        log.info("Realtime fundamentals: {}/{} symbols (DxLink + REST + DB)", data.size(), symbols.size());
+        Map<String, FundamentalData> data = fundamentalsCU.obtenerFundamentalsBatch(symbols);
+        log.info("Realtime fundamentals: {}/{} symbols (full pipeline)", data.size(), symbols.size());
         return ResponseEntity.ok(data);
     }
 }
