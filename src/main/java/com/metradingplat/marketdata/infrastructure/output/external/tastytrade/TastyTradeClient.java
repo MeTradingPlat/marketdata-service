@@ -764,18 +764,14 @@ public class TastyTradeClient {
         if (accessToken == null) refreshAccessToken();
 
         try {
-            // Construir la URI manualmente para evitar que Spring intente expandir las llaves { }
-            String url = org.springframework.web.util.UriComponentsBuilder.fromPath("/market-data/candles")
-                    .queryParam("symbol", dxSymbol)
-                    .queryParam("from-date", from.atOffset(ZoneOffset.UTC).toString())
-                    .queryParam("to-date", to.atOffset(ZoneOffset.UTC).toString())
-                    .build()
-                    .encode()
-                    .toUriString();
-
             Map<String, Object> response = tastyTradeRestClient
                     .get()
-                    .uri(java.net.URI.create(url))
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/market-data/candles")
+                            .queryParam("symbol", dxSymbol)
+                            .queryParam("from-date", from.atOffset(ZoneOffset.UTC).toString())
+                            .queryParam("to-date", to.atOffset(ZoneOffset.UTC).toString())
+                            .build(true))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .body(Map.class);
