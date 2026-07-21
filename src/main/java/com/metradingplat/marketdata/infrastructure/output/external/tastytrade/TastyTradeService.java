@@ -689,9 +689,11 @@ public class TastyTradeService {
                 Map<String, List<Candle>> fetched = fetchCandlesFromDxLink(missing, timeframe, 700);
                 for (var entry : fetched.entrySet()) {
                     String key = entry.getKey() + "|" + timeframe.name();
-                    if (entry.getValue() != null && !entry.getValue().isEmpty()) {
-                        candleCache.put(key, entry.getValue());
-                    }
+                    candleCache.put(key, entry.getValue() != null ? entry.getValue() : List.of());
+                }
+                for (String sym : missing) {
+                    String key = sym.toUpperCase() + "|" + timeframe.name();
+                    candleCache.putIfAbsent(key, List.of());
                 }
                 for (String sym : missing) {
                     String key = sym.toUpperCase() + "|" + timeframe.name();
