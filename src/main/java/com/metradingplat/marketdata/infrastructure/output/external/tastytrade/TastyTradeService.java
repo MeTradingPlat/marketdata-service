@@ -12,8 +12,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+
+
 
 import org.springframework.stereotype.Service;
 
@@ -614,88 +614,83 @@ public class TastyTradeService {
      * Reemplaza WebSocket por llamadas REST para asegurar la alineación temporal.
      */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Batch fetch WebSocket History: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
-
-        Instant now = Instant.now();
-        // Sobre-aproximamos el tiempo (x1.5) para cubrir fines de semana y feriados
-        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
-        
-        // Validación de contexto temporal (Punto 6)
-        long daysBetween = java.time.Duration.between(fromTime, now).toDays();
         boolean isIntraday = timeframe.getLabel().contains("m") || timeframe.getLabel().contains("h");
-        
-        if (isIntraday && daysBetween > 270) {
-            // Si el x1.5 se pasa de los 9 meses, bajamos al límite máximo permitido
-            fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
-        } else if (daysBetween > 3650) { 
-            fromTime = now.minus(3650, java.time.temporal.ChronoUnit.DAYS);
+        if (isIntraday) {
+            return getCandlesBatchViaWebSocket(symbols, timeframe, bars);
         }
+        return getCandlesBatchViaRest(symbols, timeframe, bars);
+    }
 
-        String label = timeframe.getLabel(); // ej: "5m", "1d"
-        String type = label.substring(label.length() - 1); // "m", "d", etc.
-        String period = label.substring(0, label.length() - 1); // "5", "1", etc.
+    private Map<String, List<Candle>> getCandlesBatchViaRest(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        Map<String, List<Candle>> result = new ConcurrentHashMap<>();
+        Instant now = Instant.now();
+        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy(bars * 2L));
+        long daysBetween = java.time.Duration.between(fromTime, now).toDays();
+        if (daysBetween > 3650) fromTime = now.minus(3650, java.time.temporal.ChronoUnit.DAYS);
 
+        for (String sym : symbols) {
+            try {
+                String dxSymbol = String.format("%s{=%s}", sym, timeframe.getLabel());
+                List<Candle> candles = tastyTradeClient.getHistoricalCandles(sym, dxSymbol, fromTime, now);
+                if (candles != null) {
+                    candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
+                    if (candles.size() > bars) {
+                        candles = candles.subList(candles.size() - bars, candles.size());
+                    }
+                    candles.forEach(c -> { c.setSymbol(sym); c.setTimeframe(timeframe); });
+                    result.put(sym, candles);
+                }
+            } catch (Exception e) {
+                log.warn("REST candles failed for {}: {}", sym, e.getMessage());
+            }
+        }
+        log.info("REST candles: {} symbols returned", result.size());
+        return result;
+    }
+
+    private Map<String, List<Candle>> getCandlesBatchViaWebSocket(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        log.info("WebSocket candles: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
+        Instant now = Instant.now();
+        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
+        long daysBetween = java.time.Duration.between(fromTime, now).toDays();
+        if (daysBetween > 270) fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
+
+        String label = timeframe.getLabel();
+        String type = label.substring(label.length() - 1);
+        String period = label.substring(0, label.length() - 1);
         ensureConnected();
-        
         Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
         CompletableFuture<Map<String, List<Candle>>> future = new CompletableFuture<>();
-        
+
         try {
             DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
-            
-            AtomicInteger receivedSnapshots = new AtomicInteger(0);
-            AtomicInteger expectedSnapshots = new AtomicInteger(symbols.size());
-
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
-                log.info("Ephemeral candle channel {}: received {} O={} C={} complete={}",
-                    channel.getId(), cleanSymbol, candle.getOpen(), candle.getClose(), isSnapshotComplete);
+                candle.setSymbol(cleanSymbol);
                 candle.setTimeframe(timeframe);
                 resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>()).add(candle);
-                if (isSnapshotComplete && receivedSnapshots.incrementAndGet() >= expectedSnapshots.get()) {
-                    log.info("All candle snapshots received ({}), completing future", receivedSnapshots.get());
-                    scheduler.schedule(() -> {
-                        channel.close();
-                        resultado.forEach((sym, candles) -> {
-                            candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
-                            if (candles.size() > bars) {
-                                resultado.put(sym, new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size())));
-                            }
-                        });
-                        future.complete(resultado);
-                    }, 100, TimeUnit.MILLISECONDS);
-                }
             });
 
             List<Map<String, Object>> subscriptionItems = symbols.stream()
-                .map(s -> {
-                    String dxSymbol = String.format("%s{=%s%s}", s, period, type);
-                    Map<String, Object> item = new java.util.HashMap<>();
-                    item.put("symbol", dxSymbol);
-                    item.put("type", "Candle");
-                    return item;
-                })
+                .map(s -> Map.of("symbol", (Object) String.format("%s{=%s%s}", s, period, type), "type", "Candle"))
                 .toList();
-
             channel.subscribeCandlesHistory(subscriptionItems, fromTime.toEpochMilli());
 
             scheduler.schedule(() -> {
                 if (!future.isDone()) {
                     channel.close();
-                    resultado.forEach((symbol, candles) -> {
+                    resultado.forEach((sym, candles) -> {
                         candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
                         if (candles.size() > bars) {
-                            resultado.put(symbol, new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size())));
+                            resultado.put(sym, new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size())));
                         }
                     });
                     future.complete(resultado);
                 }
             }, 10 + (symbols.size() / 2), TimeUnit.SECONDS);
-
             return future.get(15, TimeUnit.SECONDS);
-
         } catch (Exception e) {
-            log.error("Failed to fetch candles via WebSocket", e);
+            log.error("WebSocket candles failed", e);
             return Map.of();
         }
     }
