@@ -196,7 +196,7 @@ public class TastyTradeService {
         scheduler.scheduleAtFixedRate(this::refreshMarketMetrics,
                 millisUntilNextHour(8), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
-                millisUntilNextHour(9), 24 * 3600_000, TimeUnit.MILLISECONDS);
+                millisUntilNextHour(9), 4 * 3600_000, TimeUnit.MILLISECONDS);
 
         CompletableFuture.runAsync(() -> {
             try {
