@@ -636,10 +636,14 @@ public class TastyTradeService {
                 resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>()).add(candle);
             });
 
+            List<Map<String, Object>> items = new java.util.ArrayList<>();
             for (String s : symbols) {
-                channel.sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", channel.getId(), "add",
-                        List.of(Map.of("symbol", String.format("%s{=%s%s}", s, period, type), "type", "Candle", "fromTime", fromTime.toEpochMilli()))));
+                Map<String, Object> item = new java.util.HashMap<>();
+                item.put("symbol", String.format("%s{=%s%s}", s, period, type));
+                item.put("type", "Candle");
+                items.add(item);
             }
+            channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
 
             int timeoutSec = 15 + (symbols.size() / 2);
             scheduler.schedule(() -> {
