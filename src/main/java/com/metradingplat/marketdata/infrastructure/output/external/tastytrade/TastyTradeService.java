@@ -260,11 +260,17 @@ public class TastyTradeService {
                     if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(m.get("market-cap")));
                     if (fund.getShortRatio() == null) fund.setShortRatio(safeConvertToDouble(m.get("short-ratio")));
                     if (fund.getDividendAmount() == null) fund.setDividendAmount(safeConvertToDouble(m.get("dividend-rate-per-share")));
+                    fund.setBorrowRate(safeConvertToDouble(m.get("borrow-rate")));
+                    fund.setLendability((String) m.get("lendability"));
                     Object earnObj = m.get("earnings");
                     if (earnObj instanceof Map<?,?> earnMap) {
                         Object earnDate = earnMap.get("estimated-report-date");
                         if (earnDate instanceof String dateStr && fund.getNextEarningsDate() == null) {
-                            try { fund.setNextEarningsDate(LocalDate.parse(dateStr)); } catch (Exception ignored) {}
+                            try {
+                                fund.setNextEarningsDate(LocalDate.parse(dateStr));
+                                long days = java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(), LocalDate.parse(dateStr));
+                                fund.setDaysUntilEarnings((int) Math.max(0, days));
+                            } catch (Exception ignored) {}
                         }
                     }
                     fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
@@ -329,22 +335,33 @@ public class TastyTradeService {
         log.info("Bulk preload REST totals: market-metrics={}, equities={}, ohlc={}. Starting DxLink phase in background.", loaded, equityLoaded, ohlcLoaded);
 
         int calculatedShares = 0;
+        int calculatedFloat = 0;
         for (String sym : symbols) {
             FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
             if (fund == null) continue;
-            if (fund.getSharesOutstanding() == null) {
-                Double price = fund.getPrevClose();
-                if (price == null) price = fund.getOpen();
-                if (price != null && price > 0 && fund.getMarketCap() != null && fund.getMarketCap() > 0) {
-                    long shares = Math.round(fund.getMarketCap() / price);
-                    if (shares > 0) {
-                        fund.setSharesOutstanding(shares);
-                        calculatedShares++;
-                    }
+            Double price = fund.getPrevClose();
+            if (price == null) price = fund.getOpen();
+
+            if (fund.getSharesOutstanding() == null
+                    && price != null && price > 0
+                    && fund.getMarketCap() != null && fund.getMarketCap() > 0) {
+                long shares = Math.round(fund.getMarketCap() / price);
+                if (shares > 0) {
+                    fund.setSharesOutstanding(shares);
+                    calculatedShares++;
                 }
             }
+
+            if (fund.getFloatShares() == null
+                    && fund.getSharesOutstanding() != null
+                    && fund.getSharesOutstanding() > 0) {
+                long estimatedFloat = Math.round(fund.getSharesOutstanding() * 0.90);
+                fund.setFloatShares(estimatedFloat);
+                calculatedFloat++;
+            }
         }
-        log.info("Calculated sharesOutstanding for {} symbols from marketCap/price", calculatedShares);
+        log.info("Calculated sharesOutstanding for {} symbols, floatShares for {} symbols",
+                calculatedShares, calculatedFloat);
         CompletableFuture.runAsync(() -> {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
