@@ -463,6 +463,7 @@ public class TastyTradeService {
     private void cleanupStaleCandles() {
         long now = System.currentTimeMillis();
         List<String> toRemove = new ArrayList<>();
+        log.info("Candle cleanup: checking {} cached symbols", candleLastAccess.size());
         for (var entry : candleLastAccess.entrySet()) {
             String key = entry.getKey();
             long lastAccess = entry.getValue();
@@ -476,8 +477,8 @@ public class TastyTradeService {
             if (maxIdle < 300_000) maxIdle = 300_000;
             if (now - lastAccess > maxIdle) {
                 toRemove.add(key);
-                log.debug("Candle auto-unsubscribe: {} (idle {}s > {}s)", key,
-                        (now - lastAccess) / 1000, maxIdle / 1000);
+                log.info("Candle auto-unsubscribe: {} (idle {}s, max {}s, timeframe={})",
+                        key, (now - lastAccess) / 1000, maxIdle / 1000, tfName);
             }
         }
         if (!toRemove.isEmpty()) {
