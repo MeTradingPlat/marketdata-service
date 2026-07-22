@@ -203,6 +203,9 @@ public class DxLinkClient {
 
     private void resubscribeAll() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
+        if (fundamentalCallback != null) {
+            defaultChannel.addFundamentalListener(fundamentalCallback);
+        }
         List<String> symbols = new ArrayList<>(subscribedSymbols);
         int chunkSize = 33;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
@@ -377,18 +380,13 @@ public class DxLinkClient {
         }
 
         public void subscribeFundamentalsBatch(List<String> symbols) {
-            int chunkSize = 200;
-            for (int i = 0; i < symbols.size(); i += chunkSize) {
-                int end = Math.min(i + chunkSize, symbols.size());
-                List<String> chunk = symbols.subList(i, end);
-                List<Map<String, Object>> items = new java.util.ArrayList<>();
-                for (String s : chunk) {
-                    items.add(Map.of("symbol", s, "type", "Summary"));
-                    items.add(Map.of("symbol", s, "type", "Profile"));
-                    items.add(Map.of("symbol", s, "type", "TradeETH"));
-                }
-                sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
+            List<Map<String, Object>> items = new java.util.ArrayList<>();
+            for (String s : symbols) {
+                items.add(Map.of("symbol", s, "type", "Summary"));
+                items.add(Map.of("symbol", s, "type", "Profile"));
+                items.add(Map.of("symbol", s, "type", "TradeETH"));
             }
+            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
         }
 
         public void subscribeCandlesHistory(String symbol, String timeframe, long fromTime) {
@@ -460,28 +458,28 @@ public class DxLinkClient {
                         }
                         notifyMarketData(symbol, MarketDataStreamDTO.builder().symbol(symbol).lastPrice(price).volume(data.path(IDX_TRADE_VOLUME).asLong()).timestamp(Instant.ofEpochMilli(data.path(IDX_TRADE_TIME).asLong())).build());
                     }
-                    case "Summary" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).open(extractNullableDouble(data.get(IDX_SUMM_OPEN))).high(extractNullableDouble(data.get(IDX_SUMM_HIGH))).low(extractNullableDouble(data.get(IDX_SUMM_LOW))).prevClose(extractNullableDouble(data.get(IDX_SUMM_PREV_CLOSE))).openInterest(data.path(IDX_SUMM_OI).asLong()).build());
+                    case "Summary" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).open(extractNumericSafe(data.get(IDX_SUMM_OPEN))).high(extractNumericSafe(data.get(IDX_SUMM_HIGH))).low(extractNumericSafe(data.get(IDX_SUMM_LOW))).prevClose(extractNumericSafe(data.get(IDX_SUMM_PREV_CLOSE))).openInterest(data.path(IDX_SUMM_OI).asLong()).build());
                     case "TradeETH" -> {
                         long v = data.path(IDX_ETH_VOL).asLong(); long t = data.path(IDX_ETH_TIME).asLong();
                         FundamentalData f = FundamentalData.builder().symbol(symbol).build();
                         if (isPreMarket(t)) f.setPreMarketVolume(v); else f.setPostMarketVolume(v);
                         notifyFundamentals(symbol, f);
                     }
-                    case "Profile" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).sharesOutstanding(asNullableLong(data.get(IDX_PROF_SHARES))).eps(extractNullableDouble(data.get(IDX_PROF_EPS))).dividendAmount(extractNullableDouble(data.get(IDX_PROF_DIV_AMT))).dividendFrequency(asNullableString(data.get(IDX_PROF_DIV_FREQ))).tradingStatus(asNullableString(data.get(IDX_PROF_STATUS))).statusReason(asNullableString(data.get(IDX_PROF_STATUS_RSN))).haltStartTime(data.path(IDX_PROF_HALT_START).asLong()).haltEndTime(data.path(IDX_PROF_HALT_END).asLong()).beta(extractNullableDouble(data.get(IDX_PROF_BETA))).floatShares(asNullableLong(data.get(IDX_PROF_FLOAT))).build());
-                    case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol).impliedVolatility(extractNullableDouble(data.get(IDX_GRK_IV))).delta(extractNullableDouble(data.get(IDX_GRK_DELTA))).gamma(extractNullableDouble(data.get(IDX_GRK_GAMMA))).theta(extractNullableDouble(data.get(IDX_GRK_THETA))).vega(extractNullableDouble(data.get(IDX_GRK_VEGA))).rho(extractNullableDouble(data.get(IDX_GRK_RHO))).theoreticalPrice(extractNullableDouble(data.get(IDX_GRK_THEO))).build());
+                    case "Profile" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).sharesOutstanding(data.path(IDX_PROF_SHARES).asLong()).eps(extractNumericSafe(data.get(IDX_PROF_EPS))).dividendAmount(extractNumericSafe(data.get(IDX_PROF_DIV_AMT))).dividendFrequency(data.path(IDX_PROF_DIV_FREQ).asText()).tradingStatus(data.path(IDX_PROF_STATUS).asText()).statusReason(data.path(IDX_PROF_STATUS_RSN).asText()).haltStartTime(data.path(IDX_PROF_HALT_START).asLong()).haltEndTime(data.path(IDX_PROF_HALT_END).asLong()).beta(extractNumericSafe(data.get(IDX_PROF_BETA))).floatShares(data.path(IDX_PROF_FLOAT).asLong()).build());
+                    case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol).impliedVolatility(extractNumericSafe(data.get(IDX_GRK_IV))).delta(extractNumericSafe(data.get(IDX_GRK_DELTA))).gamma(extractNumericSafe(data.get(IDX_GRK_GAMMA))).theta(extractNumericSafe(data.get(IDX_GRK_THETA))).vega(extractNumericSafe(data.get(IDX_GRK_VEGA))).rho(extractNumericSafe(data.get(IDX_GRK_RHO))).theoreticalPrice(extractNumericSafe(data.get(IDX_GRK_THEO))).build());
                     case "Candle" -> {
                         long time = data.path(IDX_CAND_TIME).asLong();
-                        boolean isComplete = data.path(10).asInt() != 0;
+                        boolean isComplete = data.path(10).asInt() != 0; // Flags o similar si existen
                         notifyCandle(symbol, Candle.builder()
                                 .symbol(symbol)
                                 .timestamp(Instant.ofEpochMilli(time))
-                                .open(extractNullableDouble(data.get(IDX_CAND_OPEN)))
-                                .high(extractNullableDouble(data.get(IDX_CAND_HIGH)))
-                                .low(extractNullableDouble(data.get(IDX_CAND_LOW)))
-                                .close(extractNullableDouble(data.get(IDX_CAND_CLOSE)))
-                                .volume(extractNullableDouble(data.get(IDX_CAND_VOL)))
-                                .vwap(extractNullableDouble(data.get(IDX_CAND_VWAP)))
-                                .impVolatility(extractNullableDouble(data.get(IDX_CAND_IV)))
+                                .open(extractNumericSafe(data.get(IDX_CAND_OPEN)))
+                                .high(extractNumericSafe(data.get(IDX_CAND_HIGH)))
+                                .low(extractNumericSafe(data.get(IDX_CAND_LOW)))
+                                .close(extractNumericSafe(data.get(IDX_CAND_CLOSE)))
+                                .volume(extractNumericSafe(data.get(IDX_CAND_VOL)))
+                                .vwap(extractNumericSafe(data.get(IDX_CAND_VWAP)))
+                                .impVolatility(extractNumericSafe(data.get(IDX_CAND_IV)))
                                 .build(), isComplete);
                     }
                 }
@@ -502,27 +500,10 @@ public class DxLinkClient {
                 case "Infinity" -> Double.POSITIVE_INFINITY;
                 case "-Infinity" -> Double.NEGATIVE_INFINITY;
                 default -> {
-                    try { yield Double.parseDouble(textVal); }
+                    try { yield Double.parseDouble(textVal); } 
                     catch (NumberFormatException e) { yield Double.NaN; }
                 }
             };
-        }
-
-        private Double extractNullableDouble(JsonNode node) {
-            double v = extractNumericSafe(node);
-            return Double.isFinite(v) ? v : null;
-        }
-
-        private Long asNullableLong(JsonNode node) {
-            if (node == null || node.isMissingNode() || node.isNull()) return null;
-            long v = node.asLong();
-            return v > 0 ? v : null;
-        }
-
-        private String asNullableString(JsonNode node) {
-            if (node == null || node.isMissingNode() || node.isNull()) return null;
-            String v = node.asText();
-            return (v == null || v.isEmpty() || "null".equals(v) || "NaN".equals(v)) ? null : v;
         }
 
         private void notifyMarketData(String s, MarketDataStreamDTO d) { marketDataListeners.forEach(l -> { try { l.accept(s, d); } catch (Exception e) {} }); }

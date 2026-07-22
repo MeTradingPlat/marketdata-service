@@ -1,9 +1,8 @@
 package com.metradingplat.marketdata.infrastructure.input.controllerGestionarQuote.controller;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Optional;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.metradingplat.marketdata.application.output.FundamentalsPersistenceGatewayIntPort;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
@@ -25,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 public class StreamingController {
 
     private final TastyTradeService tastyTradeService;
+    private final FundamentalsPersistenceGatewayIntPort persistenceGateway;
 
     @PostMapping("/subscribe")
     public ResponseEntity<Map<String, String>> subscribeBatch(@RequestBody List<String> symbols) {
@@ -38,9 +39,11 @@ public class StreamingController {
 
     @PostMapping("/unsubscribe")
     public ResponseEntity<Map<String, String>> unsubscribeBatch(@RequestBody List<String> symbols) {
-        return ResponseEntity.status(403).body(Map.of(
-            "status", "blocked",
-            "message", "Fundamentals auto-subscribe is permanent. Unsubscribe not allowed."
+        log.info("Unsubscribe request: {} symbols", symbols.size());
+        tastyTradeService.unsubscribeBatch(symbols);
+        return ResponseEntity.ok(Map.of(
+            "status", "unsubscribed",
+            "count", String.valueOf(symbols.size())
         ));
     }
 
@@ -60,30 +63,19 @@ public class StreamingController {
 
     @PostMapping("/fundamentals/realtime")
     public ResponseEntity<Map<String, FundamentalData>> getRealtimeFundamentals(@RequestBody List<String> symbols) {
-        Map<String, FundamentalData> cached = tastyTradeService.getCachedFundamentals(symbols);
-        List<String> missing = new ArrayList<>();
-
+        Map<String, FundamentalData> data = tastyTradeService.getCachedFundamentals(symbols);
         for (String sym : symbols) {
-            if (!cached.containsKey(sym.toUpperCase())) {
-                missing.add(sym);
-            }
+            FundamentalData d = data.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
+            Optional<FundamentalData> cached = persistenceGateway.findBySymbol(sym.toUpperCase());
+            cached.ifPresent(db -> {
+                if (d.getFloatShares() == null && db.getFloatShares() != null) d.setFloatShares(db.getFloatShares());
+                if (d.getSharesOutstanding() == null && db.getSharesOutstanding() != null) d.setSharesOutstanding(db.getSharesOutstanding());
+                if (d.getShortInterest() == null && db.getShortInterest() != null) d.setShortInterest(db.getShortInterest());
+                if (d.getShortRatio() == null && db.getShortRatio() != null) d.setShortRatio(db.getShortRatio());
+                if (d.getMarketCap() == null && db.getMarketCap() != null) d.setMarketCap(db.getMarketCap());
+            });
         }
-
-        if (!missing.isEmpty()) {
-            log.info("Cache miss for {}/{} symbols, loading now", missing.size(), symbols.size());
-            Map<String, FundamentalData> loaded = tastyTradeService.getFundamentalsBatch(missing);
-            for (var entry : loaded.entrySet()) {
-                cached.put(entry.getKey(), entry.getValue());
-            }
-        }
-
-        for (String sym : symbols) {
-            cached.computeIfAbsent(sym.toUpperCase(),
-                    k -> FundamentalData.builder().symbol(k).build());
-        }
-
-        log.info("Realtime fundamentals: {}/{} from cache ({} loading async)",
-                cached.size(), symbols.size(), missing.size());
-        return ResponseEntity.ok(cached);
+        log.debug("Realtime fundamentals: {}/{} symbols (enriched from DB)", data.size(), symbols.size());
+        return ResponseEntity.ok(data);
     }
 }

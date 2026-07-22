@@ -7,14 +7,13 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-
-
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.springframework.stereotype.Service;
 
@@ -28,7 +27,6 @@ import com.metradingplat.marketdata.domain.models.OptionChain;
 import com.metradingplat.marketdata.domain.models.OptionContract;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
-import com.metradingplat.marketdata.infrastructure.output.external.finra.FinraClient;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -56,7 +54,6 @@ public class TastyTradeService {
     private final DxLinkClient dxLinkClient;
     private final AccountStreamerClient accountStreamerClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
-    private final FinraClient finraClient;
     private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     // Trackers para la heuristica de Halt Status (Punto 5)
@@ -192,32 +189,17 @@ public class TastyTradeService {
             greeksCache.put(symbol, greeks);
         });
 
-        log.info("DxLink initialized. Auto-subscribe and REST preload will start in 5s...");
-
-        scheduler.scheduleAtFixedRate(this::refreshMarketMetrics,
-                millisUntilNextHour(8), 4 * 3600_000, TimeUnit.MILLISECONDS);
-        scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
-                millisUntilNextHour(9), 4 * 3600_000, TimeUnit.MILLISECONDS);
-        scheduler.scheduleAtFixedRate(this::cleanupStaleCandles,
-                5, 5, TimeUnit.MINUTES);
-
+        log.info("DxLink initialized. Auto-subscribe will start in 5s...");
         CompletableFuture.runAsync(() -> {
             try {
                 Thread.sleep(5000);
                 if (dxLinkClient.isConnected()) {
                     subscribeAllMarkets();
                 } else {
-                    log.warn("DxLink not connected, running REST-only preload");
-                    List<ActiveEquity> allEquities = tastyTradeClient.getAllActiveEquities();
-                    List<String> symbols = allEquities.stream()
-                            .map(ActiveEquity::getSymbol)
-                            .distinct()
-                            .toList();
-                    log.info("REST-only preload for {} symbols (no DxLink)", symbols.size());
-                    preloadFundamentalsFromRest(symbols);
+                    log.warn("Auto-subscribe skipped: DxLink not connected after init");
                 }
             } catch (Exception e) {
-                log.error("Auto-subscribe/preload failed: {}", e.getMessage());
+                log.error("Auto-subscribe failed: {}", e.getMessage());
             }
         });
     }
@@ -241,322 +223,13 @@ public class TastyTradeService {
             }
         }
         if (!symbols.isEmpty()) {
-            List<String> distinctSymbols = symbols.stream().distinct().toList();
-            subscribeBatch(distinctSymbols);
-            log.info("Auto-subscribed {} symbols for real-time prices. Starting fundamentals preload...", distinctSymbols.size());
-            CompletableFuture.runAsync(() -> preloadFundamentalsFromRest(distinctSymbols));
+            symbols = symbols.stream().distinct().toList();
+            subscribeBatch(symbols);
+            log.info("Auto-subscribed {} unique symbols for real-time prices. Fundamentals load on-demand.", symbols.size());
         }
-    }
-
-    private void preloadFundamentalsFromRest(List<String> symbols) {
-        log.info("Bulk preloading REST fundamentals for {} symbols", symbols.size());
-        int chunkSize = 250;
-        int loaded = 0;
-        int emptyChunks = 0;
-
-        for (int i = 0; i < symbols.size(); i += chunkSize) {
-            int end = Math.min(i + chunkSize, symbols.size());
-            List<String> chunk = symbols.subList(i, end);
-            try {
-                List<Map<String, Object>> metrics = tastyTradeClient.getMarketMetricsBatch(chunk);
-                if (metrics.isEmpty()) {
-                    emptyChunks++;
-                }
-                for (Map<String, Object> m : metrics) {
-                    String sym = (String) m.get("symbol");
-                    if (sym == null) continue;
-                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
-                    Double betaVal = safeConvertToDouble(m.get("beta"));
-                    if (betaVal != null && betaVal != 0.0) fund.setBeta(betaVal);
-                    Double epsVal = safeConvertToDouble(m.get("earnings-per-share"));
-                    if (epsVal != null && epsVal != 0.0) fund.setEps(epsVal);
-                    Double mcVal = safeConvertToDouble(m.get("market-cap"));
-                    if (mcVal != null && mcVal > 0) fund.setMarketCap(mcVal);
-                    if (fund.getShortRatio() == null) fund.setShortRatio(safeConvertToDouble(m.get("short-ratio")));
-                    if (fund.getDividendAmount() == null) fund.setDividendAmount(safeConvertToDouble(m.get("dividend-rate-per-share")));
-                    fund.setBorrowRate(safeConvertToDouble(m.get("borrow-rate")));
-                    fund.setLendability((String) m.get("lendability"));
-                    Object earnObj = m.get("earnings");
-                    if (earnObj instanceof Map<?,?> earnMap && fund.getNextEarningsDate() == null) {
-                        Object earnDate = earnMap.get("expected-report-date");
-                        if (earnDate instanceof String dateStr) {
-                            try {
-                                fund.setNextEarningsDate(LocalDate.parse(dateStr));
-                                long days = java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(), LocalDate.parse(dateStr));
-                                fund.setDaysUntilEarnings((int) Math.max(0, days));
-                            } catch (Exception ignored) {}
-                        } else if (loaded < 3) {
-                            log.info("Earnings object for {}: keys={}, estimated-report-date type={}",
-                                    sym, earnMap.keySet(), earnDate == null ? "null" : earnDate.getClass().getSimpleName());
-                        }
-                    } else if (earnObj != null && loaded < 3) {
-                        log.info("Earnings field for {}: type={}, value={}", sym, earnObj.getClass().getSimpleName(), earnObj);
-                    }
-                    fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
-                    fund.setImpliedVolatilityRank(safeConvertToDouble(m.get("implied-volatility-index-rank")));
-                    fund.setImpliedVolatilityPercentile(safeConvertToDouble(m.get("implied-volatility-percentile")));
-                    fund.setLiquidity(safeConvertToDouble(m.get("liquidity-value")));
-                    fund.setLiquidityRating(safeConvertToInt(m.get("liquidity-rating")));
-                    loaded++;
-                }
-            } catch (Exception e) {
-                log.warn("Preload market-metrics chunk at {} failed: {}", i, e.getMessage());
-            }
-        }
-        log.info("Preload market-metrics: {} loaded, {} empty chunks", loaded, emptyChunks);
-
-        int equityLoaded = 0;
-        for (int i = 0; i < symbols.size(); i += chunkSize) {
-            int end = Math.min(i + chunkSize, symbols.size());
-            try {
-                List<Map<String, Object>> equities = tastyTradeClient.getEquitiesBatch(symbols.subList(i, end));
-                if (i == 0 && !equities.isEmpty()) {
-                    log.info("Equities keys sample for {}: {}", equities.get(0).get("symbol"), equities.get(0).keySet());
-                }
-                for (Map<String, Object> eq : equities) {
-                    String sym = (String) eq.get("symbol");
-                    if (sym == null) continue;
-                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
-                    if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(eq.get("shares-outstanding")));
-                    if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(eq.get("free-float")));
-                    if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(eq.get("beta")));
-                    equityLoaded++;
-                }
-            } catch (Exception e) {
-                log.warn("Preload equities chunk at {} failed: {}", i, e.getMessage());
-            }
-        }
-        log.info("Preload equities: {} loaded", equityLoaded);
-
-        int ohlcLoaded = 0;
-        int ohlcChunkSize = 100;
-        for (int i = 0; i < symbols.size(); i += ohlcChunkSize) {
-            int end = Math.min(i + ohlcChunkSize, symbols.size());
-            try {
-                List<Map<String, Object>> ohlc = tastyTradeClient.getMarketDataBatch(symbols.subList(i, end));
-                for (Map<String, Object> item : ohlc) {
-                    String sym = (String) item.get("symbol");
-                    if (sym == null) continue;
-                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
-                    if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
-                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("high")));
-                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("low")));
-                    if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
-                    if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(item.get("market-cap")));
-                    ohlcLoaded++;
-                }
-            } catch (Exception e) {
-                log.warn("Preload OHLC chunk at {} failed: {}", i, e.getMessage());
-            }
-        }
-        log.info("Preload OHLC: {} loaded", ohlcLoaded);
-
-        log.info("Bulk preload REST totals: market-metrics={}, equities={}, ohlc={}. Starting DxLink phase in background.", loaded, equityLoaded, ohlcLoaded);
-
-        int calculatedShares = 0;
-        int calculatedFloat = 0;
-        for (String sym : symbols) {
-            FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
-            if (fund == null) continue;
-            Double price = fund.getPrevClose();
-            if (price == null) price = fund.getOpen();
-
-            if (fund.getSharesOutstanding() == null
-                    && price != null && price > 0
-                    && fund.getMarketCap() != null && fund.getMarketCap() > 0) {
-                long shares = Math.round(fund.getMarketCap() / price);
-                if (shares > 0) {
-                    fund.setSharesOutstanding(shares);
-                    calculatedShares++;
-                }
-            }
-
-            if (fund.getFloatShares() == null
-                    && fund.getSharesOutstanding() != null
-                    && fund.getSharesOutstanding() > 0) {
-                long estimatedFloat = Math.round(fund.getSharesOutstanding() * 0.90);
-                fund.setFloatShares(estimatedFloat);
-                calculatedFloat++;
-            }
-        }
-        log.info("Calculated sharesOutstanding for {} symbols, floatShares for {} symbols",
-                calculatedShares, calculatedFloat);
-
-        CompletableFuture.runAsync(this::updateShortInterestFromFinra);
-        CompletableFuture.runAsync(() -> {
-            List<String> stillMissing = new ArrayList<>();
-            for (String sym : symbols) {
-                FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
-                if (fund == null || fund.getBeta() == null) {
-                    stillMissing.add(sym);
-                }
-            }
-            if (!stillMissing.isEmpty()) {
-                log.info("DxLink ephemeral background preload for {} symbols", stillMissing.size());
-                try {
-                    getFundamentalsBatch(stillMissing);
-                    log.info("DxLink ephemeral background preload complete");
-                } catch (Exception e) {
-                    log.warn("DxLink ephemeral background preload failed: {}", e.getMessage());
-                }
-            }
-        });
     }
 
     private static final int SUBSCRIBE_CHUNK_SIZE = 33;
-    private static long millisUntilNextHour(int targetHour) {
-        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(java.time.ZoneId.of("America/New_York"));
-        java.time.ZonedDateTime next = now.withMinute(5).withSecond(0).withNano(0);
-        if (next.getHour() >= targetHour) next = next.plusDays(1);
-        next = next.withHour(targetHour).withMinute(0);
-        return java.time.Duration.between(now, next).toMillis();
-    }
-
-    private volatile String lastFinraSettlement;
-
-    private void refreshMarketMetrics() {
-        log.info("Scheduled market-metrics refresh starting...");
-        try {
-            List<String> allSymbols = new ArrayList<>(fundamentalsCache.keySet());
-            if (allSymbols.isEmpty()) return;
-            int updated = 0;
-            for (int i = 0; i < allSymbols.size(); i += 250) {
-                int end = Math.min(i + 250, allSymbols.size());
-                List<String> chunk = allSymbols.subList(i, end);
-                List<Map<String, Object>> metrics = tastyTradeClient.getMarketMetricsBatch(chunk);
-                for (Map<String, Object> m : metrics) {
-                    String sym = (String) m.get("symbol");
-                    if (sym == null) continue;
-                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(),
-                            k -> FundamentalData.builder().symbol(k).build());
-                    fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
-                    fund.setImpliedVolatilityRank(safeConvertToDouble(m.get("implied-volatility-index-rank")));
-                    fund.setImpliedVolatilityPercentile(safeConvertToDouble(m.get("implied-volatility-percentile")));
-                    fund.setLiquidity(safeConvertToDouble(m.get("liquidity-value")));
-                    fund.setLiquidityRating(safeConvertToInt(m.get("liquidity-rating")));
-                    fund.setBorrowRate(safeConvertToDouble(m.get("borrow-rate")));
-                    fund.setLendability((String) m.get("lendability"));
-                    updated++;
-                }
-            }
-            log.info("Market-metrics refresh: {} symbols updated", updated);
-        } catch (Exception e) {
-            log.warn("Market-metrics refresh failed: {}", e.getMessage());
-        }
-    }
-
-    private EnumTimeframe parseTimeframeFromLabel(String label) {
-        if (label == null) return null;
-        return switch (label) {
-            case "1m" -> EnumTimeframe.M1;
-            case "5m" -> EnumTimeframe.M5;
-            case "15m" -> EnumTimeframe.M15;
-            case "30m" -> EnumTimeframe.M30;
-            case "1h" -> EnumTimeframe.H1;
-            case "1d" -> EnumTimeframe.D1;
-            case "1w" -> EnumTimeframe.W1;
-            case "1mo" -> EnumTimeframe.MO1;
-            default -> null;
-        };
-    }
-
-    private void cleanupStaleCandles() {
-        long now = System.currentTimeMillis();
-        List<String> toRemove = new ArrayList<>();
-        log.info("Candle cleanup: checking {} cached symbols", candleLastAccess.size());
-        for (var entry : candleLastAccess.entrySet()) {
-            String key = entry.getKey();
-            long lastAccess = entry.getValue();
-            String[] parts = key.split("\\|");
-            if (parts.length != 2) continue;
-            String tfName = parts[1];
-            EnumTimeframe tf;
-            try { tf = EnumTimeframe.valueOf(tfName); }
-            catch (IllegalArgumentException e) { continue; }
-            long maxIdle = tf.getDuration().multipliedBy(2).toMillis();
-            if (maxIdle < 300_000) maxIdle = 300_000;
-            if (now - lastAccess > maxIdle) {
-                toRemove.add(key);
-                log.info("Candle auto-unsubscribe: {} (idle {}s, max {}s, timeframe={})",
-                        key, (now - lastAccess) / 1000, maxIdle / 1000, tfName);
-            }
-        }
-        if (!toRemove.isEmpty()) {
-            log.info("Auto-unsubscribing {} stale candle symbols", toRemove.size());
-            for (String key : toRemove) {
-                candleCache.remove(key);
-                candleLastAccess.remove(key);
-                subscribedCandleSymbols.remove(key);
-            }
-        }
-    }
-
-    private void checkFinraForUpdate() {
-        log.info("Checking FINRA for new short interest data...");
-        try {
-            Map<String, FinraClient.ShortInterestRecord> finraData = finraClient.downloadLatest();
-            if (finraData.isEmpty()) return;
-
-            String newSettlement = finraData.values().iterator().next().settlementDate;
-            if (newSettlement.equals(lastFinraSettlement)) {
-                log.debug("FINRA data unchanged (settlement {})", lastFinraSettlement);
-                return;
-            }
-
-            int updated = 0;
-            for (var entry : finraData.entrySet()) {
-                String sym = entry.getKey();
-                FinraClient.ShortInterestRecord rec = entry.getValue();
-                FundamentalData fund = fundamentalsCache.computeIfAbsent(sym,
-                        k -> FundamentalData.builder().symbol(k).build());
-                fund.setShortRatio(rec.daysToCover > 0 && rec.daysToCover < 999 ? rec.daysToCover : null);
-                fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
-                if (fund.getFloatShares() != null && fund.getFloatShares() > 0 && rec.sharesShorted > 0) {
-                    double shortPct = (double) rec.sharesShorted / fund.getFloatShares() * 100.0;
-                    fund.setShortInterest(Math.round(shortPct * 100.0) / 100.0);
-                }
-                updated++;
-            }
-            lastFinraSettlement = newSettlement;
-            log.info("FINRA short interest refreshed: {} symbols (settlement {})", updated, newSettlement);
-        } catch (Exception e) {
-            log.warn("FINRA check failed: {}", e.getMessage());
-        }
-    }
-
-    private void updateShortInterestFromFinra() {
-        log.info("Downloading FINRA short interest data...");
-        try {
-            Map<String, FinraClient.ShortInterestRecord> finraData = finraClient.downloadLatest();
-            if (finraData.isEmpty()) return;
-
-            int updated = 0;
-            for (var entry : finraData.entrySet()) {
-                String sym = entry.getKey();
-                FinraClient.ShortInterestRecord rec = entry.getValue();
-                FundamentalData fund = fundamentalsCache.computeIfAbsent(sym,
-                        k -> FundamentalData.builder().symbol(k).build());
-
-                fund.setShortRatio(rec.daysToCover > 0 && rec.daysToCover < 999 ? rec.daysToCover : null);
-                fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
-
-                if (updated < 3) {
-                    log.info("FINRA sample {}: sharesShorted={}, avgVol={}, daysToCover={}, floatShares={}",
-                            sym, rec.sharesShorted, rec.avgDailyVolume, rec.daysToCover, fund.getFloatShares());
-                }
-
-                if (fund.getFloatShares() != null && fund.getFloatShares() > 0 && rec.sharesShorted > 0) {
-                    double shortPct = (double) rec.sharesShorted / fund.getFloatShares() * 100.0;
-                    fund.setShortInterest(Math.round(shortPct * 100.0) / 100.0);
-                }
-                updated++;
-            }
-            log.info("FINRA short interest updated for {} symbols", updated);
-        } catch (Exception e) {
-            log.warn("FINRA short interest update failed: {}", e.getMessage());
-        }
-    }
-
     private static final long SUBSCRIBE_CHUNK_DELAY_MS = 500;
 
     public void subscribeBatch(List<String> symbols) {
@@ -658,183 +331,94 @@ public class TastyTradeService {
         return result.getOrDefault(symbol, List.of());
     }
 
-    private DxLinkClient.DxLinkChannel candleChannel;
-    private final ConcurrentHashMap<String, List<Candle>> candleCache = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Long> candleLastAccess = new ConcurrentHashMap<>();
-    private final Set<String> subscribedCandleSymbols = ConcurrentHashMap.newKeySet();
-
+    /**
+     * Obtiene candles históricos de múltiples símbolos (Punto 2).
+     * Reemplaza WebSocket por llamadas REST para asegurar la alineación temporal.
+     */
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        Map<String, List<Candle>> result = new ConcurrentHashMap<>();
-        List<String> missing = new ArrayList<>();
+        log.info("Batch fetch WebSocket History: {} simbolos, timeframe={}, bars={}", symbols.size(), timeframe, bars);
 
-        for (String sym : symbols) {
-            String key = sym.toUpperCase() + "|" + timeframe.name();
-            candleLastAccess.put(key, System.currentTimeMillis());
-            List<Candle> cached = candleCache.get(key);
-            if (cached != null) {
-                if (!cached.isEmpty()) {
-                    List<Candle> sorted = cached.stream()
-                            .filter(c -> c.getTimestamp() != null)
-                            .sorted(java.util.Comparator.comparing(Candle::getTimestamp))
-                            .collect(java.util.stream.Collectors.toList());
-                    if (sorted.size() > bars) sorted = sorted.subList(sorted.size() - bars, sorted.size());
-                    result.put(sym.toUpperCase(), sorted);
-                }
-            } else {
-                missing.add(sym);
-            }
-        }
-
-        if (!missing.isEmpty()) {
-            log.info("Candle cache miss for {}/{} symbols, fetching via persistent channel", missing.size(), symbols.size());
-            ensureCandleChannel();
-            if (candleChannel != null) {
-                subscribeToCandles(missing, timeframe);
-                Map<String, List<Candle>> fetched = fetchCandlesFromDxLink(missing, timeframe, 700);
-                for (var entry : fetched.entrySet()) {
-                    String key = entry.getKey() + "|" + timeframe.name();
-                    candleCache.put(key, entry.getValue() != null ? entry.getValue() : List.of());
-                }
-                for (String sym : missing) {
-                    String key = sym.toUpperCase() + "|" + timeframe.name();
-                    candleCache.putIfAbsent(key, List.of());
-                }
-                for (String sym : missing) {
-                    String key = sym.toUpperCase() + "|" + timeframe.name();
-                    List<Candle> fromCache = candleCache.get(key);
-                    if (fromCache != null && !fromCache.isEmpty()) {
-                        List<Candle> sorted = fromCache.stream()
-                                .filter(c -> c.getTimestamp() != null)
-                                .sorted(java.util.Comparator.comparing(Candle::getTimestamp))
-                                .collect(java.util.stream.Collectors.toList());
-                        if (sorted.size() > bars) sorted = sorted.subList(sorted.size() - bars, sorted.size());
-                        result.put(sym.toUpperCase(), sorted);
-                    }
-                }
-            }
-        }
-        return result;
-    }
-
-    private synchronized void ensureCandleChannel() {
-        if (candleChannel != null && candleChannel.isReady()) return;
-        try {
-            candleChannel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
-            candleChannel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
-                String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
-                candle.setSymbol(cleanSymbol);
-                java.util.regex.Matcher tfMatcher = java.util.regex.Pattern.compile("\\{=(.*?)\\}").matcher(symbol);
-                String tfLabel = tfMatcher.find() ? tfMatcher.group(1) : "UNKNOWN";
-                EnumTimeframe tf = parseTimeframeFromLabel(tfLabel);
-                if (tf != null) candle.setTimeframe(tf);
-                String key = cleanSymbol.toUpperCase() + "|" + (tf != null ? tf.name() : "UNKNOWN");
-                List<Candle> list = candleCache.computeIfAbsent(key, k -> new java.util.ArrayList<>());
-                java.util.Optional<Candle> existing = list.stream()
-                        .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
-                if (existing.isPresent()) {
-                    Candle c = existing.get();
-                    if (candle.getHigh() != null && (c.getHigh() == null || candle.getHigh() > c.getHigh())) c.setHigh(candle.getHigh());
-                    if (candle.getLow() != null && (c.getLow() == null || candle.getLow() < c.getLow())) c.setLow(candle.getLow());
-                    if (candle.getClose() != null) c.setClose(candle.getClose());
-                    if (candle.getVolume() != null) c.setVolume(candle.getVolume());
-                } else {
-                    if (list.size() >= 2000) list.remove(0);
-                    list.add(candle);
-                }
-            });
-            log.info("Persistent candle channel opened");
-        } catch (Exception e) {
-            log.error("Failed to open candle channel", e);
-            candleChannel = null;
-        }
-    }
-
-    private void subscribeToCandles(List<String> symbols, EnumTimeframe timeframe) {
-        String label = timeframe.getLabel();
-        String type = label.substring(label.length() - 1);
-        String period = label.substring(0, label.length() - 1);
-        List<String> newSymbols = new ArrayList<>();
-        for (String s : symbols) {
-            if (subscribedCandleSymbols.add(s.toUpperCase() + "|" + timeframe.name())) {
-                newSymbols.add(s);
-            }
-        }
-        if (newSymbols.isEmpty()) return;
-        log.info("Subscribing {} candle symbols to persistent channel", newSymbols.size());
-        for (int i = 0; i < newSymbols.size(); i += 200) {
-            int end = Math.min(i + 200, newSymbols.size());
-            List<Map<String, Object>> items = new java.util.ArrayList<>();
-            for (String s : newSymbols.subList(i, end)) {
-                Map<String, Object> item = new java.util.HashMap<>();
-                item.put("symbol", String.format("%s{=%s%s}", s, period, type));
-                item.put("type", "Candle");
-                items.add(item);
-            }
-            Instant fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(1400L));
-            candleChannel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
-        }
-    }
-
-    private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Fetching candles via DxLink: {} symbols, timeframe={}", symbols.size(), timeframe);
         Instant now = Instant.now();
+        // Sobre-aproximamos el tiempo (x1.5) para cubrir fines de semana y feriados
         Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
-        if (java.time.Duration.between(fromTime, now).toDays() > 270)
+        
+        // Validación de contexto temporal (Punto 6)
+        long daysBetween = java.time.Duration.between(fromTime, now).toDays();
+        boolean isIntraday = timeframe.getLabel().contains("m") || timeframe.getLabel().contains("h");
+        
+        if (isIntraday && daysBetween > 270) {
+            // Si el x1.5 se pasa de los 9 meses, bajamos al límite máximo permitido
             fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
-        String label = timeframe.getLabel();
-        String type = label.substring(label.length() - 1);
-        String period = label.substring(0, label.length() - 1);
+        } else if (daysBetween > 3650) { 
+            fromTime = now.minus(3650, java.time.temporal.ChronoUnit.DAYS);
+        }
+
+        String label = timeframe.getLabel(); // ej: "5m", "1d"
+        String type = label.substring(label.length() - 1); // "m", "d", etc.
+        String period = label.substring(0, label.length() - 1); // "5", "1", etc.
+
         ensureConnected();
+        
         Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
         CompletableFuture<Map<String, List<Candle>>> future = new CompletableFuture<>();
+        
         try {
             DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
-            java.util.Set<String> completedSnapshots = new java.util.HashSet<>();
-            int expectedCount = symbols.size();
+            
+            AtomicInteger receivedSnapshots = new AtomicInteger(0);
+            AtomicInteger expectedSnapshots = new AtomicInteger(symbols.size());
+
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
-                candle.setSymbol(cleanSymbol);
+                log.info("Ephemeral candle channel {}: received {} O={} C={} complete={}",
+                    channel.getId(), cleanSymbol, candle.getOpen(), candle.getClose(), isSnapshotComplete);
                 candle.setTimeframe(timeframe);
-                List<Candle> list = resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>());
-                java.util.Optional<Candle> ex = list.stream()
-                        .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
-                if (ex.isPresent()) {
-                    Candle c = ex.get();
-                    if (candle.getHigh() != null && (c.getHigh() == null || candle.getHigh() > c.getHigh())) c.setHigh(candle.getHigh());
-                    if (candle.getLow() != null && (c.getLow() == null || candle.getLow() < c.getLow())) c.setLow(candle.getLow());
-                    if (candle.getClose() != null) c.setClose(candle.getClose());
-                    if (candle.getVolume() != null) c.setVolume(candle.getVolume());
-                } else {
-                    list.add(candle);
-                }
-                if (isSnapshotComplete) {
-                    completedSnapshots.add(cleanSymbol.toUpperCase());
-                    if (completedSnapshots.size() >= expectedCount && !future.isDone()) {
+                resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>()).add(candle);
+                if (isSnapshotComplete && receivedSnapshots.incrementAndGet() >= expectedSnapshots.get()) {
+                    log.info("All candle snapshots received ({}), completing future", receivedSnapshots.get());
+                    scheduler.schedule(() -> {
                         channel.close();
+                        resultado.forEach((sym, candles) -> {
+                            candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
+                            if (candles.size() > bars) {
+                                resultado.put(sym, new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size())));
+                            }
+                        });
                         future.complete(resultado);
-                    }
+                    }, 100, TimeUnit.MILLISECONDS);
                 }
             });
-            List<String> symList = new ArrayList<>(symbols);
-            for (int i = 0; i < symList.size(); i += 10) {
-                int end = Math.min(i + 10, symList.size());
-                List<Map<String, Object>> items = new java.util.ArrayList<>();
-                for (String s : symList.subList(i, end)) {
+
+            List<Map<String, Object>> subscriptionItems = symbols.stream()
+                .map(s -> {
+                    String dxSymbol = String.format("%s{=%s%s}", s, period, type);
                     Map<String, Object> item = new java.util.HashMap<>();
-                    item.put("symbol", String.format("%s{=%s%s}", s, period, type));
+                    item.put("symbol", dxSymbol);
                     item.put("type", "Candle");
-                    items.add(item);
-                }
-                channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
-            }
-            int timeoutSec = Math.min(10 + symbols.size() / 10, 30);
+                    return item;
+                })
+                .toList();
+
+            channel.subscribeCandlesHistory(subscriptionItems, fromTime.toEpochMilli());
+
             scheduler.schedule(() -> {
-                if (!future.isDone()) { channel.close(); future.complete(resultado); }
-            }, timeoutSec, TimeUnit.SECONDS);
-            return future.get(timeoutSec + 5, TimeUnit.SECONDS);
+                if (!future.isDone()) {
+                    channel.close();
+                    resultado.forEach((symbol, candles) -> {
+                        candles.sort(java.util.Comparator.comparing(Candle::getTimestamp));
+                        if (candles.size() > bars) {
+                            resultado.put(symbol, new java.util.ArrayList<>(candles.subList(candles.size() - bars, candles.size())));
+                        }
+                    });
+                    future.complete(resultado);
+                }
+            }, 10 + (symbols.size() / 2), TimeUnit.SECONDS);
+
+            return future.get(15, TimeUnit.SECONDS);
+
         } catch (Exception e) {
-            log.error("Candles failed: {}", e.getMessage());
-            return resultado.isEmpty() ? Map.of() : resultado;
+            log.error("Failed to fetch candles via WebSocket", e);
+            return Map.of();
         }
     }
 
@@ -1213,13 +797,9 @@ public class TastyTradeService {
 
     private Double safeConvertToDouble(Object val) {
         if (val == null) return null;
-        if (val instanceof Number n) {
-            double d = n.doubleValue();
-            return Double.isFinite(d) ? d : null;
-        }
+        if (val instanceof Number) return ((Number) val).doubleValue();
         try {
-            double d = Double.parseDouble(val.toString());
-            return Double.isFinite(d) ? d : null;
+            return Double.parseDouble(val.toString());
         } catch (Exception e) {
             return null;
         }
@@ -1227,10 +807,7 @@ public class TastyTradeService {
 
     private Long safeConvertToLong(Object val) {
         if (val == null) return null;
-        if (val instanceof Number n) {
-            long l = n.longValue();
-            return Double.isFinite((double) l) ? l : null;
-        }
+        if (val instanceof Number) return ((Number) val).longValue();
         try {
             return Long.parseLong(val.toString());
         } catch (Exception e) {
@@ -1240,10 +817,7 @@ public class TastyTradeService {
 
     private Integer safeConvertToInt(Object val) {
         if (val == null) return null;
-        if (val instanceof Number n) {
-            int i = n.intValue();
-            return Double.isFinite((double) i) ? i : null;
-        }
+        if (val instanceof Number) return ((Number) val).intValue();
         try {
             return Integer.parseInt(val.toString());
         } catch (Exception e) {

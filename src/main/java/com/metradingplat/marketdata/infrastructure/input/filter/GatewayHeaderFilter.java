@@ -24,7 +24,8 @@ public class GatewayHeaderFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
         String path = request.getRequestURI();
-        return path.contains("/actuator") || path.contains("/health");
+        return path.contains("/actuator") || path.contains("/health") || path.contains("/eureka")
+            || path.startsWith("/auth") || path.startsWith("/marketdata");
     }
 
     @Override
