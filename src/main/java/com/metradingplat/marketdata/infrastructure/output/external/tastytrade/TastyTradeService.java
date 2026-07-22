@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -727,7 +728,15 @@ public class TastyTradeService {
                 if (tf != null) candle.setTimeframe(tf);
                 String key = cleanSymbol.toUpperCase() + "|" + (tf != null ? tf.name() : "UNKNOWN");
                 List<Candle> list = candleCache.computeIfAbsent(key, k -> new java.util.ArrayList<>());
-                if (list.stream().noneMatch(c -> c.getTimestamp().equals(candle.getTimestamp()))) {
+                java.util.Optional<Candle> existing = list.stream()
+                        .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
+                if (existing.isPresent()) {
+                    Candle c = existing.get();
+                    if (candle.getHigh() != null && (c.getHigh() == null || candle.getHigh() > c.getHigh())) c.setHigh(candle.getHigh());
+                    if (candle.getLow() != null && (c.getLow() == null || candle.getLow() < c.getLow())) c.setLow(candle.getLow());
+                    if (candle.getClose() != null) c.setClose(candle.getClose());
+                    if (candle.getVolume() != null) c.setVolume(candle.getVolume());
+                } else {
                     if (list.size() >= 2000) list.remove(0);
                     list.add(candle);
                 }
@@ -786,7 +795,17 @@ public class TastyTradeService {
                 candle.setSymbol(cleanSymbol);
                 candle.setTimeframe(timeframe);
                 List<Candle> list = resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>());
-                if (list.stream().noneMatch(c -> c.getTimestamp().equals(candle.getTimestamp()))) list.add(candle);
+                java.util.Optional<Candle> ex = list.stream()
+                        .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
+                if (ex.isPresent()) {
+                    Candle c = ex.get();
+                    if (candle.getHigh() != null && (c.getHigh() == null || candle.getHigh() > c.getHigh())) c.setHigh(candle.getHigh());
+                    if (candle.getLow() != null && (c.getLow() == null || candle.getLow() < c.getLow())) c.setLow(candle.getLow());
+                    if (candle.getClose() != null) c.setClose(candle.getClose());
+                    if (candle.getVolume() != null) c.setVolume(candle.getVolume());
+                } else {
+                    list.add(candle);
+                }
                 if (isSnapshotComplete) {
                     completedSnapshots.add(cleanSymbol.toUpperCase());
                     if (completedSnapshots.size() >= expectedCount && !future.isDone()) {
