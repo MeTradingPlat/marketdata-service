@@ -241,16 +241,15 @@ public class TastyTradeClient {
      */
     public List<ActiveEquity> getAllActiveEquities() {
         List<ActiveEquity> all = new ArrayList<>();
-        int perPage = 500;
-        int maxPages = 20;
+        int perPage = 1000;
+        int maxPages = 100;
         for (int page = 0; page < maxPages; page++) {
             List<ActiveEquity> batch = getActiveEquities(page, perPage);
             if (batch.isEmpty()) break;
             all.addAll(batch);
             if (batch.size() < perPage) break;
         }
-        int totalPages = (all.size() + perPage - 1) / perPage;
-        log.info("Fetched {} total active equities from TastyTrade ({} pages)", all.size(), totalPages);
+        log.info("Fetched {} total active equities from TastyTrade ({} pages of {})", all.size(), (all.size() + perPage - 1) / perPage, perPage);
         return all;
     }
 
@@ -722,11 +721,12 @@ public class TastyTradeClient {
             List<String> chunk = symbols.subList(i, Math.min(i + chunkSize, symbols.size()));
             
             try {
+                String commaSeparated = String.join(",", chunk);
                 Map<String, Object> response = tastyTradeRestClient
                         .get()
                         .uri(uriBuilder -> uriBuilder
                                 .path("/market-metrics")
-                                .queryParam("symbols", chunk)
+                                .queryParam("symbols", commaSeparated)
                                 .build())
                         .header("Authorization", "Bearer " + accessToken)
                         .retrieve()
@@ -764,18 +764,14 @@ public class TastyTradeClient {
         if (accessToken == null) refreshAccessToken();
 
         try {
-            // Construir la URI manualmente para evitar que Spring intente expandir las llaves { }
-            String url = org.springframework.web.util.UriComponentsBuilder.fromPath("/market-data/candles")
-                    .queryParam("symbol", dxSymbol)
-                    .queryParam("from-date", from.atOffset(ZoneOffset.UTC).toString())
-                    .queryParam("to-date", to.atOffset(ZoneOffset.UTC).toString())
-                    .build()
-                    .encode()
-                    .toUriString();
-
             Map<String, Object> response = tastyTradeRestClient
                     .get()
-                    .uri(java.net.URI.create(url))
+                    .uri(uriBuilder -> uriBuilder
+                            .path("/market-data/candles")
+                            .queryParam("symbol", dxSymbol)
+                            .queryParam("from-date", from.atOffset(ZoneOffset.UTC).toString())
+                            .queryParam("to-date", to.atOffset(ZoneOffset.UTC).toString())
+                            .build(true))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .body(Map.class);
