@@ -215,12 +215,12 @@ public class DxLinkClient {
     public void resubscribeAllSymbols() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         List<String> symbols = new ArrayList<>(subscribedSymbols);
-        int chunkSize = 33;
+        int chunkSize = 150;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             defaultChannel.subscribeBatch(symbols.subList(i, end));
             if (end < symbols.size()) {
-                try { Thread.sleep(500); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
         }
     }
@@ -252,6 +252,13 @@ public class DxLinkClient {
     public void unsubscribe(String symbol) { if (defaultChannel != null) defaultChannel.unsubscribe(symbol); subscribedSymbols.remove(symbol); }
     public int getActiveSubscriptionCount() { return subscribedSymbols.size(); }
     public boolean isConnected() { return session != null && session.isOpen() && authenticated; }
+
+    public String connectionDiagnostics() {
+        if (session == null) return "session=null";
+        if (!session.isOpen()) return "session closed (id=" + session.getId() + ")";
+        if (!authenticated) return "not authenticated (session open, id=" + session.getId() + ")";
+        return "connected (session=" + session.getId() + ", channels=" + channels.size() + ", subs=" + subscribedSymbols.size() + ")";
+    }
 
     public void forceReconnect() {
         reconnectAttempts.set(0);
