@@ -403,7 +403,7 @@ public class TastyTradeService {
         });
     }
 
-    private static final int SUBSCRIBE_CHUNK_SIZE = 300;
+    private static final int SUBSCRIBE_CHUNK_SIZE = 100;
     private static long millisUntilNextHour(int targetHour) {
         java.time.ZonedDateTime now = java.time.ZonedDateTime.now(java.time.ZoneId.of("America/New_York"));
         java.time.ZonedDateTime next = now.withMinute(5).withSecond(0).withNano(0);

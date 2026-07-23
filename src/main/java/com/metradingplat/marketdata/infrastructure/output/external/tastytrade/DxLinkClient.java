@@ -217,7 +217,7 @@ public class DxLinkClient {
     public void resubscribeAllSymbols() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         List<String> symbols = new ArrayList<>(subscribedSymbols);
-        int chunkSize = 300;
+        int chunkSize = 100;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             defaultChannel.subscribeBatch(symbols.subList(i, end));
