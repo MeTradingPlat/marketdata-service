@@ -217,7 +217,7 @@ public class DxLinkClient {
     public void resubscribeAllSymbols() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         List<String> symbols = new ArrayList<>(subscribedSymbols);
-        int chunkSize = 150;
+        int chunkSize = 300;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             defaultChannel.subscribeBatch(symbols.subList(i, end));
@@ -364,11 +364,7 @@ public class DxLinkClient {
         public void subscribe(String symbol) {
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", List.of(
                 Map.of("symbol", symbol, "type", "Quote"),
-                Map.of("symbol", symbol, "type", "Trade"),
-                Map.of("symbol", symbol, "type", "TradeETH"),
-                Map.of("symbol", symbol, "type", "Summary"),
-                Map.of("symbol", symbol, "type", "Profile"),
-                Map.of("symbol", symbol, "type", "Message")
+                Map.of("symbol", symbol, "type", "Trade")
             )));
         }
 
@@ -377,10 +373,6 @@ public class DxLinkClient {
             for (String s : symbols) {
                 items.add(Map.of("symbol", s, "type", "Quote"));
                 items.add(Map.of("symbol", s, "type", "Trade"));
-                items.add(Map.of("symbol", s, "type", "TradeETH"));
-                items.add(Map.of("symbol", s, "type", "Summary"));
-                items.add(Map.of("symbol", s, "type", "Profile"));
-                items.add(Map.of("symbol", s, "type", "Message"));
             }
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
         }
@@ -556,6 +548,6 @@ public class DxLinkClient {
     private class DxLinkHandler extends TextWebSocketHandler {
         @Override public void afterConnectionEstablished(WebSocketSession s) { session = s; sendMessage(Map.of("type", "SETUP", "channel", 0, "version", "0.1-js/1.0.0", "keepaliveTimeout", 60, "acceptKeepaliveTimeout", 60)); }
         @Override protected void handleTextMessage(WebSocketSession s, TextMessage m) { processRawMessage(m.getPayload()); }
-        @Override public void afterConnectionClosed(WebSocketSession s, CloseStatus st) { authenticated = false; channels.clear(); if (st.getCode() != CloseStatus.NORMAL.getCode()) scheduleReconnect(); }
+        @Override public void afterConnectionClosed(WebSocketSession s, CloseStatus st) { log.warn("DxLink WebSocket closed: code={} reason={}", st.getCode(), st.getReason()); authenticated = false; channels.clear(); if (st.getCode() != CloseStatus.NORMAL.getCode()) scheduleReconnect(); }
     }
 }
