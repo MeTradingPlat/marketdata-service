@@ -69,10 +69,6 @@ public class TastyTradeService {
     private final ConcurrentHashMap<String, Map<String, Object>> positionsCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Map<String, Object>> liveOrdersCache = new ConcurrentHashMap<>();
 
-    // Auto-unsubscribe de quotes tras inactividad
-    private final ConcurrentHashMap<String, Long> lastQuoteAccess = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, java.util.concurrent.ScheduledFuture<?>> unsubscribeTimers = new ConcurrentHashMap<>();
-    private static final long QUOTE_TTL_MS = 3 * 60 * 1000;
     public Map<String, FundamentalData> getCachedFundamentals(List<String> symbols) {
         Map<String, FundamentalData> result = new ConcurrentHashMap<>();
         for (String sym : symbols) {
@@ -600,31 +596,9 @@ public class TastyTradeService {
             Double price = lastPricesCache.get(upper);
             if (price != null && price > 0) {
                 result.put(upper, price);
-                lastQuoteAccess.put(upper, System.currentTimeMillis());
-                scheduleAutoUnsubscribe(upper);
             }
         }
         return result;
-    }
-
-    private void scheduleAutoUnsubscribe(String symbol) {
-        java.util.concurrent.ScheduledFuture<?> existing = unsubscribeTimers.remove(symbol);
-        if (existing != null) existing.cancel(false);
-
-        java.util.concurrent.ScheduledFuture<?> timer = scheduler.schedule(() -> {
-            Long lastAccess = lastQuoteAccess.get(symbol);
-            long now = System.currentTimeMillis();
-            if (lastAccess != null && now - lastAccess >= QUOTE_TTL_MS) {
-                dxLinkClient.unsubscribe(symbol);
-                lastPricesCache.remove(symbol);
-                lastQuoteAccess.remove(symbol);
-                unsubscribeTimers.remove(symbol);
-                log.info("Auto-unsubscribed {} after {}s inactivity", symbol, QUOTE_TTL_MS / 1000);
-            } else if (lastAccess != null) {
-                scheduleAutoUnsubscribe(symbol);
-            }
-        }, QUOTE_TTL_MS, TimeUnit.MILLISECONDS);
-        unsubscribeTimers.put(symbol, timer);
     }
 
     public void subscribe(String symbol) {
