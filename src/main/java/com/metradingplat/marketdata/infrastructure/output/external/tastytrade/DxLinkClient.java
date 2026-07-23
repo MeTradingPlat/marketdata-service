@@ -185,13 +185,15 @@ public class DxLinkClient {
 
     private void scheduleReconnect() {
         if (!reconnecting.compareAndSet(false, true)) return;
+        if (isConnected()) { reconnecting.set(false); return; }
         int attempts = reconnectAttempts.incrementAndGet();
-        if (attempts > MAX_RECONNECT_ATTEMPTS) return;
+        if (attempts > MAX_RECONNECT_ATTEMPTS) { reconnecting.set(false); return; }
         int delay = Math.min(INITIAL_RECONNECT_DELAY_SECONDS * (int) Math.pow(2, attempts - 1), MAX_RECONNECT_DELAY_SECONDS);
         scheduler.schedule(() -> { try { performReconnect(); } finally { reconnecting.set(false); } }, delay, TimeUnit.SECONDS);
     }
 
     private void performReconnect() {
+        if (isConnected()) { reconnecting.set(false); return; }
         cleanupConnection();
         String token = (tokenRefresher != null) ? tokenRefresher.get() : apiQuoteToken;
         try {
