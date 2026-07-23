@@ -231,7 +231,7 @@ public class TastyTradeService {
     private static final List<String> ALL_US_MARKETS = List.of("XNAS", "XNYS", "XASE", "ARCX", "BATS", "OTC");
 
     private void subscribeAllMarkets() {
-        log.info("Auto-subscribing to all US equity markets: {}", ALL_US_MARKETS);
+        log.info("Preloading fundamentals for all US equity markets: {}", ALL_US_MARKETS);
         List<ActiveEquity> allEquities = tastyTradeClient.getAllActiveEquities();
         Set<String> targetMarkets = new HashSet<>(ALL_US_MARKETS);
         List<String> symbols = new ArrayList<>();
@@ -242,8 +242,7 @@ public class TastyTradeService {
         }
         if (!symbols.isEmpty()) {
             List<String> distinctSymbols = symbols.stream().distinct().toList();
-            subscribeBatch(distinctSymbols);
-            log.info("Auto-subscribed {} symbols for real-time prices. Starting fundamentals preload...", distinctSymbols.size());
+            log.info("Starting fundamentals preload for {} symbols (streaming quotes on demand)", distinctSymbols.size());
             CompletableFuture.runAsync(() -> preloadFundamentalsFromRest(distinctSymbols));
         }
     }
@@ -591,12 +590,18 @@ public class TastyTradeService {
 
     public Map<String, Double> getCachedPrices(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
+        List<String> missing = new ArrayList<>();
         for (String sym : symbols) {
             String upper = sym.toUpperCase();
             Double price = lastPricesCache.get(upper);
             if (price != null && price > 0) {
                 result.put(upper, price);
+            } else {
+                missing.add(upper);
             }
+        }
+        if (!missing.isEmpty()) {
+            CompletableFuture.runAsync(() -> subscribeBatch(missing));
         }
         return result;
     }
