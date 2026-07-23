@@ -375,7 +375,8 @@ public class TastyTradeClient {
                         .header("Authorization", "Bearer " + accessToken)
                         .retrieve()
                         .body(Map.class);
-                
+
+                log.info("TastyTrade market-data response keys: {}", response != null ? response.keySet() : "null");
                 if (response != null && response.containsKey("data")) {
                     Map<String, Object> data = (Map<String, Object>) response.get("data");
                     List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
