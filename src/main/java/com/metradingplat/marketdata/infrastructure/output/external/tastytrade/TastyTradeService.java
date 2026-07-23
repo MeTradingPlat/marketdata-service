@@ -603,17 +603,14 @@ public class TastyTradeService {
     public Map<String, Double> getRestQuotes(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
         List<Map<String, Object>> items = tastyTradeClient.getMarketDataBatch(symbols);
-        log.info("getRestQuotes: requested {} symbols, got {} items from TastyTrade", symbols.size(), items.size());
         for (Map<String, Object> item : items) {
             String sym = (String) item.get("symbol");
             Object last = item.get("last");
-            log.info("getRestQuotes item: sym={} last={} lastType={}", sym, last, last != null ? last.getClass().getSimpleName() : "null");
-            if (sym != null && last instanceof Number n) {
-                double price = n.doubleValue();
+            if (sym != null && last != null) {
+                double price = safeConvertToDouble(last);
                 if (price > 0) result.put(sym.toUpperCase(), price);
             }
         }
-        log.info("getRestQuotes: returning {}/{} symbols", result.size(), symbols.size());
         return result;
     }
 
