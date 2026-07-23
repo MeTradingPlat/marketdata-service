@@ -602,19 +602,36 @@ public class TastyTradeService {
 
     public Map<String, Double> getRestQuotes(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
-        List<Map<String, Object>> items = tastyTradeClient.getMarketDataBatch(symbols);
-        for (Map<String, Object> item : items) {
-            String sym = (String) item.get("symbol");
-            Object last = item.get("last");
-            if (sym != null && last instanceof Number n) {
-                double price = n.doubleValue();
-                if (price > 0) {
-                    result.put(sym.toUpperCase(), price);
-                    lastPricesCache.put(sym.toUpperCase(), price);
+        List<String> missing = new ArrayList<>();
+
+        for (String sym : symbols) {
+            String upper = sym.toUpperCase();
+            Double cached = lastPricesCache.get(upper);
+            if (cached != null && cached > 0) {
+                result.put(upper, cached);
+            } else {
+                missing.add(upper);
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            List<Map<String, Object>> items = tastyTradeClient.getMarketDataBatch(missing);
+            for (Map<String, Object> item : items) {
+                String sym = (String) item.get("symbol");
+                Object last = item.get("last");
+                if (sym != null && last instanceof Number n) {
+                    double price = n.doubleValue();
+                    if (price > 0) {
+                        String upper = sym.toUpperCase();
+                        result.put(upper, price);
+                        lastPricesCache.put(upper, price);
+                    }
                 }
             }
         }
-        log.info("REST quotes: {}/{} symbols", result.size(), symbols.size());
+
+        log.info("Quotes: {}/{} symbols ({} cache hits, {} REST)", result.size(), symbols.size(),
+                 result.size() - (symbols.size() - missing.size()), missing.size());
         return result;
     }
 
