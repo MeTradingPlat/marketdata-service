@@ -595,8 +595,6 @@ public class TastyTradeService {
 
     public Map<String, Double> getCachedPrices(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
-        List<String> missing = new ArrayList<>();
-
         for (String sym : symbols) {
             String upper = sym.toUpperCase();
             Double price = lastPricesCache.get(upper);
@@ -604,46 +602,9 @@ public class TastyTradeService {
                 result.put(upper, price);
                 lastQuoteAccess.put(upper, System.currentTimeMillis());
                 scheduleAutoUnsubscribe(upper);
-            } else {
-                missing.add(upper);
             }
         }
-
-        if (!missing.isEmpty()) {
-            log.info("Quotes cache miss: {}/{} symbols, subscribing via DxLink", missing.size(), symbols.size());
-            subscribeAndWaitForQuotes(missing);
-            for (String sym : missing) {
-                String upper = sym.toUpperCase();
-                Double price = lastPricesCache.get(upper);
-                if (price != null && price > 0) {
-                    result.put(upper, price);
-                    lastQuoteAccess.put(upper, System.currentTimeMillis());
-                    scheduleAutoUnsubscribe(upper);
-                }
-            }
-            log.info("Quotes resolved: {}/{} symbols with price after subscription",
-                     result.size(), symbols.size());
-        }
-
         return result;
-    }
-
-    private void subscribeAndWaitForQuotes(List<String> symbols) {
-        try {
-            subscribeBatch(symbols);
-            long deadline = System.currentTimeMillis() + 5000;
-            int resolved = 0;
-            while (System.currentTimeMillis() < deadline && resolved < symbols.size()) {
-                Thread.sleep(200);
-                resolved = 0;
-                for (String sym : symbols) {
-                    Double p = lastPricesCache.get(sym.toUpperCase());
-                    if (p != null && p > 0) resolved++;
-                }
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 
     private void scheduleAutoUnsubscribe(String symbol) {
