@@ -590,19 +590,31 @@ public class TastyTradeService {
 
     public Map<String, Double> getCachedPrices(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
-        List<String> missing = new ArrayList<>();
         for (String sym : symbols) {
             String upper = sym.toUpperCase();
             Double price = lastPricesCache.get(upper);
             if (price != null && price > 0) {
                 result.put(upper, price);
-            } else {
-                missing.add(upper);
             }
         }
-        if (!missing.isEmpty()) {
-            CompletableFuture.runAsync(() -> subscribeBatch(missing));
+        return result;
+    }
+
+    public Map<String, Double> getRestQuotes(List<String> symbols) {
+        Map<String, Double> result = new ConcurrentHashMap<>();
+        List<Map<String, Object>> items = tastyTradeClient.getMarketDataBatch(symbols);
+        for (Map<String, Object> item : items) {
+            String sym = (String) item.get("symbol");
+            Object last = item.get("last");
+            if (sym != null && last instanceof Number n) {
+                double price = n.doubleValue();
+                if (price > 0) {
+                    result.put(sym.toUpperCase(), price);
+                    lastPricesCache.put(sym.toUpperCase(), price);
+                }
+            }
         }
+        log.info("REST quotes: {}/{} symbols", result.size(), symbols.size());
         return result;
     }
 

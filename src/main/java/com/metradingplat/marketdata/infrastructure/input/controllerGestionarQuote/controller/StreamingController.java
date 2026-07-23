@@ -58,6 +58,13 @@ public class StreamingController {
         return ResponseEntity.ok(prices);
     }
 
+    @PostMapping("/quotes/rest")
+    public ResponseEntity<Map<String, Double>> getRestQuotes(@RequestBody List<String> symbols) {
+        Map<String, Double> prices = tastyTradeService.getRestQuotes(symbols);
+        log.info("REST quotes: {}/{} symbols", prices.size(), symbols.size());
+        return ResponseEntity.ok(prices);
+    }
+
     @PostMapping("/fundamentals/realtime")
     public ResponseEntity<Map<String, FundamentalData>> getRealtimeFundamentals(@RequestBody List<String> symbols) {
         Map<String, FundamentalData> cached = tastyTradeService.getCachedFundamentals(symbols);
