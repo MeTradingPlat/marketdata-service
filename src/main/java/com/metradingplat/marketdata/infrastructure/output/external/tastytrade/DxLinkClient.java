@@ -131,11 +131,15 @@ public class DxLinkClient {
 
     public DxLinkChannel getDefaultChannel() { return defaultChannel; }
 
-    public void setOnMarketData(BiConsumer<String, MarketDataStreamDTO> callback) { if (defaultChannel != null) defaultChannel.setOnMarketData(callback); }
+    public void setOnMarketData(BiConsumer<String, MarketDataStreamDTO> callback) {
+        this.marketDataCallback = callback;
+        if (defaultChannel != null) defaultChannel.setOnMarketData(callback);
+    }
     public void setOnCandle(CandleCallback callback) { if (defaultChannel != null) defaultChannel.addCandleListener(callback); }
     public void setOnMessage(BiConsumer<String, JsonNode> callback) { if (defaultChannel != null) defaultChannel.addMessageListener(callback); }
     public void setOnGreeks(BiConsumer<String, OptionContract> callback) { if (defaultChannel != null) defaultChannel.addGreeksListener(callback); }
     private BiConsumer<String, FundamentalData> fundamentalCallback;
+    private BiConsumer<String, MarketDataStreamDTO> marketDataCallback;
 
     public void setOnFundamentalData(BiConsumer<String, FundamentalData> callback) {
         this.fundamentalCallback = callback;
@@ -196,12 +200,19 @@ public class DxLinkClient {
                 if (fundamentalCallback != null && defaultChannel != null) {
                     defaultChannel.addFundamentalListener(fundamentalCallback);
                 }
+                if (marketDataCallback != null && defaultChannel != null) {
+                    defaultChannel.setOnMarketData(marketDataCallback);
+                }
                 resubscribeAll();
             }
         } catch (Exception e) { scheduleReconnect(); }
     }
 
     private void resubscribeAll() {
+        resubscribeAllSymbols();
+    }
+
+    public void resubscribeAllSymbols() {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         List<String> symbols = new ArrayList<>(subscribedSymbols);
         int chunkSize = 33;

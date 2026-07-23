@@ -1265,13 +1265,19 @@ public class TastyTradeService {
                     return v1;
                 });
             });
+            dxLinkClient.getDefaultChannel().setOnMarketData((symbol, data) -> {
+                if (data.getLastPrice() != null && data.getLastPrice() > 0) {
+                    lastPricesCache.put(symbol.toUpperCase(), data.getLastPrice());
+                }
+            });
+            dxLinkClient.resubscribeAllSymbols();
         }
-        
+
         // Conexión al Account Streamer
         String accessToken = tastyTradeClient.getAccessToken();
         String streamerUrl = tastyTradeClient.getAccountStreamerUrl();
         accountStreamerClient.connect(streamerUrl, accessToken);
-        
+
         if (reconnected) {
             log.info("📡 Reconexión detectada. Ejecutando reconciliación de seguridad...");
             reconcileAccountState();
