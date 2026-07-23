@@ -376,11 +376,13 @@ public class TastyTradeClient {
                         .retrieve()
                         .body(Map.class);
 
-                log.info("TastyTrade market-data response keys: {}", response != null ? response.keySet() : "null");
                 if (response != null && response.containsKey("data")) {
                     Map<String, Object> data = (Map<String, Object>) response.get("data");
+                    log.info("TastyTrade data keys: {} pagination={}", data != null ? data.keySet() : "null", response.get("pagination"));
                     List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
                     if (items != null) allItems.addAll(items);
+                } else {
+                    log.info("TastyTrade unexpected response: {}", response);
                 }
             } catch (Exception e) {
                 log.error("Failed to get market data batch chunk at index {}: {}", i, e.getMessage());
