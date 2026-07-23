@@ -69,6 +69,10 @@ public class TastyTradeService {
     private final ConcurrentHashMap<String, Map<String, Object>> positionsCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Map<String, Object>> liveOrdersCache = new ConcurrentHashMap<>();
 
+    // Auto-unsubscribe de quotes tras inactividad
+    private final ConcurrentHashMap<String, Long> lastQuoteAccess = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, java.util.concurrent.ScheduledFuture<?>> unsubscribeTimers = new ConcurrentHashMap<>();
+    private static final long QUOTE_TTL_MS = 3 * 60 * 1000;
     public Map<String, FundamentalData> getCachedFundamentals(List<String> symbols) {
         Map<String, FundamentalData> result = new ConcurrentHashMap<>();
         for (String sym : symbols) {
@@ -591,12 +595,75 @@ public class TastyTradeService {
 
     public Map<String, Double> getCachedPrices(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
+        List<String> missing = new ArrayList<>();
+
         for (String sym : symbols) {
             String upper = sym.toUpperCase();
             Double price = lastPricesCache.get(upper);
-            if (price != null) result.put(upper, price);
+            if (price != null && price > 0) {
+                result.put(upper, price);
+                lastQuoteAccess.put(upper, System.currentTimeMillis());
+                scheduleAutoUnsubscribe(upper);
+            } else {
+                missing.add(upper);
+            }
         }
+
+        if (!missing.isEmpty()) {
+            log.info("Quotes cache miss: {}/{} symbols, subscribing via DxLink", missing.size(), symbols.size());
+            subscribeAndWaitForQuotes(missing);
+            for (String sym : missing) {
+                String upper = sym.toUpperCase();
+                Double price = lastPricesCache.get(upper);
+                if (price != null && price > 0) {
+                    result.put(upper, price);
+                    lastQuoteAccess.put(upper, System.currentTimeMillis());
+                    scheduleAutoUnsubscribe(upper);
+                }
+            }
+            log.info("Quotes resolved: {}/{} symbols with price after subscription",
+                     result.size(), symbols.size());
+        }
+
         return result;
+    }
+
+    private void subscribeAndWaitForQuotes(List<String> symbols) {
+        try {
+            subscribeBatch(symbols);
+            long deadline = System.currentTimeMillis() + 5000;
+            int resolved = 0;
+            while (System.currentTimeMillis() < deadline && resolved < symbols.size()) {
+                Thread.sleep(200);
+                resolved = 0;
+                for (String sym : symbols) {
+                    Double p = lastPricesCache.get(sym.toUpperCase());
+                    if (p != null && p > 0) resolved++;
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void scheduleAutoUnsubscribe(String symbol) {
+        java.util.concurrent.ScheduledFuture<?> existing = unsubscribeTimers.remove(symbol);
+        if (existing != null) existing.cancel(false);
+
+        java.util.concurrent.ScheduledFuture<?> timer = scheduler.schedule(() -> {
+            Long lastAccess = lastQuoteAccess.get(symbol);
+            long now = System.currentTimeMillis();
+            if (lastAccess != null && now - lastAccess >= QUOTE_TTL_MS) {
+                dxLinkClient.unsubscribe(symbol);
+                lastPricesCache.remove(symbol);
+                lastQuoteAccess.remove(symbol);
+                unsubscribeTimers.remove(symbol);
+                log.info("Auto-unsubscribed {} after {}s inactivity", symbol, QUOTE_TTL_MS / 1000);
+            } else if (lastAccess != null) {
+                scheduleAutoUnsubscribe(symbol);
+            }
+        }, QUOTE_TTL_MS, TimeUnit.MILLISECONDS);
+        unsubscribeTimers.put(symbol, timer);
     }
 
     public void subscribe(String symbol) {
