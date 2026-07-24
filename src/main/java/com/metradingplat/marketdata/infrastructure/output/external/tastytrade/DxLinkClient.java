@@ -499,9 +499,10 @@ public class DxLinkClient {
                         if (!Double.isNaN(price)) {
                             lastKnownPriceCache.put(symbol, price);
                             if (dayVolume > 0) {
-                                long now = System.currentTimeMillis();
+                                final double tradePrice = price;
+                                final long now = System.currentTimeMillis();
                                 vwapCache.compute(symbol.toUpperCase(), (k, old) ->
-                                        old == null ? VwapAccumulator.seed(price, dayVolume, now) : old.withTrade(price, dayVolume, now));
+                                        old == null ? VwapAccumulator.seed(tradePrice, dayVolume, now) : old.withTrade(tradePrice, dayVolume, now));
                             }
                         } else {
                             price = lastKnownPriceCache.getOrDefault(symbol, Double.NaN);
