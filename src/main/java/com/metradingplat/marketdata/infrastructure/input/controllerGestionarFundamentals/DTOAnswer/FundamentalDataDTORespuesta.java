@@ -32,7 +32,9 @@ public class FundamentalDataDTORespuesta {
     private Long haltStartTime;
     private Long haltEndTime;
     private Double beta;
-    
+    private Boolean isEtf;
+    private String securityType;
+
     // Market Metrics
     private Double impliedVolatilityIndex;
     private Double impliedVolatilityRank;
