@@ -334,7 +334,7 @@ public class TastyTradeService {
                     FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
                     boolean isEtf = Boolean.TRUE.equals(eq.get("is-etf"));
                     fund.setIsEtf(isEtf);
-                    fund.setSecurityType(classifySecurityType(isEtf, (String) eq.get("description")));
+                    fund.setSecurityType(classifySecurityType(sym.toUpperCase(), isEtf, (String) eq.get("description")));
                     equityLoaded++;
                 }
             } catch (Exception e) {
@@ -569,13 +569,21 @@ public class TastyTradeService {
         logSharesOutstandingCoverage();
     }
 
-    private String classifySecurityType(boolean isEtf, String description) {
-        if (isEtf) return "ETF";
-        if (description == null) return "EQUITY";
-        String d = description.trim().toLowerCase();
-        if (d.endsWith("warrant") || d.endsWith("warrants")) return "WARRANT";
-        if (d.endsWith("unit") || d.endsWith("units")) return "UNIT";
-        if (d.endsWith("right") || d.endsWith("rights")) return "RIGHTS";
+    private String classifySecurityType(String symbol, boolean isEtf, String description) {
+        if (symbol != null && symbol.contains("TEST")) return "TEST_SYMBOL";
+        String d = description != null ? description.trim().toLowerCase() : "";
+        if (d.contains("tick pilot") || d.contains("symbology tst")) return "TEST_SYMBOL";
+        if (isEtf || d.contains("etf")) return "ETF";
+        if (d.matches(".*\\bnotes? due\\b.*") || d.matches(".*\\b(senior|subordinated) notes\\b.*")
+                || d.contains("mortgage bonds")) return "BOND";
+        if (d.contains("preferred stock") || d.contains("preferred units") || d.contains("preferred shares")
+                || d.contains("depositary shares")) return "PREFERRED";
+        if (symbol != null && symbol.endsWith("/WS")) return "WARRANT";
+        if (d.matches(".*\\bwarrants?\\b.*")) return "WARRANT";
+        if (symbol != null && symbol.endsWith("/U")) return "UNIT";
+        if (d.matches(".*\\buts?\\b.*") || d.matches(".*\\bunits?\\b.*")) return "UNIT";
+        if (d.matches(".*\\brights?\\b.*")) return "RIGHTS";
+        if (description == null && symbol != null && symbol.matches("^[A-Z]{2,6}P[A-Z]{1,2}$")) return "PREFERRED";
         return "EQUITY";
     }
 
