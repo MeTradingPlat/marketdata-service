@@ -393,7 +393,7 @@ public class TastyTradeService {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
                 FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
-                if (fund == null || fund.getBeta() == null) {
+                if (fund == null || fund.getBeta() == null || fund.getSharesOutstanding() == null) {
                     stillMissing.add(sym);
                 }
             }
