@@ -32,8 +32,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.domain.models.OptionContract;
-import com.metradingplat.marketdata.domain.models.VwapAccumulator;
-import com.metradingplat.marketdata.domain.models.VwapQuote;
 import com.metradingplat.marketdata.infrastructure.output.kafka.DTO.MarketDataStreamDTO;
 
 import jakarta.annotation.PreDestroy;
@@ -53,10 +51,6 @@ public class DxLinkClient {
     
     // L1 Cache to maintain the last known price during market data silence (OOH)
     private final Map<String, Double> lastKnownPriceCache = new ConcurrentHashMap<>();
-
-    // Intraday VWAP accumulated live from Trade ticks (dayVolume deltas), resets on session rollover
-    private final Map<String, VwapAccumulator> vwapCache = new ConcurrentHashMap<>();
-    private static final long VWAP_STALE_MILLIS = 24 * 3600_000L;
 
     private WebSocketSession session;
     private String apiQuoteToken;
@@ -79,7 +73,6 @@ public class DxLinkClient {
 
     private ScheduledFuture<?> keepaliveTask;
     private ScheduledFuture<?> healthCheckTask;
-    private ScheduledFuture<?> vwapCleanupTask;
     private final List<CandleCallback> candleListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<BiConsumer<String, FundamentalData>> fundamentalListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<BiConsumer<String, OptionContract>> greeksListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -247,16 +240,6 @@ public class DxLinkClient {
     private void startHealthCheck() {
         if (healthCheckTask != null) healthCheckTask.cancel(false);
         healthCheckTask = scheduler.scheduleAtFixedRate(this::checkConnectionHealth, HEALTH_CHECK_INTERVAL_SECONDS, HEALTH_CHECK_INTERVAL_SECONDS, TimeUnit.SECONDS);
-        if (vwapCleanupTask == null) {
-            vwapCleanupTask = scheduler.scheduleAtFixedRate(this::cleanupStaleVwap, 30, 30, TimeUnit.MINUTES);
-        }
-    }
-
-    private void cleanupStaleVwap() {
-        long cutoff = System.currentTimeMillis() - VWAP_STALE_MILLIS;
-        int before = vwapCache.size();
-        vwapCache.values().removeIf(acc -> acc.updatedAtMillis() < cutoff);
-        log.info("VWAP cleanup: {} -> {} tracked symbols", before, vwapCache.size());
     }
 
     private void checkConnectionHealth() {
@@ -285,17 +268,6 @@ public class DxLinkClient {
         reconnectAttempts.set(0);
         cleanupConnection();
         scheduleReconnect();
-    }
-
-    public Map<String, VwapQuote> getVwapSnapshot(List<String> symbols) {
-        Map<String, VwapQuote> result = new ConcurrentHashMap<>();
-        for (String sym : symbols) {
-            VwapAccumulator acc = vwapCache.get(sym.toUpperCase());
-            if (acc != null) {
-                result.put(sym.toUpperCase(), VwapQuote.fromAccumulator(acc));
-            }
-        }
-        return result;
     }
 
     public Map<String, Object> getConnectionStats() {
@@ -495,19 +467,12 @@ public class DxLinkClient {
                     }
                     case "Trade" -> {
                         double price = extractNumericSafe(data.get(IDX_TRADE_PRICE));
-                        long dayVolume = data.path(IDX_TRADE_VOLUME).asLong();
                         if (!Double.isNaN(price)) {
                             lastKnownPriceCache.put(symbol, price);
-                            if (dayVolume > 0) {
-                                final double tradePrice = price;
-                                final long now = System.currentTimeMillis();
-                                vwapCache.compute(symbol.toUpperCase(), (k, old) ->
-                                        old == null ? VwapAccumulator.seed(tradePrice, dayVolume, now) : old.withTrade(tradePrice, dayVolume, now));
-                            }
                         } else {
                             price = lastKnownPriceCache.getOrDefault(symbol, Double.NaN);
                         }
-                        notifyMarketData(symbol, MarketDataStreamDTO.builder().symbol(symbol).lastPrice(price).volume(dayVolume).timestamp(Instant.ofEpochMilli(data.path(IDX_TRADE_TIME).asLong())).build());
+                        notifyMarketData(symbol, MarketDataStreamDTO.builder().symbol(symbol).lastPrice(price).volume(data.path(IDX_TRADE_VOLUME).asLong()).timestamp(Instant.ofEpochMilli(data.path(IDX_TRADE_TIME).asLong())).build());
                     }
                     case "Summary" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).open(extractNullableDouble(data.get(IDX_SUMM_OPEN))).high(extractNullableDouble(data.get(IDX_SUMM_HIGH))).low(extractNullableDouble(data.get(IDX_SUMM_LOW))).prevClose(extractNullableDouble(data.get(IDX_SUMM_PREV_CLOSE))).openInterest(data.path(IDX_SUMM_OI).asLong()).build());
                     case "TradeETH" -> {

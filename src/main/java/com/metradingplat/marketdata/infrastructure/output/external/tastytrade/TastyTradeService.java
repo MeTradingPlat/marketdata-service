@@ -28,7 +28,6 @@ import com.metradingplat.marketdata.domain.models.OptionChain;
 import com.metradingplat.marketdata.domain.models.OptionContract;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
-import com.metradingplat.marketdata.domain.models.VwapQuote;
 import com.metradingplat.marketdata.infrastructure.output.external.finra.FinraClient;
 
 import jakarta.annotation.PostConstruct;
@@ -70,6 +69,13 @@ public class TastyTradeService {
     private final ConcurrentHashMap<String, Map<String, Object>> positionsCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Map<String, Object>> liveOrdersCache = new ConcurrentHashMap<>();
 
+    // Cache de quotes REST con TTL (Arquitectura de Resiliencia)
+    private final ConcurrentHashMap<String, CachedQuote> restQuoteCache = new ConcurrentHashMap<>();
+    private static final long QUOTE_CACHE_TTL_MS = 10_000; // 10 segundos
+    private static final long QUOTE_LKG_TTL_MS = 300_000; // 5 minutos para last-known-good
+    private static final int MAX_RETRIES = 3;
+
+    private record CachedQuote(double price, long timestamp, boolean stale) {}
 
     public Map<String, FundamentalData> getCachedFundamentals(List<String> symbols) {
         Map<String, FundamentalData> result = new ConcurrentHashMap<>();
@@ -201,6 +207,8 @@ public class TastyTradeService {
         scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
                 millisUntilNextHour(9), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::cleanupStaleCandles,
+                5, 5, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(this::cleanupStaleRestQuotes,
                 5, 5, TimeUnit.MINUTES);
 
         CompletableFuture.runAsync(() -> {
@@ -385,10 +393,6 @@ public class TastyTradeService {
 
         CompletableFuture.runAsync(this::updateShortInterestFromFinra);
         CompletableFuture.runAsync(() -> {
-            log.info("Subscribing full preload universe ({} symbols) to persistent DxLink channel for live ticks", symbols.size());
-            subscribeBatch(symbols);
-        });
-        CompletableFuture.runAsync(() -> {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
                 FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
@@ -463,6 +467,13 @@ public class TastyTradeService {
             case "1mo" -> EnumTimeframe.MO1;
             default -> null;
         };
+    }
+
+    private void cleanupStaleRestQuotes() {
+        long cutoff = System.currentTimeMillis() - QUOTE_LKG_TTL_MS;
+        int before = restQuoteCache.size();
+        restQuoteCache.values().removeIf(q -> q.timestamp() < cutoff);
+        log.info("REST quote cache cleanup: {} -> {} entries", before, restQuoteCache.size());
     }
 
     private void cleanupStaleCandles() {
@@ -606,8 +617,71 @@ public class TastyTradeService {
         return result;
     }
 
-    public Map<String, VwapQuote> getVwapQuotes(List<String> symbols) {
-        return dxLinkClient.getVwapSnapshot(symbols);
+    public Map<String, Double> getRestQuotes(List<String> symbols) {
+        Map<String, Double> result = new ConcurrentHashMap<>();
+        List<String> toFetch = new ArrayList<>();
+        long now = System.currentTimeMillis();
+
+        for (String sym : symbols) {
+            String upper = sym.toUpperCase();
+            CachedQuote cached = restQuoteCache.get(upper);
+            if (cached != null && (now - cached.timestamp) < QUOTE_CACHE_TTL_MS) {
+                result.put(upper, cached.price);
+            } else if (cached != null && (now - cached.timestamp) < QUOTE_LKG_TTL_MS) {
+                result.put(upper, cached.price);
+                toFetch.add(sym);
+            } else {
+                toFetch.add(sym);
+            }
+        }
+
+        if (!toFetch.isEmpty()) {
+            List<Map<String, Object>> items = fetchWithRetry(toFetch);
+            for (Map<String, Object> item : items) {
+                String sym = (String) item.get("symbol");
+                Object last = item.get("last");
+                if (sym != null && last != null) {
+                    double price = safeConvertToDouble(last);
+                    if (price > 0) {
+                        String upper = sym.toUpperCase();
+                        result.put(upper, price);
+                        restQuoteCache.put(upper, new CachedQuote(price, now, false));
+                    }
+                }
+            }
+            for (String sym : toFetch) {
+                String upper = sym.toUpperCase();
+                if (!result.containsKey(upper)) {
+                    CachedQuote lkg = restQuoteCache.get(upper);
+                    if (lkg != null && (now - lkg.timestamp) < QUOTE_LKG_TTL_MS) {
+                        result.put(upper, lkg.price);
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private List<Map<String, Object>> fetchWithRetry(List<String> symbols) {
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                List<Map<String, Object>> items = tastyTradeClient.getMarketDataBatch(symbols);
+                if (!items.isEmpty()) return items;
+                if (attempt < MAX_RETRIES) {
+                    log.warn("REST quotes empty, retry {}/{}", attempt, MAX_RETRIES);
+                    Thread.sleep(200 * attempt);
+                }
+            } catch (Exception e) {
+                if (attempt < MAX_RETRIES) {
+                    log.warn("REST quotes failed (attempt {}): {}", attempt, e.getMessage());
+                    try { Thread.sleep(300 * attempt); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
+                } else {
+                    log.error("REST quotes failed after {} retries: {}", MAX_RETRIES, e.getMessage());
+                }
+            }
+        }
+        return List.of();
     }
 
     public void subscribe(String symbol) {
