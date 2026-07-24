@@ -81,21 +81,26 @@ public class SecEdgarClient {
 
     private Long parseSharesOutstanding(byte[] entryData) {
         try {
-            JsonNode shares = objectMapper.readTree(entryData)
-                    .path("facts").path("dei").path("EntityCommonStockSharesOutstanding").path("units").path("shares");
-            long latestVal = 0;
-            String latestFiled = "";
-            for (JsonNode entry : shares) {
-                String filed = entry.path("filed").asText("");
-                if (filed.compareTo(latestFiled) > 0) {
-                    latestFiled = filed;
-                    latestVal = entry.path("val").asLong(0);
-                }
-            }
-            return latestVal > 0 ? latestVal : null;
+            JsonNode facts = objectMapper.readTree(entryData).path("facts");
+            Long shares = latestShareCount(facts.path("dei").path("EntityCommonStockSharesOutstanding"));
+            if (shares == null) shares = latestShareCount(facts.path("us-gaap").path("CommonStockSharesOutstanding"));
+            return shares;
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private Long latestShareCount(JsonNode concept) {
+        long latestVal = 0;
+        String latestFiled = "";
+        for (JsonNode entry : concept.path("units").path("shares")) {
+            String filed = entry.path("filed").asText("");
+            if (filed.compareTo(latestFiled) > 0) {
+                latestFiled = filed;
+                latestVal = entry.path("val").asLong(0);
+            }
+        }
+        return latestVal > 0 ? latestVal : null;
     }
 
     private synchronized Map<String, Integer> tickerToCikMap() {
