@@ -385,6 +385,10 @@ public class TastyTradeService {
 
         CompletableFuture.runAsync(this::updateShortInterestFromFinra);
         CompletableFuture.runAsync(() -> {
+            log.info("Subscribing full preload universe ({} symbols) to persistent DxLink channel for live ticks", symbols.size());
+            subscribeBatch(symbols);
+        });
+        CompletableFuture.runAsync(() -> {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
                 FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
