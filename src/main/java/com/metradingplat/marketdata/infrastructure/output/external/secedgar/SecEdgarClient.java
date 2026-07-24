@@ -6,6 +6,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,12 +40,16 @@ public class SecEdgarClient {
     private Map<String, Integer> tickerToCik;
 
     public Map<String, Long> fetchSharesOutstanding(List<String> symbols) {
-        Map<String, String> cikToSymbol = new HashMap<>();
+        Map<String, List<String>> cikToSymbols = new HashMap<>();
+        int totalTargets = 0;
         for (String symbol : symbols) {
             Integer cik = tickerToCikMap().get(symbol.toUpperCase());
-            if (cik != null) cikToSymbol.put(String.format("%010d", cik), symbol.toUpperCase());
+            if (cik != null) {
+                cikToSymbols.computeIfAbsent(String.format("%010d", cik), k -> new ArrayList<>()).add(symbol.toUpperCase());
+                totalTargets++;
+            }
         }
-        if (cikToSymbol.isEmpty()) return Map.of();
+        if (cikToSymbols.isEmpty()) return Map.of();
 
         Map<String, Long> result = new HashMap<>();
         HttpRequest request = HttpRequest.newBuilder()
@@ -57,12 +62,14 @@ public class SecEdgarClient {
             HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (ZipInputStream zip = new ZipInputStream(response.body())) {
                 ZipEntry entry;
-                while (result.size() < cikToSymbol.size() && (entry = zip.getNextEntry()) != null) {
+                while (result.size() < totalTargets && (entry = zip.getNextEntry()) != null) {
                     String cik = extractCik(entry.getName());
-                    String symbol = cik != null ? cikToSymbol.get(cik) : null;
-                    if (symbol != null) {
+                    List<String> matchedSymbols = cik != null ? cikToSymbols.get(cik) : null;
+                    if (matchedSymbols != null) {
                         Long shares = parseSharesOutstanding(zip.readAllBytes());
-                        if (shares != null) result.put(symbol, shares);
+                        if (shares != null) {
+                            for (String symbol : matchedSymbols) result.put(symbol, shares);
+                        }
                     }
                     zip.closeEntry();
                 }
