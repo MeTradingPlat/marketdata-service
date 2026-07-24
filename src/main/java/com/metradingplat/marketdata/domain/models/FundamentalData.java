@@ -44,6 +44,8 @@ public class FundamentalData {
     
     private Double borrowRate;
     private String lendability;
+    private Boolean isEtf;
+    private String securityType;
 
     // Market Metrics Fields
     private Double impliedVolatilityIndex;

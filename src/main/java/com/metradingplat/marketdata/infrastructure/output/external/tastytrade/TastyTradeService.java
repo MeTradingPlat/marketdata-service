@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -330,7 +331,10 @@ public class TastyTradeService {
                 for (Map<String, Object> eq : equities) {
                     String sym = (String) eq.get("symbol");
                     if (sym == null) continue;
-                    fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
+                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
+                    boolean isEtf = Boolean.TRUE.equals(eq.get("is-etf"));
+                    fund.setIsEtf(isEtf);
+                    fund.setSecurityType(classifySecurityType(isEtf, (String) eq.get("description")));
                     equityLoaded++;
                 }
             } catch (Exception e) {
@@ -545,22 +549,49 @@ public class TastyTradeService {
         for (var entry : fundamentalsCache.entrySet()) {
             if (entry.getValue().getSharesOutstanding() == null) missing.add(entry.getKey());
         }
-        if (missing.isEmpty()) return;
-        log.info("SEC EDGAR refresh: {} symbols missing sharesOutstanding", missing.size());
-        try {
-            Map<String, Long> shares = secEdgarClient.fetchSharesOutstanding(missing);
-            for (var entry : shares.entrySet()) {
-                FundamentalData fund = fundamentalsCache.get(entry.getKey());
-                if (fund == null) continue;
-                fund.setSharesOutstanding(entry.getValue());
-                if (fund.getFloatShares() == null) {
-                    fund.setFloatShares(Math.round(entry.getValue() * 0.90));
+        if (!missing.isEmpty()) {
+            log.info("SEC EDGAR refresh: {} symbols missing sharesOutstanding", missing.size());
+            try {
+                Map<String, Long> shares = secEdgarClient.fetchSharesOutstanding(missing);
+                for (var entry : shares.entrySet()) {
+                    FundamentalData fund = fundamentalsCache.get(entry.getKey());
+                    if (fund == null) continue;
+                    fund.setSharesOutstanding(entry.getValue());
+                    if (fund.getFloatShares() == null) {
+                        fund.setFloatShares(Math.round(entry.getValue() * 0.90));
+                    }
                 }
+                log.info("SEC EDGAR refresh: updated sharesOutstanding for {} symbols", shares.size());
+            } catch (Exception e) {
+                log.warn("SEC EDGAR refresh failed: {}", e.getMessage());
             }
-            log.info("SEC EDGAR refresh: updated sharesOutstanding for {} symbols", shares.size());
-        } catch (Exception e) {
-            log.warn("SEC EDGAR refresh failed: {}", e.getMessage());
         }
+        logSharesOutstandingCoverage();
+    }
+
+    private String classifySecurityType(boolean isEtf, String description) {
+        if (isEtf) return "ETF";
+        if (description == null) return "EQUITY";
+        String d = description.trim().toLowerCase();
+        if (d.endsWith("warrant") || d.endsWith("warrants")) return "WARRANT";
+        if (d.endsWith("unit") || d.endsWith("units")) return "UNIT";
+        if (d.endsWith("right") || d.endsWith("rights")) return "RIGHTS";
+        return "EQUITY";
+    }
+
+    private void logSharesOutstandingCoverage() {
+        Map<String, int[]> byType = new TreeMap<>();
+        for (FundamentalData fund : fundamentalsCache.values()) {
+            String type = fund.getSecurityType() != null ? fund.getSecurityType() : "UNKNOWN";
+            int[] counts = byType.computeIfAbsent(type, k -> new int[2]);
+            counts[0]++;
+            if (fund.getSharesOutstanding() != null) counts[1]++;
+        }
+        StringBuilder sb = new StringBuilder("SharesOutstanding coverage by type:");
+        for (var entry : byType.entrySet()) {
+            sb.append(String.format(" %s=%d/%d", entry.getKey(), entry.getValue()[1], entry.getValue()[0]));
+        }
+        log.info(sb.toString());
     }
 
     private void checkFinraForUpdate() {
