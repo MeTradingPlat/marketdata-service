@@ -69,9 +69,8 @@ public class TastyTradeService {
     private final ConcurrentHashMap<String, Map<String, Object>> positionsCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Map<String, Object>> liveOrdersCache = new ConcurrentHashMap<>();
 
-    // Cache de quotes REST con TTL (Arquitectura de Resiliencia)
+    // Cache de quotes REST: solo se usa como fallback si la consulta en vivo a TastyTrade falla
     private final ConcurrentHashMap<String, CachedQuote> restQuoteCache = new ConcurrentHashMap<>();
-    private static final long QUOTE_CACHE_TTL_MS = 10_000; // 10 segundos
     private static final long QUOTE_LKG_TTL_MS = 300_000; // 5 minutos para last-known-good
     private static final int MAX_RETRIES = 3;
 
@@ -648,43 +647,30 @@ public class TastyTradeService {
 
     public Map<String, Double> getRestQuotes(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
-        List<String> toFetch = new ArrayList<>();
         long now = System.currentTimeMillis();
 
-        for (String sym : symbols) {
-            String upper = sym.toUpperCase();
-            CachedQuote cached = restQuoteCache.get(upper);
-            if (cached != null && (now - cached.timestamp) < QUOTE_CACHE_TTL_MS) {
-                result.put(upper, cached.price);
-            } else if (cached != null && (now - cached.timestamp) < QUOTE_LKG_TTL_MS) {
-                result.put(upper, cached.price);
-                toFetch.add(sym);
-            } else {
-                toFetch.add(sym);
+        List<Map<String, Object>> items = fetchWithRetry(symbols);
+        Set<String> fetched = ConcurrentHashMap.newKeySet();
+        for (Map<String, Object> item : items) {
+            String sym = (String) item.get("symbol");
+            Object last = item.get("last");
+            if (sym != null && last != null) {
+                double price = safeConvertToDouble(last);
+                if (price > 0) {
+                    String upper = sym.toUpperCase();
+                    result.put(upper, price);
+                    restQuoteCache.put(upper, new CachedQuote(price, now, false));
+                    fetched.add(upper);
+                }
             }
         }
 
-        if (!toFetch.isEmpty()) {
-            List<Map<String, Object>> items = fetchWithRetry(toFetch);
-            for (Map<String, Object> item : items) {
-                String sym = (String) item.get("symbol");
-                Object last = item.get("last");
-                if (sym != null && last != null) {
-                    double price = safeConvertToDouble(last);
-                    if (price > 0) {
-                        String upper = sym.toUpperCase();
-                        result.put(upper, price);
-                        restQuoteCache.put(upper, new CachedQuote(price, now, false));
-                    }
-                }
-            }
-            for (String sym : toFetch) {
-                String upper = sym.toUpperCase();
-                if (!result.containsKey(upper)) {
-                    CachedQuote lkg = restQuoteCache.get(upper);
-                    if (lkg != null && (now - lkg.timestamp) < QUOTE_LKG_TTL_MS) {
-                        result.put(upper, lkg.price);
-                    }
+        for (String sym : symbols) {
+            String upper = sym.toUpperCase();
+            if (!fetched.contains(upper)) {
+                CachedQuote lkg = restQuoteCache.get(upper);
+                if (lkg != null && (now - lkg.timestamp) < QUOTE_LKG_TTL_MS) {
+                    result.put(upper, lkg.price);
                 }
             }
         }
