@@ -348,8 +348,8 @@ public class TastyTradeService {
                     if (sym == null) continue;
                     FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
                     if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
-                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("high")));
-                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("low")));
+                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("day-high-price")));
+                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("day-low-price")));
                     if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
                     if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(item.get("market-cap")));
                     ohlcLoaded++;
@@ -1185,8 +1185,8 @@ public class TastyTradeService {
                 FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
                 if (fund != null) {
                     if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
-                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("high")));
-                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("low")));
+                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("day-high-price")));
+                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("day-low-price")));
                     if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
                     // market-cap institucional desde quote REST si el calculado por dxLink falló
                     if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(item.get("market-cap")));
