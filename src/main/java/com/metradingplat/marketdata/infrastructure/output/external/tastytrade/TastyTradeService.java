@@ -788,7 +788,8 @@ public class TastyTradeService {
                     fund.setImpliedVolatilityPercentile(safeConvertToDouble(m.get("implied-volatility-percentile")));
                     fund.setLiquidity(safeConvertToDouble(m.get("liquidity-value")));
                     fund.setLiquidityRating(safeConvertToInt(m.get("liquidity-rating")));
-                    fund.setShortRatio(safeConvertToDouble(m.get("short-ratio")));
+                    Double subShortRatio = safeConvertToDouble(m.get("short-ratio"));
+                    if (subShortRatio != null) fund.setShortRatio(subShortRatio);
                 }
             } catch (Exception e) {
                 log.warn("Falla silenciosa en Alpha Enrichment para {}", symbol);
@@ -1208,8 +1209,9 @@ public class TastyTradeService {
                 if (metric.get("liquidity-value") != null) fund.setLiquidity(safeConvertToDouble(metric.get("liquidity-value")));
                 if (metric.get("liquidity-rating") != null) fund.setLiquidityRating(safeConvertToInt(metric.get("liquidity-rating")));
 
-                fund.setShortRatio(safeConvertToDouble(metric.get("short-ratio")));
-                
+                Double metricShortRatio = safeConvertToDouble(metric.get("short-ratio"));
+                if (metricShortRatio != null) fund.setShortRatio(metricShortRatio);
+
                 // REST as primary fallback if dxLink failed
                 if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(metric.get("market-cap")));
                 if (fund.getEps() == null) fund.setEps(safeConvertToDouble(metric.get("earnings-per-share")));
