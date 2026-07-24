@@ -610,8 +610,8 @@ public class TastyTradeService {
             for (var entry : finraData.entrySet()) {
                 String sym = entry.getKey();
                 FinraClient.ShortInterestRecord rec = entry.getValue();
-                FundamentalData fund = fundamentalsCache.computeIfAbsent(sym,
-                        k -> FundamentalData.builder().symbol(k).build());
+                FundamentalData fund = fundamentalsCache.get(sym);
+                if (fund == null) continue;
                 fund.setShortRatio(rec.daysToCover > 0 && rec.daysToCover < 999 ? rec.daysToCover : null);
                 fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
                 if (fund.getFloatShares() != null && fund.getFloatShares() > 0 && rec.sharesShorted > 0) {
@@ -637,8 +637,8 @@ public class TastyTradeService {
             for (var entry : finraData.entrySet()) {
                 String sym = entry.getKey();
                 FinraClient.ShortInterestRecord rec = entry.getValue();
-                FundamentalData fund = fundamentalsCache.computeIfAbsent(sym,
-                        k -> FundamentalData.builder().symbol(k).build());
+                FundamentalData fund = fundamentalsCache.get(sym);
+                if (fund == null) continue;
 
                 fund.setShortRatio(rec.daysToCover > 0 && rec.daysToCover < 999 ? rec.daysToCover : null);
                 fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
