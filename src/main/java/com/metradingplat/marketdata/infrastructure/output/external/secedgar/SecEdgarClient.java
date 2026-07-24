@@ -38,7 +38,7 @@ public class SecEdgarClient {
     private static final String USER_AGENT = "MeTradingPlat contrerasdaniel142@gmail.com";
     private static final String TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
     private static final String BULK_FACTS_URL = "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip";
-    private static final Path CACHE_DIR = Path.of("/tmp/secedgar-cache");
+    private static final Path CACHE_DIR = Path.of("/app/secedgar-cache");
 
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ObjectMapper objectMapper = new ObjectMapper();

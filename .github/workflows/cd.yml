@@ -62,7 +62,7 @@ jobs:
             --memory-swap "2048m" \
             --label project="metradingplat" \
             --label service="marketdata-service" \
-            -v secedgar_cache:/tmp/secedgar-cache \
+            -v secedgar_cache_v2:/app/secedgar-cache \
             -e SPRING_PROFILES_ACTIVE="prod" \
             -e KAFKA_BOOTSTRAP_SERVERS="kafka:29092" \
             -e EUREKA_HOST="directory" \

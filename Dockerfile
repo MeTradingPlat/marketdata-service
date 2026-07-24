@@ -11,6 +11,7 @@ LABEL project="metradingplat"
 LABEL service="marketdata-service"
 WORKDIR /app
 RUN addgroup -S spring && adduser -S spring -G spring
+RUN mkdir -p /app/secedgar-cache && chown spring:spring /app/secedgar-cache
 USER spring:spring
 COPY --from=build /app/target/*.jar app.jar
 EXPOSE 8082
