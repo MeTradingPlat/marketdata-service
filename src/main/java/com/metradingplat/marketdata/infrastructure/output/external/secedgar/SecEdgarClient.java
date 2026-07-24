@@ -5,7 +5,11 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -22,10 +26,10 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Free, no-key shares-outstanding fallback for symbols TastyTrade doesn't
- * cover (OTC/penny stocks, thin small-caps). Streams SEC's nightly bulk
- * companyfacts.zip entry-by-entry instead of buffering it whole, so peak
- * memory stays bounded by one company's JSON at a time, not the ~1.5GB
- * archive.
+ * cover (OTC/penny stocks, thin small-caps). Caches SEC's nightly bulk
+ * companyfacts.zip to a persistent volume once per calendar day, and
+ * streams it entry-by-entry instead of buffering it whole, so peak memory
+ * stays bounded by one company's JSON at a time, not the ~1.5GB archive.
  */
 @Slf4j
 @Component
@@ -34,6 +38,7 @@ public class SecEdgarClient {
     private static final String USER_AGENT = "MeTradingPlat contrerasdaniel142@gmail.com";
     private static final String TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
     private static final String BULK_FACTS_URL = "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip";
+    private static final Path CACHE_DIR = Path.of("/tmp/secedgar-cache");
 
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -52,15 +57,9 @@ public class SecEdgarClient {
         if (cikToSymbols.isEmpty()) return Map.of();
 
         Map<String, Long> result = new HashMap<>();
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(BULK_FACTS_URL))
-                .header("User-Agent", USER_AGENT)
-                .timeout(Duration.ofMinutes(20))
-                .GET()
-                .build();
         try {
-            HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-            try (ZipInputStream zip = new ZipInputStream(response.body())) {
+            Path zipFile = ensureCachedZip();
+            try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(zipFile))) {
                 ZipEntry entry;
                 while (result.size() < totalTargets && (entry = zip.getNextEntry()) != null) {
                     String cik = extractCik(entry.getName());
@@ -75,10 +74,40 @@ public class SecEdgarClient {
                 }
             }
         } catch (Exception e) {
-            log.warn("SEC EDGAR bulk download failed: {}", e.getMessage());
+            log.warn("SEC EDGAR bulk processing failed: {}", e.getMessage());
         }
         log.info("SEC EDGAR: fetched sharesOutstanding for {}/{} symbols", result.size(), symbols.size());
         return result;
+    }
+
+    private Path ensureCachedZip() throws Exception {
+        Files.createDirectories(CACHE_DIR);
+        Path target = CACHE_DIR.resolve("companyfacts_" + LocalDate.now() + ".zip");
+        if (Files.exists(target) && Files.size(target) > 0) {
+            log.info("SEC EDGAR: reusing today's cached bulk file, no download needed");
+            return target;
+        }
+
+        log.info("SEC EDGAR: no cache for today, downloading bulk companyfacts.zip...");
+        Path tmp = CACHE_DIR.resolve(target.getFileName() + ".tmp");
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(BULK_FACTS_URL))
+                .header("User-Agent", USER_AGENT)
+                .timeout(Duration.ofMinutes(20))
+                .GET()
+                .build();
+        httpClient.send(request, HttpResponse.BodyHandlers.ofFile(tmp));
+        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+        cleanupOldCacheFiles(target);
+        return target;
+    }
+
+    private void cleanupOldCacheFiles(Path keep) {
+        try (var files = Files.list(CACHE_DIR)) {
+            files.filter(p -> !p.equals(keep)).forEach(p -> {
+                try { Files.deleteIfExists(p); } catch (Exception ignored) { }
+            });
+        } catch (Exception ignored) { }
     }
 
     private String extractCik(String entryName) {
