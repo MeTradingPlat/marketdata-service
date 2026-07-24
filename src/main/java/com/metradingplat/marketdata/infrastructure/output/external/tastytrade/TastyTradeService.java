@@ -29,6 +29,7 @@ import com.metradingplat.marketdata.domain.models.OptionContract;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
 import com.metradingplat.marketdata.infrastructure.output.external.finra.FinraClient;
+import com.metradingplat.marketdata.infrastructure.output.external.secedgar.SecEdgarClient;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +58,7 @@ public class TastyTradeService {
     private final AccountStreamerClient accountStreamerClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
     private final FinraClient finraClient;
+    private final SecEdgarClient secEdgarClient;
     private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     // Trackers para la heuristica de Halt Status (Punto 5)
@@ -205,6 +207,8 @@ public class TastyTradeService {
                 millisUntilNextHour(8), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
                 millisUntilNextHour(9), 4 * 3600_000, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::refreshSharesOutstandingFromSecEdgar,
+                millisUntilNextHour(10), 24 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::cleanupStaleCandles,
                 5, 5, TimeUnit.MINUTES);
         scheduler.scheduleAtFixedRate(this::cleanupStaleRestQuotes,
@@ -389,6 +393,7 @@ public class TastyTradeService {
                 calculatedShares, calculatedFloat);
 
         CompletableFuture.runAsync(this::updateShortInterestFromFinra);
+        CompletableFuture.runAsync(this::refreshSharesOutstandingFromSecEdgar);
         CompletableFuture.runAsync(() -> {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
@@ -532,6 +537,29 @@ public class TastyTradeService {
                 candleLastAccess.remove(key);
                 subscribedCandleSymbols.remove(key);
             }
+        }
+    }
+
+    private void refreshSharesOutstandingFromSecEdgar() {
+        List<String> missing = new ArrayList<>();
+        for (var entry : fundamentalsCache.entrySet()) {
+            if (entry.getValue().getSharesOutstanding() == null) missing.add(entry.getKey());
+        }
+        if (missing.isEmpty()) return;
+        log.info("SEC EDGAR refresh: {} symbols missing sharesOutstanding", missing.size());
+        try {
+            Map<String, Long> shares = secEdgarClient.fetchSharesOutstanding(missing);
+            for (var entry : shares.entrySet()) {
+                FundamentalData fund = fundamentalsCache.get(entry.getKey());
+                if (fund == null) continue;
+                fund.setSharesOutstanding(entry.getValue());
+                if (fund.getFloatShares() == null) {
+                    fund.setFloatShares(Math.round(entry.getValue() * 0.90));
+                }
+            }
+            log.info("SEC EDGAR refresh: updated sharesOutstanding for {} symbols", shares.size());
+        } catch (Exception e) {
+            log.warn("SEC EDGAR refresh failed: {}", e.getMessage());
         }
     }
 
