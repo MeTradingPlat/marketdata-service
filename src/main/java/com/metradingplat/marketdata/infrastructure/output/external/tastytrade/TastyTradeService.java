@@ -208,6 +208,10 @@ public class TastyTradeService {
                 millisUntilNextHour(9), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::cleanupStaleCandles,
                 5, 5, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(this::cleanupStaleRestQuotes,
+                5, 5, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(this::refreshOhlcData,
+                5, 5, TimeUnit.MINUTES);
 
         CompletableFuture.runAsync(() -> {
             try {
@@ -323,10 +327,7 @@ public class TastyTradeService {
                 for (Map<String, Object> eq : equities) {
                     String sym = (String) eq.get("symbol");
                     if (sym == null) continue;
-                    FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
-                    if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(eq.get("shares-outstanding")));
-                    if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(eq.get("free-float")));
-                    if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(eq.get("beta")));
+                    fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
                     equityLoaded++;
                 }
             } catch (Exception e) {
@@ -346,10 +347,9 @@ public class TastyTradeService {
                     if (sym == null) continue;
                     FundamentalData fund = fundamentalsCache.computeIfAbsent(sym.toUpperCase(), k -> FundamentalData.builder().symbol(k).build());
                     if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
-                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("high")));
-                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("low")));
+                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("day-high-price")));
+                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("day-low-price")));
                     if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
-                    if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(item.get("market-cap")));
                     ohlcLoaded++;
                 }
             } catch (Exception e) {
@@ -420,6 +420,44 @@ public class TastyTradeService {
     }
 
     private volatile String lastFinraSettlement;
+
+    private void refreshOhlcData() {
+        List<String> allSymbols = new ArrayList<>(fundamentalsCache.keySet());
+        if (allSymbols.isEmpty()) return;
+        int updated = 0;
+        for (int i = 0; i < allSymbols.size(); i += 100) {
+            int end = Math.min(i + 100, allSymbols.size());
+            List<String> chunk = allSymbols.subList(i, end);
+            try {
+                List<Map<String, Object>> ohlc = tastyTradeClient.getMarketDataBatch(chunk);
+                for (Map<String, Object> item : ohlc) {
+                    String sym = (String) item.get("symbol");
+                    if (sym == null) continue;
+                    FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
+                    if (fund == null) continue;
+                    Double high = safeConvertToDouble(item.get("day-high-price"));
+                    Double low = safeConvertToDouble(item.get("day-low-price"));
+                    Long volume = safeConvertToLong(item.get("volume"));
+                    if (high != null) fund.setHigh(high);
+                    if (low != null) fund.setLow(low);
+                    if (volume != null) fund.setDayVolume(volume);
+                    if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
+                    if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
+                    updated++;
+                }
+            } catch (Exception e) {
+                log.warn("OHLC refresh chunk at {} failed: {}", i, e.getMessage());
+            }
+        }
+        log.info("OHLC refresh: {} symbols updated (live high/low/volume)", updated);
+    }
+
+    private void cleanupStaleRestQuotes() {
+        long cutoff = System.currentTimeMillis() - QUOTE_LKG_TTL_MS;
+        int before = restQuoteCache.size();
+        restQuoteCache.values().removeIf(q -> q.timestamp() < cutoff);
+        log.info("REST quote cache cleanup: {} -> {} entries", before, restQuoteCache.size());
+    }
 
     private void refreshMarketMetrics() {
         log.info("Scheduled market-metrics refresh starting...");
@@ -1150,23 +1188,6 @@ public class TastyTradeService {
             log.warn("No se pudo enriquecer con Market Metrics REST: {}", e.getMessage());
         }
 
-        // Enriquecimiento con Instrument Details en BATCH (para Shares Outstanding y Float)
-        try {
-            List<Map<String, Object>> instrumentItems = getEquitiesBatch(normalizedSymbols);
-            for (Map<String, Object> item : instrumentItems) {
-                String sym = (String) item.get("symbol");
-                if (sym == null) continue;
-                FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
-                if (fund != null) {
-                    if (fund.getSharesOutstanding() == null) fund.setSharesOutstanding(safeConvertToLong(item.get("shares-outstanding")));
-                    if (fund.getFloatShares() == null) fund.setFloatShares(safeConvertToLong(item.get("free-float")));
-                    if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(item.get("beta")));
-                }
-            }
-        } catch (Exception e) {
-            log.warn("No se pudo enriquecer con Instrument Details REST Batch: {}", e.getMessage());
-        }
-
         // Fallback de Cotizaciones OHLC en BATCH (REST) si dxLink falló o está en silencio (Fin de semana)
         try {
             List<Map<String, Object>> ohlcItems = getMarketDataBatch(normalizedSymbols);
@@ -1176,11 +1197,9 @@ public class TastyTradeService {
                 FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
                 if (fund != null) {
                     if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
-                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("high")));
-                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("low")));
+                    if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("day-high-price")));
+                    if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("day-low-price")));
                     if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
-                    // market-cap institucional desde quote REST si el calculado por dxLink falló
-                    if (fund.getMarketCap() == null) fund.setMarketCap(safeConvertToDouble(item.get("market-cap")));
                 }
             }
         } catch (Exception e) {
