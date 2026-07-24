@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.metradingplat.marketdata.domain.models.FundamentalData;
+import com.metradingplat.marketdata.domain.models.VwapQuote;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
 import lombok.RequiredArgsConstructor;
@@ -58,11 +59,11 @@ public class StreamingController {
         return ResponseEntity.ok(prices);
     }
 
-    @PostMapping("/quotes/rest")
-    public ResponseEntity<Map<String, Double>> getRestQuotes(@RequestBody List<String> symbols) {
-        Map<String, Double> prices = tastyTradeService.getRestQuotes(symbols);
-        log.info("REST quotes: {}/{} symbols", prices.size(), symbols.size());
-        return ResponseEntity.ok(prices);
+    @PostMapping("/vwap/rest")
+    public ResponseEntity<Map<String, VwapQuote>> getVwapQuotes(@RequestBody List<String> symbols) {
+        Map<String, VwapQuote> quotes = tastyTradeService.getVwapQuotes(symbols);
+        log.info("VWAP quotes: {}/{} symbols", quotes.size(), symbols.size());
+        return ResponseEntity.ok(quotes);
     }
 
     @PostMapping("/fundamentals/realtime")
