@@ -49,8 +49,13 @@ public class CandleWebSocketHandler extends BaseWebSocketHandler {
             String subscriptionKey = symbol + ":" + timeframe.name();
 
             if ("subscribe".equals(action)) {
-                subscribe(session, subscriptionKey);
+                // History is sent BEFORE registering the live listener: subscribe() triggers
+                // onFirstSubscriberAdded synchronously, and once that listener is registered
+                // any DxLink tick can broadcast to this session immediately. Doing it in the
+                // other order let a live "bar" race ahead of "history" on the wire, causing
+                // the client to update() a series that hadn't been setData()'d yet.
                 sendHistory(session, symbol, timeframe);
+                subscribe(session, subscriptionKey);
                 confirm(session, symbol, timeframe, "subscribe", "subscription_confirmed");
                 log.info("Client {} subscribed to candles {}", session.getId(), subscriptionKey);
             } else if ("unsubscribe".equals(action)) {
@@ -74,6 +79,7 @@ public class CandleWebSocketHandler extends BaseWebSocketHandler {
         log.info("First subscriber added for candles: {}", subscriptionKey);
 
         Consumer<Candle> listener = candle -> {
+            if (!isComplete(candle)) return;
             boolean closed = !candle.getTimestamp().plus(timeframe.getDuration()).isAfter(Instant.now());
             broadcastToSubscribers(subscriptionKey,
                     CandleMessageBuilder.bar(objectMapper, symbol, timeframe.name(), candle, closed));
@@ -92,13 +98,20 @@ public class CandleWebSocketHandler extends BaseWebSocketHandler {
     }
 
     private void sendHistory(WebSocketSession session, String symbol, EnumTimeframe timeframe) throws Exception {
-        List<Candle> bars = historicalDataUseCase.getCandles(symbol, timeframe, null, HISTORY_BARS);
+        List<Candle> bars = historicalDataUseCase.getCandles(symbol, timeframe, null, HISTORY_BARS).stream()
+                .filter(CandleWebSocketHandler::isComplete)
+                .toList();
         sendToSession(session, CandleMessageBuilder.history(objectMapper, symbol, timeframe.name(), bars));
 
         Candle current = historicalDataUseCase.getCurrentCandle(symbol, timeframe);
-        if (current != null) {
+        if (current != null && isComplete(current)) {
             sendToSession(session, CandleMessageBuilder.bar(objectMapper, symbol, timeframe.name(), current, false));
         }
+    }
+
+    private static boolean isComplete(Candle candle) {
+        return candle.getOpen() != null && candle.getHigh() != null
+                && candle.getLow() != null && candle.getClose() != null;
     }
 
     private void confirm(WebSocketSession session, String symbol, EnumTimeframe timeframe, String action, String type)
