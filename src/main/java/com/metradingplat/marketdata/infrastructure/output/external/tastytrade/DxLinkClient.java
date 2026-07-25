@@ -426,11 +426,12 @@ public class DxLinkClient {
         }
 
         public void subscribeCandlesHistory(List<Map<String, Object>> items, long fromTime) {
-            List<Map<String, Object>> itemsWithTime = items.stream().map(item -> { 
-                Map<String, Object> ni = new java.util.HashMap<>(item); 
-                ni.put("fromTime", fromTime); 
-                return ni; 
+            List<Map<String, Object>> itemsWithTime = items.stream().map(item -> {
+                Map<String, Object> ni = new java.util.HashMap<>(item);
+                ni.put("fromTime", fromTime);
+                return ni;
             }).toList();
+            log.info("DIAG_RAW subscribeCandlesHistory items={} fromTime={}", itemsWithTime, fromTime);
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", itemsWithTime));
         }
 
@@ -462,7 +463,7 @@ public class DxLinkClient {
 
                 if ("Profile".equals(type)) log.info("DxLink Profile received for {}", symbol);
                 if ("Summary".equals(type)) log.debug("DxLink Summary received for {}", symbol);
-                if ("Candle".equals(type)) log.info("DxLink Candle received for {} time={}", symbol, data.path(IDX_CAND_TIME).asLong());
+                if ("Candle".equals(type)) log.info("DxLink Candle received for {} time={} DIAG_RAW={}", symbol, data.path(IDX_CAND_TIME).asLong(), data.toString());
 
                 switch (type) {
                     case "Quote" -> {
