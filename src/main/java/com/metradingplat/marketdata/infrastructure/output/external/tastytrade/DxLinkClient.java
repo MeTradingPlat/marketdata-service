@@ -371,12 +371,17 @@ public class DxLinkClient {
         }
 
         public void subscribeBatch(List<String> symbols) {
-            List<Map<String, Object>> items = new java.util.ArrayList<>();
-            for (String s : symbols) {
-                items.add(Map.of("symbol", s, "type", "Quote"));
-                items.add(Map.of("symbol", s, "type", "Trade"));
+            int chunkSize = 200;
+            for (int i = 0; i < symbols.size(); i += chunkSize) {
+                int end = Math.min(i + chunkSize, symbols.size());
+                List<String> chunk = symbols.subList(i, end);
+                List<Map<String, Object>> items = new java.util.ArrayList<>();
+                for (String s : chunk) {
+                    items.add(Map.of("symbol", s, "type", "Quote"));
+                    items.add(Map.of("symbol", s, "type", "Trade"));
+                }
+                sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
             }
-            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
         }
 
         public void unsubscribe(String symbol) {
