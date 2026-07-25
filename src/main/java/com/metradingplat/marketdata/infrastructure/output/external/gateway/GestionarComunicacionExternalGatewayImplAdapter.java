@@ -2,6 +2,7 @@ package com.metradingplat.marketdata.infrastructure.output.external.gateway;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.springframework.stereotype.Service;
 
@@ -81,6 +82,16 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
         log.debug("Gateway: Batch fetching CURRENT candle for {} symbols, timeframe: {}", symbols.size(), timeframe);
         // Pedimos 10 barras sin cache para tener la barra en formacion
         return tastyTradeService.getCandlesBatchNoCache(symbols, timeframe, 10);
+    }
+
+    @Override
+    public void addCandleLiveListener(String symbol, EnumTimeframe timeframe, Consumer<Candle> listener) {
+        tastyTradeService.addCandleLiveListener(symbol, timeframe, listener);
+    }
+
+    @Override
+    public void removeCandleLiveListener(String symbol, EnumTimeframe timeframe, Consumer<Candle> listener) {
+        tastyTradeService.removeCandleLiveListener(symbol, timeframe, listener);
     }
 
     @Override

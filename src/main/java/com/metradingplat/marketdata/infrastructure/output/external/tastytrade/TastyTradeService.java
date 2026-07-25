@@ -12,8 +12,10 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 
 
 
@@ -830,6 +832,28 @@ public class TastyTradeService {
     private final ConcurrentHashMap<String, List<Candle>> candleCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> candleLastAccess = new ConcurrentHashMap<>();
     private final Set<String> subscribedCandleSymbols = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, List<Consumer<Candle>>> candleLiveListeners = new ConcurrentHashMap<>();
+
+    /**
+     * Registra un listener para velas en vivo (usado por CandleWebSocketHandler).
+     * Se apoya en el mismo canal persistente/cache que getCandlesBatch, así que
+     * comparte el idle-cleanup existente en cleanupStaleCandles().
+     */
+    public void addCandleLiveListener(String symbol, EnumTimeframe timeframe, Consumer<Candle> listener) {
+        ensureCandleChannel();
+        subscribeToCandles(List.of(symbol), timeframe);
+        String key = symbol.toUpperCase() + "|" + timeframe.name();
+        candleLastAccess.put(key, System.currentTimeMillis());
+        candleLiveListeners.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(listener);
+    }
+
+    public void removeCandleLiveListener(String symbol, EnumTimeframe timeframe, Consumer<Candle> listener) {
+        String key = symbol.toUpperCase() + "|" + timeframe.name();
+        List<Consumer<Candle>> listeners = candleLiveListeners.get(key);
+        if (listeners == null) return;
+        listeners.remove(listener);
+        if (listeners.isEmpty()) candleLiveListeners.remove(key);
+    }
 
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
         Map<String, List<Candle>> result = new ConcurrentHashMap<>();
@@ -899,15 +923,22 @@ public class TastyTradeService {
                 List<Candle> list = candleCache.computeIfAbsent(key, k -> new java.util.ArrayList<>());
                 java.util.Optional<Candle> existing = list.stream()
                         .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
+                Candle merged;
                 if (existing.isPresent()) {
-                    Candle c = existing.get();
-                    if (candle.getHigh() != null && (c.getHigh() == null || candle.getHigh() > c.getHigh())) c.setHigh(candle.getHigh());
-                    if (candle.getLow() != null && (c.getLow() == null || candle.getLow() < c.getLow())) c.setLow(candle.getLow());
-                    if (candle.getClose() != null) c.setClose(candle.getClose());
-                    if (candle.getVolume() != null) c.setVolume(candle.getVolume());
+                    merged = existing.get();
+                    if (candle.getHigh() != null && (merged.getHigh() == null || candle.getHigh() > merged.getHigh())) merged.setHigh(candle.getHigh());
+                    if (candle.getLow() != null && (merged.getLow() == null || candle.getLow() < merged.getLow())) merged.setLow(candle.getLow());
+                    if (candle.getClose() != null) merged.setClose(candle.getClose());
+                    if (candle.getVolume() != null) merged.setVolume(candle.getVolume());
                 } else {
                     if (list.size() >= 2000) list.remove(0);
                     list.add(candle);
+                    merged = candle;
+                }
+                candleLastAccess.put(key, System.currentTimeMillis());
+                List<Consumer<Candle>> liveListeners = candleLiveListeners.get(key);
+                if (liveListeners != null) {
+                    for (Consumer<Candle> liveListener : liveListeners) liveListener.accept(merged);
                 }
             });
             log.info("Persistent candle channel opened");

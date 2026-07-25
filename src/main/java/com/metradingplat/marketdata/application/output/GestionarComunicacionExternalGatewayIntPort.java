@@ -2,6 +2,7 @@ package com.metradingplat.marketdata.application.output;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
@@ -30,6 +31,10 @@ public interface GestionarComunicacionExternalGatewayIntPort {
     Map<String, List<Candle>> getLastCandleBatch(List<String> symbols, EnumTimeframe timeframe);
 
     Map<String, List<Candle>> getCurrentCandleBatch(List<String> symbols, EnumTimeframe timeframe);
+
+    void addCandleLiveListener(String symbol, EnumTimeframe timeframe, Consumer<Candle> listener);
+
+    void removeCandleLiveListener(String symbol, EnumTimeframe timeframe, Consumer<Candle> listener);
 
     List<ActiveEquity> getActiveEquities(int pageOffset, int perPage);
 
