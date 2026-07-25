@@ -116,14 +116,6 @@ public class DxLinkClient {
     private static final int IDX_GRK_VEGA = 5;
     private static final int IDX_GRK_RHO = 6;
     private static final int IDX_GRK_THEO = 7;
-    private static final int IDX_CAND_TIME = 1;
-    private static final int IDX_CAND_OPEN = 2;
-    private static final int IDX_CAND_HIGH = 3;
-    private static final int IDX_CAND_LOW = 4;
-    private static final int IDX_CAND_CLOSE = 5;
-    private static final int IDX_CAND_VOL = 6;
-    private static final int IDX_CAND_VWAP = 7;
-    private static final int IDX_CAND_IV = 8;
 
     public interface CandleCallback {
         void onCandle(String symbol, Candle candle, boolean isSnapshotComplete);
@@ -431,7 +423,6 @@ public class DxLinkClient {
                 ni.put("fromTime", fromTime);
                 return ni;
             }).toList();
-            log.info("DIAG_RAW subscribeCandlesHistory items={} fromTime={}", itemsWithTime, fromTime);
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", itemsWithTime));
         }
 
@@ -463,7 +454,11 @@ public class DxLinkClient {
 
                 if ("Profile".equals(type)) log.info("DxLink Profile received for {}", symbol);
                 if ("Summary".equals(type)) log.debug("DxLink Summary received for {}", symbol);
-                if ("Candle".equals(type)) log.info("DxLink Candle received for {} time={} DIAG_RAW={}", symbol, data.path(IDX_CAND_TIME).asLong(), data.toString());
+
+                if ("Candle".equals(type)) {
+                    processCandleBatch(data);
+                    return;
+                }
 
                 switch (type) {
                     case "Quote" -> {
@@ -489,23 +484,46 @@ public class DxLinkClient {
                     }
                     case "Profile" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).sharesOutstanding(asNullableLong(data.get(IDX_PROF_SHARES))).eps(extractNullableDouble(data.get(IDX_PROF_EPS))).dividendAmount(extractNullableDouble(data.get(IDX_PROF_DIV_AMT))).dividendFrequency(asNullableString(data.get(IDX_PROF_DIV_FREQ))).tradingStatus(asNullableString(data.get(IDX_PROF_STATUS))).statusReason(asNullableString(data.get(IDX_PROF_STATUS_RSN))).haltStartTime(data.path(IDX_PROF_HALT_START).asLong()).haltEndTime(data.path(IDX_PROF_HALT_END).asLong()).beta(extractNullableDouble(data.get(IDX_PROF_BETA))).floatShares(asNullableLong(data.get(IDX_PROF_FLOAT))).build());
                     case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol).impliedVolatility(extractNullableDouble(data.get(IDX_GRK_IV))).delta(extractNullableDouble(data.get(IDX_GRK_DELTA))).gamma(extractNullableDouble(data.get(IDX_GRK_GAMMA))).theta(extractNullableDouble(data.get(IDX_GRK_THETA))).vega(extractNullableDouble(data.get(IDX_GRK_VEGA))).rho(extractNullableDouble(data.get(IDX_GRK_RHO))).theoreticalPrice(extractNullableDouble(data.get(IDX_GRK_THEO))).build());
-                    case "Candle" -> {
-                        long time = data.path(IDX_CAND_TIME).asLong();
-                        boolean isComplete = data.path(10).asInt() != 0;
-                        notifyCandle(symbol, Candle.builder()
-                                .symbol(symbol)
-                                .timestamp(Instant.ofEpochMilli(time))
-                                .open(extractNullableDouble(data.get(IDX_CAND_OPEN)))
-                                .high(extractNullableDouble(data.get(IDX_CAND_HIGH)))
-                                .low(extractNullableDouble(data.get(IDX_CAND_LOW)))
-                                .close(extractNullableDouble(data.get(IDX_CAND_CLOSE)))
-                                .volume(extractNullableDouble(data.get(IDX_CAND_VOL)))
-                                .vwap(extractNullableDouble(data.get(IDX_CAND_VWAP)))
-                                .impVolatility(extractNullableDouble(data.get(IDX_CAND_IV)))
-                                .build(), isComplete);
-                    }
                 }
             } catch (Exception e) { log.error("Compact error processing event type: " + type, e); }
+        }
+
+        /**
+         * dxLink's COMPACT format concatenates every Candle record of a batch into one
+         * flat array under a single "Candle" type marker (e.g. requesting historical
+         * candles returns hundreds of records in one message, not one message per
+         * candle) — each record starts with its symbol string again. Trailing fields
+         * with default/absent values (namely impVolatility) can be omitted per record,
+         * so record width isn't fixed; the next textual element marks the next record.
+         */
+        private void processCandleBatch(JsonNode data) {
+            int recordStart = 0;
+            while (recordStart < data.size()) {
+                int recordEnd = recordStart + 1;
+                while (recordEnd < data.size() && !data.get(recordEnd).isTextual()) recordEnd++;
+
+                String candleSymbol = data.get(recordStart).asText();
+                long time = candleField(data, recordStart, 1, recordEnd).asLong();
+                boolean isLastRecordInBatch = recordEnd >= data.size();
+                notifyCandle(candleSymbol, Candle.builder()
+                        .symbol(candleSymbol)
+                        .timestamp(Instant.ofEpochMilli(time))
+                        .open(extractNullableDouble(candleField(data, recordStart, 2, recordEnd)))
+                        .high(extractNullableDouble(candleField(data, recordStart, 3, recordEnd)))
+                        .low(extractNullableDouble(candleField(data, recordStart, 4, recordEnd)))
+                        .close(extractNullableDouble(candleField(data, recordStart, 5, recordEnd)))
+                        .volume(extractNullableDouble(candleField(data, recordStart, 6, recordEnd)))
+                        .vwap(extractNullableDouble(candleField(data, recordStart, 7, recordEnd)))
+                        .impVolatility(extractNullableDouble(candleField(data, recordStart, 8, recordEnd)))
+                        .build(), isLastRecordInBatch);
+
+                recordStart = recordEnd;
+            }
+        }
+
+        private JsonNode candleField(JsonNode data, int recordStart, int offset, int recordEnd) {
+            int i = recordStart + offset;
+            return i < recordEnd ? data.get(i) : com.fasterxml.jackson.databind.node.MissingNode.getInstance();
         }
 
         private double extractNumericSafe(JsonNode node) {
