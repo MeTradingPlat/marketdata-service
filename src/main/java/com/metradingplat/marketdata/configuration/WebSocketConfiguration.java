@@ -50,8 +50,7 @@ public class WebSocketConfiguration implements WebSocketConfigurer {
                 .withSockJS();
 
         registry.addHandler(candleWebSocketHandler, "/ws/candles")
-                .setAllowedOrigins("*")
-                .withSockJS();
+                .setAllowedOrigins("*");
 
         registry.addHandler(greeksWebSocketHandler(), "/ws/greeks")
                 .setAllowedOrigins("*")
