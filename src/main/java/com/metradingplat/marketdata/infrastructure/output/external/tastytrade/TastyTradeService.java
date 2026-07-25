@@ -1113,72 +1113,26 @@ public class TastyTradeService {
     }
 
     /**
-     * Obtiene métricas fundamentales apoyándose en dxLink (Profile/Summary) 
-     * y enriqueciendo con Market Metrics de la API REST.
+     * Obtiene métricas fundamentales vía REST (Market Metrics + Market Data OHLC).
+     * DxLink Profile/Summary snapshot no escala a miles de símbolos (~1.7% de éxito
+     * medido en vivo con 9034 símbolos) y todos sus campos ya vienen cubiertos por REST.
      */
     public Map<String, FundamentalData> getFundamentalsBatch(List<String> symbols) {
         List<String> normalizedSymbols = symbols.stream()
                 .map(String::toUpperCase)
                 .distinct()
                 .toList();
-        
-        log.info("Batch fundamentals: {} simbolos via dxLink", normalizedSymbols.size());
-        ensureConnected();
-        
-        CompletableFuture<Void> snapshotReceived = new CompletableFuture<>();
-        Set<String> symbolsWithProfile = ConcurrentHashMap.newKeySet();
 
-        try (DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().join()) {
-            channel.addFundamentalListener((sym, data) -> {
-                String upperSym = sym.toUpperCase();
-                fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
-                    // Combinar datos de Profile y Summary
-                    if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
-                    if (v2.getEps() != null) v1.setEps(v2.getEps());
-                    if (v2.getDividendAmount() != null) v1.setDividendAmount(v2.getDividendAmount());
-                    if (v2.getDividendFrequency() != null) v1.setDividendFrequency(v2.getDividendFrequency());
-                    if (v2.getTradingStatus() != null) v1.setTradingStatus(v2.getTradingStatus());
-                    if (v2.getStatusReason() != null) v1.setStatusReason(v2.getStatusReason());
-                    if (v2.getHaltStartTime() != null) v1.setHaltStartTime(v2.getHaltStartTime());
-                    if (v2.getHaltEndTime() != null) v1.setHaltEndTime(v2.getHaltEndTime());
-                    if (v2.getBeta() != null) v1.setBeta(v2.getBeta());
-                    if (v2.getOpen() != null) v1.setOpen(v2.getOpen());
-                    if (v2.getHigh() != null) v1.setHigh(v2.getHigh());
-                    if (v2.getLow() != null) v1.setLow(v2.getLow());
-                    if (v2.getPrevClose() != null) v1.setPrevClose(v2.getPrevClose());
-                    if (v2.getDayVolume() != null) v1.setDayVolume(v2.getDayVolume());
-                    if (v2.getOpenInterest() != null) v1.setOpenInterest(v2.getOpenInterest());
-                    if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
-                    if (v2.getPreMarketVolume() != null) v1.setPreMarketVolume(v2.getPreMarketVolume());
-                    if (v2.getPostMarketVolume() != null) v1.setPostMarketVolume(v2.getPostMarketVolume());
-                    return v1;
-                });
-                symbolsWithProfile.add(upperSym);
-                if (symbolsWithProfile.size() >= normalizedSymbols.size()) {
-                    snapshotReceived.complete(null);
-                }
-            });
+        log.info("Batch fundamentals: {} simbolos via REST", normalizedSymbols.size());
 
-            channel.subscribeFundamentalsBatch(normalizedSymbols);
-
-            try {
-                snapshotReceived.get(8 + (normalizedSymbols.size() / 20), TimeUnit.SECONDS);
-            } catch (TimeoutException e) {
-                log.warn("Timeout esperando snapshots de fundamentals via dxLink. Recibidos {}/{}", symbolsWithProfile.size(), normalizedSymbols.size());
+        // Estimado de Market Cap con prevClose (el enriquecimiento REST más abajo
+        // lo reemplaza por el market-cap oficial de TastyTrade si está disponible)
+        normalizedSymbols.forEach(sym -> {
+            FundamentalData fund = fundamentalsCache.get(sym);
+            if (fund != null && fund.getPrevClose() != null && fund.getSharesOutstanding() != null) {
+                fund.setMarketCap(fund.getSharesOutstanding() * fund.getPrevClose());
             }
-
-            // Estimado de Market Cap con prevClose (el enriquecimiento REST más abajo
-            // lo reemplaza por el market-cap oficial de TastyTrade si está disponible)
-            normalizedSymbols.forEach(sym -> {
-                FundamentalData fund = fundamentalsCache.get(sym);
-                if (fund != null && fund.getPrevClose() != null && fund.getSharesOutstanding() != null) {
-                    fund.setMarketCap(fund.getSharesOutstanding() * fund.getPrevClose());
-                }
-            });
-
-        } catch (Exception e) {
-            log.error("Error en batch fundamentals dxLink", e);
-        }
+        });
 
         // Enriquecimiento con Market Metrics REST (para IV, Liquidez y fechas de Earnings)
         try {
@@ -1230,7 +1184,7 @@ public class TastyTradeService {
             log.warn("No se pudo enriquecer con Market Metrics REST: {}", e.getMessage());
         }
 
-        // Fallback de Cotizaciones OHLC en BATCH (REST) si dxLink falló o está en silencio (Fin de semana)
+        // Enriquecimiento con Market Data OHLC en BATCH (REST): precio, volumen, beta y estado de halt
         try {
             List<Map<String, Object>> ohlcItems = getMarketDataBatch(normalizedSymbols);
             for (Map<String, Object> item : ohlcItems) {
@@ -1242,6 +1196,13 @@ public class TastyTradeService {
                     if (fund.getHigh() == null) fund.setHigh(safeConvertToDouble(item.get("day-high-price")));
                     if (fund.getLow() == null) fund.setLow(safeConvertToDouble(item.get("day-low-price")));
                     if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
+                    if (fund.getDayVolume() == null) fund.setDayVolume(safeConvertToLong(item.get("volume")));
+                    if (fund.getBeta() == null) fund.setBeta(safeConvertToDouble(item.get("beta")));
+                    if (fund.getTradingStatus() == null && item.get("is-trading-halted") != null) {
+                        fund.setTradingStatus(Boolean.TRUE.equals(item.get("is-trading-halted")) ? "HALTED" : "ACTIVE");
+                    }
+                    if (fund.getHaltStartTime() == null) fund.setHaltStartTime(safeConvertToLong(item.get("halt-start-time")));
+                    if (fund.getHaltEndTime() == null) fund.setHaltEndTime(safeConvertToLong(item.get("halt-end-time")));
                 }
             }
         } catch (Exception e) {
