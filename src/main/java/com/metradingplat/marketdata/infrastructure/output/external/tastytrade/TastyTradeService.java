@@ -974,6 +974,16 @@ public class TastyTradeService {
         }
     }
 
+    /**
+     * dxLink has no reliable per-record "batch finished" signal for historical candles
+     * (verified: the wire format doesn't carry one at all with the currently-requested
+     * CANDLE_FIELDS). Completion is instead detected by a quiet period: once candles
+     * start arriving, wait until QUIET_PERIOD_MS pass with no new one, capped by an
+     * overall hard timeout. This is also safer than assuming a single message contains
+     * the whole batch, in case dxLink ever splits a large history across more than one.
+     */
+    private static final long CANDLE_QUIET_PERIOD_MS = 1000;
+
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
         log.info("Fetching candles via DxLink: {} symbols, timeframe={}", symbols.size(), timeframe);
         Instant now = Instant.now();
@@ -985,11 +995,9 @@ public class TastyTradeService {
         String period = label.substring(0, label.length() - 1);
         ensureConnected();
         Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
-        CompletableFuture<Map<String, List<Candle>>> future = new CompletableFuture<>();
+        java.util.concurrent.atomic.AtomicLong lastEventAt = new java.util.concurrent.atomic.AtomicLong(0);
         try {
             DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
-            java.util.Set<String> completedSnapshots = new java.util.HashSet<>();
-            int expectedCount = symbols.size();
             channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
@@ -1006,13 +1014,7 @@ public class TastyTradeService {
                 } else {
                     list.add(candle);
                 }
-                if (isSnapshotComplete) {
-                    completedSnapshots.add(cleanSymbol.toUpperCase());
-                    if (completedSnapshots.size() >= expectedCount && !future.isDone()) {
-                        channel.close();
-                        future.complete(resultado);
-                    }
-                }
+                lastEventAt.set(System.currentTimeMillis());
             });
             List<String> symList = new ArrayList<>(symbols);
             for (int i = 0; i < symList.size(); i += 10) {
@@ -1027,10 +1029,14 @@ public class TastyTradeService {
                 channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
             }
             int timeoutSec = Math.min(10 + symbols.size() / 10, 30);
-            scheduler.schedule(() -> {
-                if (!future.isDone()) { channel.close(); future.complete(resultado); }
-            }, timeoutSec, TimeUnit.SECONDS);
-            return future.get(timeoutSec + 5, TimeUnit.SECONDS);
+            long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
+            while (System.currentTimeMillis() < deadline) {
+                Thread.sleep(200);
+                long last = lastEventAt.get();
+                if (last > 0 && System.currentTimeMillis() - last > CANDLE_QUIET_PERIOD_MS) break;
+            }
+            channel.close();
+            return resultado;
         } catch (Exception e) {
             log.error("Candles failed: {}", e.getMessage());
             return resultado.isEmpty() ? Map.of() : resultado;
