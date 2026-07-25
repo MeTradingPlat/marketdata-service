@@ -1167,8 +1167,9 @@ public class TastyTradeService {
             });
 
             channel.subscribeFundamentalsBatch(normalizedSymbols);
-            // Suscribir a quotes para el precio actual (usando el nuevo método batch)
-            dxLinkClient.subscribe(normalizedSymbols); 
+            // Suscribir a quotes para el precio actual en el mismo canal efímero,
+            // para que se limpie solo al cerrar el channel (no dejar suscripciones permanentes)
+            channel.subscribeBatch(normalizedSymbols);
 
             try {
                 snapshotReceived.get(8 + (normalizedSymbols.size() / 20), TimeUnit.SECONDS);
