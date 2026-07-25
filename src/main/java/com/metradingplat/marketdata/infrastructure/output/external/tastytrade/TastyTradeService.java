@@ -1159,17 +1159,7 @@ public class TastyTradeService {
                 }
             });
 
-            // También escuchamos el precio en vivo para calcular el Market Cap (Punto 2 del notebook)
-            channel.addMarketDataListener((sym, data) -> {
-                if (data.getLastPrice() != null) {
-                    lastPricesCache.put(sym.toUpperCase(), data.getLastPrice());
-                }
-            });
-
             channel.subscribeFundamentalsBatch(normalizedSymbols);
-            // Suscribir a quotes para el precio actual en el mismo canal efímero,
-            // para que se limpie solo al cerrar el channel (no dejar suscripciones permanentes)
-            channel.subscribeBatch(normalizedSymbols);
 
             try {
                 snapshotReceived.get(8 + (normalizedSymbols.size() / 20), TimeUnit.SECONDS);
@@ -1177,16 +1167,12 @@ public class TastyTradeService {
                 log.warn("Timeout esperando snapshots de fundamentals via dxLink. Recibidos {}/{}", symbolsWithProfile.size(), normalizedSymbols.size());
             }
 
-            // Calculamos el Market Cap dinámico: Shares * Last Price (con fallback a prevClose)
+            // Estimado de Market Cap con prevClose (el enriquecimiento REST más abajo
+            // lo reemplaza por el market-cap oficial de TastyTrade si está disponible)
             normalizedSymbols.forEach(sym -> {
                 FundamentalData fund = fundamentalsCache.get(sym);
-                if (fund != null) {
-                    Double lastPrice = lastPricesCache.get(sym);
-                    Double basePrice = (lastPrice != null) ? lastPrice : fund.getPrevClose();
-                    
-                    if (basePrice != null && fund.getSharesOutstanding() != null) {
-                        fund.setMarketCap(fund.getSharesOutstanding() * basePrice);
-                    }
+                if (fund != null && fund.getPrevClose() != null && fund.getSharesOutstanding() != null) {
+                    fund.setMarketCap(fund.getSharesOutstanding() * fund.getPrevClose());
                 }
             });
 
