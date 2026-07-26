@@ -126,7 +126,6 @@ public class DxLinkClient {
         this.marketDataCallback = callback;
         if (defaultChannel != null) defaultChannel.setOnMarketData(callback);
     }
-    public void setOnCandle(CandleCallback callback) { if (defaultChannel != null) defaultChannel.addCandleListener(callback); }
     public void setOnMessage(BiConsumer<String, JsonNode> callback) { if (defaultChannel != null) defaultChannel.addMessageListener(callback); }
     public void setOnGreeks(BiConsumer<String, OptionContract> callback) { if (defaultChannel != null) defaultChannel.addGreeksListener(callback); }
     private BiConsumer<String, FundamentalData> fundamentalCallback;
@@ -399,21 +398,6 @@ public class DxLinkClient {
                 }
                 sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", items));
             }
-        }
-
-        public void subscribeCandlesHistory(String symbol, String timeframe, long fromTime) {
-            String candleSymbol = String.format("%s{=%s}", symbol, timeframe);
-            log.info("📊 Solicitando Time-Series desde {} para {}", fromTime, candleSymbol);
-            
-            sendMessage(Map.of(
-                "type", "FEED_SUBSCRIPTION", 
-                "channel", id, 
-                "add", List.of(Map.of(
-                    "symbol", candleSymbol, 
-                    "type", "Candle", 
-                    "fromTime", fromTime
-                ))
-            ));
         }
 
         public void subscribeCandlesHistory(List<Map<String, Object>> items, long fromTime) {

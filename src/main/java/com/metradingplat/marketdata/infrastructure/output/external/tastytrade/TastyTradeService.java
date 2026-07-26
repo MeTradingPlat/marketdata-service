@@ -188,12 +188,6 @@ public class TastyTradeService {
             }
         });
 
-        dxLinkClient.setOnCandle((symbol, candle, isComplete) -> {
-            log.debug("Candle received for {}: {} O={} H={} L={} C={} complete={}",
-                    symbol, candle.getTimestamp(), candle.getOpen(),
-                    candle.getHigh(), candle.getLow(), candle.getClose(), isComplete);
-        });
-
         dxLinkClient.setOnGreeks((symbol, greeks) -> {
             Double iv = greeks.getImpliedVolatility();
             if (iv != null && iv > 1.0) { // Señal de alta volatilidad (>100% IV)
@@ -802,21 +796,6 @@ public class TastyTradeService {
     public void unsubscribe(String symbol) {
         log.info("Unsubscribing from: {}", symbol);
         dxLinkClient.unsubscribe(symbol);
-    }
-
-    /**
-     * Suscribe a velas históricas + live streaming (Time-Series Engine).
-     */
-    public void subscribeToCandles(String symbol, EnumTimeframe timeframe, int daysBack) {
-        log.info("📊 Subscribing to Time-Series for {}: {} ({} days back)", 
-                symbol, timeframe, daysBack);
-        ensureConnected();
-        
-        long fromTime = Instant.now().minus(daysBack, ChronoUnit.DAYS).toEpochMilli();
-        // El formato dxLinkFormat ya trae "{=1m}", extraemos solo el valor "1m"
-        String tf = timeframe.getDxLinkFormat().replace("{=", "").replace("}", "");
-        
-        dxLinkClient.getDefaultChannel().subscribeCandlesHistory(symbol, tf, fromTime);
     }
 
     /**
