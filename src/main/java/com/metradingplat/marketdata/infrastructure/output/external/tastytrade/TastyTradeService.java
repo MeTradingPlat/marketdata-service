@@ -995,8 +995,12 @@ public class TastyTradeService {
         // spans any weekend/holiday gap back to the last real trading session.
         Instant minFromTime = now.minus(7, java.time.temporal.ChronoUnit.DAYS);
         if (fromTime.isAfter(minFromTime)) fromTime = minFromTime;
-        if (java.time.Duration.between(fromTime, now).toDays() > 270)
-            fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
+        // 270 days was cutting D1's natural ~3-year (bars*1.5) window down to ~9
+        // months, and gutting W1/MO1 (whose natural window is decades) to a
+        // handful of bars. 5 years is still a sane upper bound — the quiet-period
+        // wait in the loop below is what actually bounds request time, not this.
+        if (java.time.Duration.between(fromTime, now).toDays() > 1825)
+            fromTime = now.minus(1825, java.time.temporal.ChronoUnit.DAYS);
         String label = timeframe.getLabel();
         String type = label.substring(label.length() - 1);
         String period = label.substring(0, label.length() - 1);

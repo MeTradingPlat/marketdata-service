@@ -33,7 +33,7 @@ import java.util.function.Consumer;
 @RequiredArgsConstructor
 public class CandleWebSocketHandler extends BaseWebSocketHandler {
 
-    private static final int HISTORY_BARS = 300;
+    private static final int HISTORY_BARS = 500;
 
     private final GestionarHistoricalDataCUIntPort historicalDataUseCase;
     private final GestionarComunicacionExternalGatewayIntPort externalGateway;
