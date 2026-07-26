@@ -64,11 +64,15 @@ public abstract class BaseWebSocketHandler extends TextWebSocketHandler {
      */
     protected void subscribe(WebSocketSession session, String symbol) {
         log.debug("Subscribing session {} to symbol: {}", session.getId(), symbol);
-        
-        subscriptions.computeIfAbsent(symbol, k -> ConcurrentHashMap.newKeySet()).add(session);
+
+        Set<WebSocketSession> sessions = subscriptions.computeIfAbsent(symbol, k -> ConcurrentHashMap.newKeySet());
+        boolean wasEmpty = sessions.isEmpty();
+        sessions.add(session);
         sessionSubscriptions.computeIfAbsent(session, k -> ConcurrentHashMap.newKeySet()).add(symbol);
-        
-        onFirstSubscriberAdded(symbol);
+
+        if (wasEmpty) {
+            onFirstSubscriberAdded(symbol);
+        }
     }
 
     /**
