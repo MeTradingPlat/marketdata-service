@@ -988,6 +988,13 @@ public class TastyTradeService {
         log.info("Fetching candles via DxLink: {} symbols, timeframe={}", symbols.size(), timeframe);
         Instant now = Instant.now();
         Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
+        // Floor the lookback at a week: for short timeframes (M1..H1) the natural
+        // bars*1.5 window can be as little as ~17h, which comes up empty outside
+        // market hours (weekends, holidays) since there's simply no candle within
+        // that window yet — not a bug, just too short a net. A week comfortably
+        // spans any weekend/holiday gap back to the last real trading session.
+        Instant minFromTime = now.minus(7, java.time.temporal.ChronoUnit.DAYS);
+        if (fromTime.isAfter(minFromTime)) fromTime = minFromTime;
         if (java.time.Duration.between(fromTime, now).toDays() > 270)
             fromTime = now.minus(270, java.time.temporal.ChronoUnit.DAYS);
         String label = timeframe.getLabel();
