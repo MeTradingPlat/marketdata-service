@@ -88,7 +88,6 @@ public class DxLinkClient {
     private static final List<String> GREEKS_FIELDS = List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice");
     private static final List<String> CANDLE_FIELDS = List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility");
 
-    private static final int IDX_SYMBOL = 0;
     private static final int IDX_TRADE_PRICE = 1;
     private static final int IDX_TRADE_VOLUME = 2;
     private static final int IDX_TRADE_TIME = 3;
@@ -447,81 +446,125 @@ public class DxLinkClient {
             if (eventCount % 100 == 1) log.info("DxLink channel {} received {} events so far", id, eventCount);
         }
 
+        /**
+         * dxLink's COMPACT format concatenates every record of a batch into one flat
+         * array under a single type marker (confirmed for Candle via diagnostic
+         * logging: a single historical request returned hundreds of records — spanning
+         * years — packed into one message; the same batching applies to any event type
+         * whenever multiple symbols update within the same flush, which happens
+         * routinely here given subscriptions run in the hundreds/thousands). Each
+         * record starts with its symbol string again, and trailing fields with
+         * default/absent values can be omitted per record, so width isn't fixed — the
+         * next textual element marks the next record. processCompactEvent used to read
+         * a single fixed-index record and silently drop the rest; every case below now
+         * walks the whole array instead.
+         */
         private void processCompactEvent(String type, JsonNode data) {
             try {
-                String symbol = data.path(IDX_SYMBOL).asText();
-                if (symbol == null || symbol.isEmpty()) return;
-
-                if ("Profile".equals(type)) log.info("DxLink Profile received for {}", symbol);
-                if ("Summary".equals(type)) log.debug("DxLink Summary received for {}", symbol);
+                if (data.isEmpty() || !data.get(0).isTextual()) return;
 
                 if ("Candle".equals(type)) {
                     processCandleBatch(data);
                     return;
                 }
 
-                switch (type) {
-                    case "Quote" -> {
-                        double bid = extractNumericSafe(data.get(1));
-                        double ask = extractNumericSafe(data.get(2));
-                        notifyMarketData(symbol, MarketDataStreamDTO.builder().symbol(symbol).bid(bid).ask(ask).timestamp(Instant.now()).build());
-                    }
-                    case "Trade" -> {
-                        double price = extractNumericSafe(data.get(IDX_TRADE_PRICE));
-                        if (!Double.isNaN(price)) {
-                            lastKnownPriceCache.put(symbol, price);
-                        } else {
-                            price = lastKnownPriceCache.getOrDefault(symbol, Double.NaN);
+                forEachRecord(data, (recordStart, recordEnd) -> {
+                    String symbol = data.get(recordStart).asText();
+                    if (symbol.isEmpty()) return;
+
+                    switch (type) {
+                        case "Quote" -> {
+                            double bid = extractNumericSafe(field(data, recordStart, 1, recordEnd));
+                            double ask = extractNumericSafe(field(data, recordStart, 2, recordEnd));
+                            notifyMarketData(symbol, MarketDataStreamDTO.builder().symbol(symbol).bid(bid).ask(ask).timestamp(Instant.now()).build());
                         }
-                        notifyMarketData(symbol, MarketDataStreamDTO.builder().symbol(symbol).lastPrice(price).volume(data.path(IDX_TRADE_VOLUME).asLong()).timestamp(Instant.ofEpochMilli(data.path(IDX_TRADE_TIME).asLong())).build());
+                        case "Trade" -> {
+                            double price = extractNumericSafe(field(data, recordStart, IDX_TRADE_PRICE, recordEnd));
+                            if (!Double.isNaN(price)) {
+                                lastKnownPriceCache.put(symbol, price);
+                            } else {
+                                price = lastKnownPriceCache.getOrDefault(symbol, Double.NaN);
+                            }
+                            long volume = field(data, recordStart, IDX_TRADE_VOLUME, recordEnd).asLong();
+                            long time = field(data, recordStart, IDX_TRADE_TIME, recordEnd).asLong();
+                            notifyMarketData(symbol, MarketDataStreamDTO.builder().symbol(symbol).lastPrice(price).volume(volume).timestamp(Instant.ofEpochMilli(time)).build());
+                        }
+                        case "Summary" -> {
+                            log.debug("DxLink Summary received for {}", symbol);
+                            notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol)
+                                    .open(extractNullableDouble(field(data, recordStart, IDX_SUMM_OPEN, recordEnd)))
+                                    .high(extractNullableDouble(field(data, recordStart, IDX_SUMM_HIGH, recordEnd)))
+                                    .low(extractNullableDouble(field(data, recordStart, IDX_SUMM_LOW, recordEnd)))
+                                    .prevClose(extractNullableDouble(field(data, recordStart, IDX_SUMM_PREV_CLOSE, recordEnd)))
+                                    .openInterest(field(data, recordStart, IDX_SUMM_OI, recordEnd).asLong())
+                                    .build());
+                        }
+                        case "TradeETH" -> {
+                            long v = field(data, recordStart, IDX_ETH_VOL, recordEnd).asLong();
+                            long t = field(data, recordStart, IDX_ETH_TIME, recordEnd).asLong();
+                            FundamentalData f = FundamentalData.builder().symbol(symbol).build();
+                            if (isPreMarket(t)) f.setPreMarketVolume(v); else f.setPostMarketVolume(v);
+                            notifyFundamentals(symbol, f);
+                        }
+                        case "Profile" -> {
+                            log.info("DxLink Profile received for {}", symbol);
+                            notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol)
+                                    .sharesOutstanding(asNullableLong(field(data, recordStart, IDX_PROF_SHARES, recordEnd)))
+                                    .eps(extractNullableDouble(field(data, recordStart, IDX_PROF_EPS, recordEnd)))
+                                    .dividendAmount(extractNullableDouble(field(data, recordStart, IDX_PROF_DIV_AMT, recordEnd)))
+                                    .dividendFrequency(asNullableString(field(data, recordStart, IDX_PROF_DIV_FREQ, recordEnd)))
+                                    .tradingStatus(asNullableString(field(data, recordStart, IDX_PROF_STATUS, recordEnd)))
+                                    .statusReason(asNullableString(field(data, recordStart, IDX_PROF_STATUS_RSN, recordEnd)))
+                                    .haltStartTime(field(data, recordStart, IDX_PROF_HALT_START, recordEnd).asLong())
+                                    .haltEndTime(field(data, recordStart, IDX_PROF_HALT_END, recordEnd).asLong())
+                                    .beta(extractNullableDouble(field(data, recordStart, IDX_PROF_BETA, recordEnd)))
+                                    .floatShares(asNullableLong(field(data, recordStart, IDX_PROF_FLOAT, recordEnd)))
+                                    .build());
+                        }
+                        case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol)
+                                .impliedVolatility(extractNullableDouble(field(data, recordStart, IDX_GRK_IV, recordEnd)))
+                                .delta(extractNullableDouble(field(data, recordStart, IDX_GRK_DELTA, recordEnd)))
+                                .gamma(extractNullableDouble(field(data, recordStart, IDX_GRK_GAMMA, recordEnd)))
+                                .theta(extractNullableDouble(field(data, recordStart, IDX_GRK_THETA, recordEnd)))
+                                .vega(extractNullableDouble(field(data, recordStart, IDX_GRK_VEGA, recordEnd)))
+                                .rho(extractNullableDouble(field(data, recordStart, IDX_GRK_RHO, recordEnd)))
+                                .theoreticalPrice(extractNullableDouble(field(data, recordStart, IDX_GRK_THEO, recordEnd)))
+                                .build());
                     }
-                    case "Summary" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).open(extractNullableDouble(data.get(IDX_SUMM_OPEN))).high(extractNullableDouble(data.get(IDX_SUMM_HIGH))).low(extractNullableDouble(data.get(IDX_SUMM_LOW))).prevClose(extractNullableDouble(data.get(IDX_SUMM_PREV_CLOSE))).openInterest(data.path(IDX_SUMM_OI).asLong()).build());
-                    case "TradeETH" -> {
-                        long v = data.path(IDX_ETH_VOL).asLong(); long t = data.path(IDX_ETH_TIME).asLong();
-                        FundamentalData f = FundamentalData.builder().symbol(symbol).build();
-                        if (isPreMarket(t)) f.setPreMarketVolume(v); else f.setPostMarketVolume(v);
-                        notifyFundamentals(symbol, f);
-                    }
-                    case "Profile" -> notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol).sharesOutstanding(asNullableLong(data.get(IDX_PROF_SHARES))).eps(extractNullableDouble(data.get(IDX_PROF_EPS))).dividendAmount(extractNullableDouble(data.get(IDX_PROF_DIV_AMT))).dividendFrequency(asNullableString(data.get(IDX_PROF_DIV_FREQ))).tradingStatus(asNullableString(data.get(IDX_PROF_STATUS))).statusReason(asNullableString(data.get(IDX_PROF_STATUS_RSN))).haltStartTime(data.path(IDX_PROF_HALT_START).asLong()).haltEndTime(data.path(IDX_PROF_HALT_END).asLong()).beta(extractNullableDouble(data.get(IDX_PROF_BETA))).floatShares(asNullableLong(data.get(IDX_PROF_FLOAT))).build());
-                    case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol).impliedVolatility(extractNullableDouble(data.get(IDX_GRK_IV))).delta(extractNullableDouble(data.get(IDX_GRK_DELTA))).gamma(extractNullableDouble(data.get(IDX_GRK_GAMMA))).theta(extractNullableDouble(data.get(IDX_GRK_THETA))).vega(extractNullableDouble(data.get(IDX_GRK_VEGA))).rho(extractNullableDouble(data.get(IDX_GRK_RHO))).theoreticalPrice(extractNullableDouble(data.get(IDX_GRK_THEO))).build());
-                }
+                });
             } catch (Exception e) { log.error("Compact error processing event type: " + type, e); }
         }
 
-        /**
-         * dxLink's COMPACT format concatenates every Candle record of a batch into one
-         * flat array under a single "Candle" type marker (e.g. requesting historical
-         * candles returns hundreds of records in one message, not one message per
-         * candle) — each record starts with its symbol string again. Trailing fields
-         * with default/absent values (namely impVolatility) can be omitted per record,
-         * so record width isn't fixed; the next textual element marks the next record.
-         */
         private void processCandleBatch(JsonNode data) {
-            int recordStart = 0;
-            while (recordStart < data.size()) {
-                int recordEnd = recordStart + 1;
-                while (recordEnd < data.size() && !data.get(recordEnd).isTextual()) recordEnd++;
-
+            forEachRecord(data, (recordStart, recordEnd) -> {
                 String candleSymbol = data.get(recordStart).asText();
-                long time = candleField(data, recordStart, 1, recordEnd).asLong();
+                long time = field(data, recordStart, 1, recordEnd).asLong();
                 boolean isLastRecordInBatch = recordEnd >= data.size();
                 notifyCandle(candleSymbol, Candle.builder()
                         .symbol(candleSymbol)
                         .timestamp(Instant.ofEpochMilli(time))
-                        .open(extractNullableDouble(candleField(data, recordStart, 2, recordEnd)))
-                        .high(extractNullableDouble(candleField(data, recordStart, 3, recordEnd)))
-                        .low(extractNullableDouble(candleField(data, recordStart, 4, recordEnd)))
-                        .close(extractNullableDouble(candleField(data, recordStart, 5, recordEnd)))
-                        .volume(extractNullableDouble(candleField(data, recordStart, 6, recordEnd)))
-                        .vwap(extractNullableDouble(candleField(data, recordStart, 7, recordEnd)))
-                        .impVolatility(extractNullableDouble(candleField(data, recordStart, 8, recordEnd)))
+                        .open(extractNullableDouble(field(data, recordStart, 2, recordEnd)))
+                        .high(extractNullableDouble(field(data, recordStart, 3, recordEnd)))
+                        .low(extractNullableDouble(field(data, recordStart, 4, recordEnd)))
+                        .close(extractNullableDouble(field(data, recordStart, 5, recordEnd)))
+                        .volume(extractNullableDouble(field(data, recordStart, 6, recordEnd)))
+                        .vwap(extractNullableDouble(field(data, recordStart, 7, recordEnd)))
+                        .impVolatility(extractNullableDouble(field(data, recordStart, 8, recordEnd)))
                         .build(), isLastRecordInBatch);
+            });
+        }
 
+        private void forEachRecord(JsonNode data, java.util.function.BiConsumer<Integer, Integer> perRecord) {
+            int recordStart = 0;
+            while (recordStart < data.size()) {
+                int recordEnd = recordStart + 1;
+                while (recordEnd < data.size() && !data.get(recordEnd).isTextual()) recordEnd++;
+                perRecord.accept(recordStart, recordEnd);
                 recordStart = recordEnd;
             }
         }
 
-        private JsonNode candleField(JsonNode data, int recordStart, int offset, int recordEnd) {
+        private JsonNode field(JsonNode data, int recordStart, int offset, int recordEnd) {
             int i = recordStart + offset;
             return i < recordEnd ? data.get(i) : com.fasterxml.jackson.databind.node.MissingNode.getInstance();
         }
