@@ -368,20 +368,6 @@ public class DxLinkClient {
         private volatile boolean ready = false;
         private final Set<BiConsumer<String, MarketDataStreamDTO>> marketDataListeners = ConcurrentHashMap.newKeySet();
 
-        // Temporary (2026-07-27): dumps the raw compact array for the first few
-        // messages of a type so the actual wire shape can be read directly,
-        // instead of guessing at forEachRecord's boundary-detection bug from
-        // symptoms. Remove once Profile/TradeETH parsing is fixed and re-enabled.
-        private final Map<String, AtomicInteger> diagnosticLogCounts = new ConcurrentHashMap<>();
-        private static final int MAX_DIAGNOSTIC_LOGS_PER_TYPE = 5;
-
-        private void logRawRecordsForDiagnosis(String type, JsonNode data, int recordStart, int recordEnd) {
-            int seen = diagnosticLogCounts.computeIfAbsent(type, k -> new AtomicInteger(0)).incrementAndGet();
-            if (seen > MAX_DIAGNOSTIC_LOGS_PER_TYPE) return;
-            log.info("DIAGNOSTIC {} (#{}/{}): forEachRecord picked boundary [{},{}) out of {} total elements. Full raw batch: {}",
-                    type, seen, MAX_DIAGNOSTIC_LOGS_PER_TYPE, recordStart, recordEnd, data.size(), data);
-        }
-
         public DxLinkChannel(int id) { this.id = id; }
         public int getId() { return id; }
         public boolean isReady() { return ready; }
@@ -481,12 +467,23 @@ public class DxLinkClient {
          * logging: a single historical request returned hundreds of records — spanning
          * years — packed into one message; the same batching applies to any event type
          * whenever multiple symbols update within the same flush, which happens
-         * routinely here given subscriptions run in the hundreds/thousands). Each
-         * record starts with its symbol string again, and trailing fields with
-         * default/absent values can be omitted per record, so width isn't fixed — the
-         * next textual element marks the next record. processCompactEvent used to read
-         * a single fixed-index record and silently drop the rest; every case below now
-         * walks the whole array instead.
+         * routinely here given subscriptions run in the hundreds/thousands).
+         *
+         * For the "current state" events (Quote/Trade/Summary/Profile/TradeETH/Greeks,
+         * everything except Candle), diagnostic logging of real prod traffic (2026-07-27,
+         * see DxLinkClient git history) confirmed every record is a FIXED width equal to
+         * the field list requested in FEED_SETUP for that type — missing values come
+         * back as JSON null or the literal string "NaN"/"Infinity" in their normal slot,
+         * they don't shrink the record. The previous approach (find "the next textual
+         * node" and treat that as the next record) is wrong whenever a record has more
+         * than one textual-typed slot: Profile has three (dividendFrequency,
+         * tradingStatus, statusReason as real strings, plus any numeric slot that
+         * happens to arrive as "NaN"), so a present tradingStatus value got misread as
+         * the next record's symbol, corrupting every field after it -- confirmed in
+         * prod logs as "DxLink Profile received for ACTIVE"/"NaN" instead of real
+         * tickers. Candle is unaffected (its own processCandleBatch/forEachRecord path,
+         * empirically verified separately, is untouched here) since none of its fields
+         * are string-typed other than the leading symbol.
          */
         private void processCompactEvent(String type, JsonNode data) {
             try {
@@ -497,7 +494,10 @@ public class DxLinkClient {
                     return;
                 }
 
-                forEachRecord(data, (recordStart, recordEnd) -> {
+                int width = fixedRecordWidth(type);
+                if (width <= 0) return;
+
+                forEachFixedRecord(data, width, (recordStart, recordEnd) -> {
                     String symbol = data.get(recordStart).asText();
                     if (symbol.isEmpty()) return;
 
@@ -529,26 +529,26 @@ public class DxLinkClient {
                                     .build());
                         }
                         case "TradeETH" -> {
-                            // DISABLED 2026-07-27: forEachRecord finds record boundaries by
-                            // scanning for "the next textual node", which only works when a
-                            // record has exactly one textual field (the leading symbol). Confirmed
-                            // in prod logs that Profile's extra textual fields (tradingStatus,
-                            // statusReason, dividendFrequency) break that assumption -- records
-                            // got misaligned and "DxLink Profile received for ACTIVE"/"NaN" showed
-                            // up instead of real symbols. TradeETH's extendedTradingHours field is
-                            // unverified (no confirmed evidence either way), so it's paused too
-                            // until logRawRecordsForDiagnosis confirms its actual wire shape.
-                            logRawRecordsForDiagnosis(type, data, recordStart, recordEnd);
+                            long v = field(data, recordStart, IDX_ETH_VOL, recordEnd).asLong();
+                            long t = field(data, recordStart, IDX_ETH_TIME, recordEnd).asLong();
+                            FundamentalData f = FundamentalData.builder().symbol(symbol).build();
+                            if (isPreMarket(t)) f.setPreMarketVolume(v); else f.setPostMarketVolume(v);
+                            notifyFundamentals(symbol, f);
                         }
                         case "Profile" -> {
-                            // DISABLED 2026-07-27: see TradeETH comment above -- this event has
-                            // 3 non-leading textual fields (dividendFrequency, tradingStatus,
-                            // statusReason), which is exactly what broke forEachRecord's
-                            // boundary detection. Confirmed via prod logs: "DxLink Profile
-                            // received for ACTIVE"/"NaN" instead of real symbols, meaning fields
-                            // were being merged under the wrong symbol. Paused until the parser
-                            // is fixed and re-verified against real traffic.
-                            logRawRecordsForDiagnosis(type, data, recordStart, recordEnd);
+                            log.info("DxLink Profile received for {}", symbol);
+                            notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol)
+                                    .sharesOutstanding(asNullableLong(field(data, recordStart, IDX_PROF_SHARES, recordEnd)))
+                                    .eps(extractNullableDouble(field(data, recordStart, IDX_PROF_EPS, recordEnd)))
+                                    .dividendAmount(extractNullableDouble(field(data, recordStart, IDX_PROF_DIV_AMT, recordEnd)))
+                                    .dividendFrequency(asNullableString(field(data, recordStart, IDX_PROF_DIV_FREQ, recordEnd)))
+                                    .tradingStatus(asNullableString(field(data, recordStart, IDX_PROF_STATUS, recordEnd)))
+                                    .statusReason(asNullableString(field(data, recordStart, IDX_PROF_STATUS_RSN, recordEnd)))
+                                    .haltStartTime(field(data, recordStart, IDX_PROF_HALT_START, recordEnd).asLong())
+                                    .haltEndTime(field(data, recordStart, IDX_PROF_HALT_END, recordEnd).asLong())
+                                    .beta(extractNullableDouble(field(data, recordStart, IDX_PROF_BETA, recordEnd)))
+                                    .floatShares(asNullableLong(field(data, recordStart, IDX_PROF_FLOAT, recordEnd)))
+                                    .build());
                         }
                         case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol)
                                 .impliedVolatility(extractNullableDouble(field(data, recordStart, IDX_GRK_IV, recordEnd)))
@@ -583,11 +583,36 @@ public class DxLinkClient {
             });
         }
 
+        // Used only by Candle (processCandleBatch): its records are genuinely
+        // variable-width (empirically verified separately), and none of its fields
+        // are string-typed other than the leading symbol, so scanning for the next
+        // textual node is safe there.
         private void forEachRecord(JsonNode data, java.util.function.BiConsumer<Integer, Integer> perRecord) {
             int recordStart = 0;
             while (recordStart < data.size()) {
                 int recordEnd = recordStart + 1;
                 while (recordEnd < data.size() && !data.get(recordEnd).isTextual()) recordEnd++;
+                perRecord.accept(recordStart, recordEnd);
+                recordStart = recordEnd;
+            }
+        }
+
+        private static int fixedRecordWidth(String type) {
+            return switch (type) {
+                case "Quote" -> QUOTE_FIELDS.size();
+                case "Trade" -> TRADE_FIELDS.size();
+                case "Summary" -> SUMMARY_FIELDS.size();
+                case "Profile" -> PROFILE_FIELDS.size();
+                case "TradeETH" -> TRADE_ETH_FIELDS.size();
+                case "Greeks" -> GREEKS_FIELDS.size();
+                default -> -1;
+            };
+        }
+
+        private void forEachFixedRecord(JsonNode data, int width, java.util.function.BiConsumer<Integer, Integer> perRecord) {
+            int recordStart = 0;
+            while (recordStart < data.size()) {
+                int recordEnd = Math.min(recordStart + width, data.size());
                 perRecord.accept(recordStart, recordEnd);
                 recordStart = recordEnd;
             }
