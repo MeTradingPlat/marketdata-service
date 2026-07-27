@@ -476,11 +476,29 @@ public class TastyTradeService {
                     Double high = safeConvertToDouble(item.get("day-high-price"));
                     Double low = safeConvertToDouble(item.get("day-low-price"));
                     Long volume = safeConvertToLong(item.get("volume"));
+                    Double open = safeConvertToDouble(item.get("open"));
+                    Double prevClose = safeConvertToDouble(item.get("prev-close"));
                     if (high != null) fund.setHigh(high);
                     if (low != null) fund.setLow(low);
                     if (volume != null) fund.setDayVolume(volume);
-                    if (fund.getOpen() == null) fund.setOpen(safeConvertToDouble(item.get("open")));
-                    if (fund.getPrevClose() == null) fund.setPrevClose(safeConvertToDouble(item.get("prev-close")));
+                    if (open != null) fund.setOpen(open);
+                    if (prevClose != null) fund.setPrevClose(prevClose);
+
+                    if (item.get("is-trading-halted") != null) {
+                        fund.setTradingStatus(Boolean.TRUE.equals(item.get("is-trading-halted")) ? "HALTED" : "ACTIVE");
+                    }
+                    Long haltStart = safeConvertToLong(item.get("halt-start-time"));
+                    Long haltEnd = safeConvertToLong(item.get("halt-end-time"));
+                    if (haltStart != null) fund.setHaltStartTime(haltStart);
+                    if (haltEnd != null) fund.setHaltEndTime(haltEnd);
+
+                    if (fund.getMarketCap() == null && fund.getSharesOutstanding() != null
+                            && fund.getSharesOutstanding() > 0) {
+                        Double price = prevClose != null ? prevClose : open;
+                        if (price != null && price > 0) {
+                            fund.setMarketCap(fund.getSharesOutstanding() * price);
+                        }
+                    }
                     updated++;
                 }
             } catch (Exception e) {
@@ -519,6 +537,38 @@ public class TastyTradeService {
                     fund.setLiquidityRating(safeConvertToInt(m.get("liquidity-rating")));
                     fund.setBorrowRate(safeConvertToDouble(m.get("borrow-rate")));
                     fund.setLendability((String) m.get("lendability"));
+
+                    // Estos campos antes solo se llenaban una vez (en el preload inicial) y
+                    // nunca se refrescaban en este job periodico. TastyTrade ya los trae en
+                    // esta misma llamada, asi que actualizarlos aqui no agrega ninguna
+                    // peticion REST nueva.
+                    Double marketCap = safeConvertToDouble(m.get("market-cap"));
+                    if (marketCap != null && marketCap > 0) fund.setMarketCap(marketCap);
+                    Double eps = safeConvertToDouble(m.get("earnings-per-share"));
+                    if (eps != null) fund.setEps(eps);
+                    Double dividendAmount = safeConvertToDouble(m.get("dividend-rate-per-share"));
+                    if (dividendAmount != null) fund.setDividendAmount(dividendAmount);
+                    // TastyTrade solo tiene su propio short-ratio como estimado; FINRA es la
+                    // fuente autoritativa (checkFinraForUpdate), asi que no se sobreescribe.
+                    if (fund.getShortRatio() == null) {
+                        fund.setShortRatio(safeConvertToDouble(m.get("short-ratio")));
+                    }
+
+                    Object earningsObj = m.get("earnings");
+                    String earningsDateStr = null;
+                    if (earningsObj instanceof Map<?, ?> earningsMap) {
+                        Object raw = earningsMap.get("expected-report-date");
+                        if (raw == null) raw = earningsMap.get("estimated-report-date");
+                        if (raw instanceof String s) earningsDateStr = s;
+                    }
+                    if (earningsDateStr != null) {
+                        try {
+                            LocalDate earningsDate = LocalDate.parse(earningsDateStr);
+                            fund.setNextEarningsDate(earningsDate);
+                            long days = ChronoUnit.DAYS.between(LocalDate.now(), earningsDate);
+                            fund.setDaysUntilEarnings((int) Math.max(0, days));
+                        } catch (Exception ignored) {}
+                    }
                     updated++;
                 }
             }
