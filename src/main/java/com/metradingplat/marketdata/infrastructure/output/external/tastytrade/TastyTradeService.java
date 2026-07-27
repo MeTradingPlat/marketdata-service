@@ -79,6 +79,31 @@ public class TastyTradeService {
     private static final long QUOTE_LKG_TTL_MS = 300_000; // 5 minutos para last-known-good
     private static final int MAX_RETRIES = 3;
 
+    // Estado del preload masivo de fundamentales al arrancar (preloadFundamentalsFromRest).
+    // completedAt es null mientras el preload no ha terminado; una vez seteado, el preload
+    // ya recorrio todo el universo objetivo (no implica 100% de simbolos con datos, TastyTrade
+    // puede no tener info de algunos).
+    private volatile Instant fundamentalsPreloadStartedAt;
+    private volatile Instant fundamentalsPreloadCompletedAt;
+    private volatile int fundamentalsPreloadTargetSymbols;
+    private volatile int fundamentalsPreloadMarketMetricsLoaded;
+    private volatile int fundamentalsPreloadEquitiesLoaded;
+    private volatile int fundamentalsPreloadOhlcLoaded;
+
+    public Map<String, Object> getFundamentalsPreloadStatus() {
+        Map<String, Object> status = new java.util.LinkedHashMap<>();
+        status.put("started", fundamentalsPreloadStartedAt != null);
+        status.put("complete", fundamentalsPreloadCompletedAt != null);
+        status.put("targetSymbols", fundamentalsPreloadTargetSymbols);
+        status.put("marketMetricsLoaded", fundamentalsPreloadMarketMetricsLoaded);
+        status.put("equitiesLoaded", fundamentalsPreloadEquitiesLoaded);
+        status.put("ohlcLoaded", fundamentalsPreloadOhlcLoaded);
+        status.put("cachedSymbols", fundamentalsCache.size());
+        status.put("startedAt", fundamentalsPreloadStartedAt);
+        status.put("completedAt", fundamentalsPreloadCompletedAt);
+        return status;
+    }
+
     private record CachedQuote(double price, long timestamp, boolean stale) {}
 
     public Map<String, FundamentalData> getCachedFundamentals(List<String> symbols) {
@@ -261,6 +286,8 @@ public class TastyTradeService {
 
     private void preloadFundamentalsFromRest(List<String> symbols) {
         log.info("Bulk preloading REST fundamentals for {} symbols", symbols.size());
+        fundamentalsPreloadStartedAt = Instant.now();
+        fundamentalsPreloadTargetSymbols = symbols.size();
         int chunkSize = 250;
         int loaded = 0;
         int emptyChunks = 0;
@@ -391,6 +418,13 @@ public class TastyTradeService {
         }
         log.info("Calculated sharesOutstanding for {} symbols, floatShares for {} symbols",
                 calculatedShares, calculatedFloat);
+
+        fundamentalsPreloadMarketMetricsLoaded = loaded;
+        fundamentalsPreloadEquitiesLoaded = equityLoaded;
+        fundamentalsPreloadOhlcLoaded = ohlcLoaded;
+        fundamentalsPreloadCompletedAt = Instant.now();
+        log.info("Fundamentals preload complete: target={}, marketMetrics={}, equities={}, ohlc={}",
+                symbols.size(), loaded, equityLoaded, ohlcLoaded);
 
         CompletableFuture.runAsync(this::updateShortInterestFromFinra);
         CompletableFuture.runAsync(this::refreshSharesOutstandingFromSecEdgar);

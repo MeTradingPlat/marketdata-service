@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.DxLinkClient;
+import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,20 @@ import lombok.extern.slf4j.Slf4j;
 public class HealthController {
 
     private final DxLinkClient dxLinkClient;
+    private final TastyTradeService tastyTradeService;
+
+    /**
+     * Estado del preload masivo de fundamentales al arrancar el servicio.
+     * "complete" no significa que todos los símbolos tengan datos (algunos
+     * pueden no existir en TastyTrade), sino que ya se recorrió todo el
+     * universo objetivo al menos una vez.
+     *
+     * Ejemplo: GET /marketdata/health/fundamentals
+     */
+    @GetMapping("/fundamentals")
+    public Map<String, Object> getFundamentalsPreloadStatus() {
+        return tastyTradeService.getFundamentalsPreloadStatus();
+    }
 
     /**
      * Obtener el estado de la conexión DxLink.
