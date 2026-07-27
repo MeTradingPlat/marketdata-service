@@ -47,7 +47,6 @@ public class DxLinkClient {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
-    private final Set<String> fundamentalsSubscribedSymbols = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     
     // L1 Cache to maintain the last known price during market data silence (OOH)
@@ -66,12 +65,8 @@ public class DxLinkClient {
 
     private volatile boolean authenticated = false;
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
-    // Consecutive-failure counter, reset to 0 on every successful reconnect (see
-    // performReconnect). Backoff is capped at MAX_RECONNECT_DELAY_SECONDS, and there
-    // is deliberately no attempt cap: a Trading connection that gives up retrying
-    // after N failures and waits for a manual redeploy is worse than one that keeps
-    // trying at a slow, bounded pace forever.
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
+    private static final int MAX_RECONNECT_ATTEMPTS = 10;
     private static final int INITIAL_RECONNECT_DELAY_SECONDS = 5;
     private static final int MAX_RECONNECT_DELAY_SECONDS = 300;
     private static final int HEALTH_CHECK_INTERVAL_SECONDS = 60;
@@ -184,8 +179,8 @@ public class DxLinkClient {
         if (!reconnecting.compareAndSet(false, true)) return;
         if (isConnected()) { reconnecting.set(false); return; }
         int attempts = reconnectAttempts.incrementAndGet();
+        if (attempts > MAX_RECONNECT_ATTEMPTS) { reconnecting.set(false); return; }
         int delay = Math.min(INITIAL_RECONNECT_DELAY_SECONDS * (int) Math.pow(2, attempts - 1), MAX_RECONNECT_DELAY_SECONDS);
-        log.warn("DxLink reconnect attempt {} scheduled in {}s", attempts, delay);
         scheduler.schedule(() -> { try { performReconnect(); } finally { reconnecting.set(false); } }, delay, TimeUnit.SECONDS);
     }
 
@@ -196,7 +191,6 @@ public class DxLinkClient {
         try {
             connect(dxLinkUrl, token);
             if (authenticated) {
-                reconnectAttempts.set(0);
                 if (fundamentalCallback != null && defaultChannel != null) {
                     defaultChannel.addFundamentalListener(fundamentalCallback);
                 }
@@ -210,10 +204,6 @@ public class DxLinkClient {
 
     private void resubscribeAll() {
         resubscribeAllSymbols();
-        if (!fundamentalsSubscribedSymbols.isEmpty()) {
-            log.info("Resubscribing {} symbols to fundamentals feed after reconnect", fundamentalsSubscribedSymbols.size());
-            subscribeFundamentalsBatch(new ArrayList<>(fundamentalsSubscribedSymbols));
-        }
     }
 
     public void resubscribeAllSymbols() {
@@ -255,33 +245,7 @@ public class DxLinkClient {
     }
     public void unsubscribe(String symbol) { if (defaultChannel != null) defaultChannel.unsubscribe(symbol); subscribedSymbols.remove(symbol); }
     public int getActiveSubscriptionCount() { return subscribedSymbols.size(); }
-    public int getFundamentalsSubscriptionCount() { return fundamentalsSubscribedSymbols.size(); }
     public boolean isConnected() { return session != null && session.isOpen() && authenticated; }
-
-    /**
-     * Subscribes Summary+Profile+TradeETH (halt status, OHLC, shares/float/eps/
-     * dividend, pre/post-market volume, open interest) for the given symbols.
-     * Chunked and throttled the same way resubscribeAllSymbols() is, and tracked
-     * separately so a reconnect re-issues these too (see resubscribeAll()).
-     */
-    public void subscribeFundamentalsBatch(List<String> symbols) {
-        if (defaultChannel == null || !defaultChannel.isReady()) return;
-        fundamentalsSubscribedSymbols.addAll(symbols);
-        int chunkSize = 200;
-        // 2026-07-27: coverage keeps climbing with slower pacing, still no sign of
-        // a hard ceiling -- 50ms/chunk -> 26.7% (~3,500/13,124), 500ms/chunk ->
-        // 38.9% (~5,100), 2000ms/chunk -> 63.2% (~8,300, and for the first time the
-        // response burst outlasted the send burst, meaning dxFeed kept catching up
-        // even after we stopped sending). Pushing further to see where it lands.
-        int delayMs = 5000;
-        for (int i = 0; i < symbols.size(); i += chunkSize) {
-            int end = Math.min(i + chunkSize, symbols.size());
-            defaultChannel.subscribeFundamentalsBatch(symbols.subList(i, end));
-            if (end < symbols.size()) {
-                try { Thread.sleep(delayMs); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
-            }
-        }
-    }
 
     public String connectionDiagnostics() {
         if (session == null) return "session=null";
@@ -302,7 +266,6 @@ public class DxLinkClient {
                 "authenticated", authenticated,
                 "channels", channels.size(),
                 "activeSubscriptions", subscribedSymbols.size(),
-                "fundamentalsSubscriptions", fundamentalsSubscribedSymbols.size(),
                 "reconnectAttempts", reconnectAttempts.get(),
                 "reconnecting", reconnecting.get(),
                 "totalMessages", messageCounter.get(),
@@ -473,23 +436,12 @@ public class DxLinkClient {
          * logging: a single historical request returned hundreds of records — spanning
          * years — packed into one message; the same batching applies to any event type
          * whenever multiple symbols update within the same flush, which happens
-         * routinely here given subscriptions run in the hundreds/thousands).
-         *
-         * For the "current state" events (Quote/Trade/Summary/Profile/TradeETH/Greeks,
-         * everything except Candle), diagnostic logging of real prod traffic (2026-07-27,
-         * see DxLinkClient git history) confirmed every record is a FIXED width equal to
-         * the field list requested in FEED_SETUP for that type — missing values come
-         * back as JSON null or the literal string "NaN"/"Infinity" in their normal slot,
-         * they don't shrink the record. The previous approach (find "the next textual
-         * node" and treat that as the next record) is wrong whenever a record has more
-         * than one textual-typed slot: Profile has three (dividendFrequency,
-         * tradingStatus, statusReason as real strings, plus any numeric slot that
-         * happens to arrive as "NaN"), so a present tradingStatus value got misread as
-         * the next record's symbol, corrupting every field after it -- confirmed in
-         * prod logs as "DxLink Profile received for ACTIVE"/"NaN" instead of real
-         * tickers. Candle is unaffected (its own processCandleBatch/forEachRecord path,
-         * empirically verified separately, is untouched here) since none of its fields
-         * are string-typed other than the leading symbol.
+         * routinely here given subscriptions run in the hundreds/thousands). Each
+         * record starts with its symbol string again, and trailing fields with
+         * default/absent values can be omitted per record, so width isn't fixed — the
+         * next textual element marks the next record. processCompactEvent used to read
+         * a single fixed-index record and silently drop the rest; every case below now
+         * walks the whole array instead.
          */
         private void processCompactEvent(String type, JsonNode data) {
             try {
@@ -500,10 +452,7 @@ public class DxLinkClient {
                     return;
                 }
 
-                int width = fixedRecordWidth(type);
-                if (width <= 0) return;
-
-                forEachFixedRecord(data, width, (recordStart, recordEnd) -> {
+                forEachRecord(data, (recordStart, recordEnd) -> {
                     String symbol = data.get(recordStart).asText();
                     if (symbol.isEmpty()) return;
 
@@ -589,36 +538,11 @@ public class DxLinkClient {
             });
         }
 
-        // Used only by Candle (processCandleBatch): its records are genuinely
-        // variable-width (empirically verified separately), and none of its fields
-        // are string-typed other than the leading symbol, so scanning for the next
-        // textual node is safe there.
         private void forEachRecord(JsonNode data, java.util.function.BiConsumer<Integer, Integer> perRecord) {
             int recordStart = 0;
             while (recordStart < data.size()) {
                 int recordEnd = recordStart + 1;
                 while (recordEnd < data.size() && !data.get(recordEnd).isTextual()) recordEnd++;
-                perRecord.accept(recordStart, recordEnd);
-                recordStart = recordEnd;
-            }
-        }
-
-        private static int fixedRecordWidth(String type) {
-            return switch (type) {
-                case "Quote" -> QUOTE_FIELDS.size();
-                case "Trade" -> TRADE_FIELDS.size();
-                case "Summary" -> SUMMARY_FIELDS.size();
-                case "Profile" -> PROFILE_FIELDS.size();
-                case "TradeETH" -> TRADE_ETH_FIELDS.size();
-                case "Greeks" -> GREEKS_FIELDS.size();
-                default -> -1;
-            };
-        }
-
-        private void forEachFixedRecord(JsonNode data, int width, java.util.function.BiConsumer<Integer, Integer> perRecord) {
-            int recordStart = 0;
-            while (recordStart < data.size()) {
-                int recordEnd = Math.min(recordStart + width, data.size());
                 perRecord.accept(recordStart, recordEnd);
                 recordStart = recordEnd;
             }
