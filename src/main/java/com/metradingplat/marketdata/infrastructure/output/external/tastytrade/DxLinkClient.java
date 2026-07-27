@@ -47,6 +47,7 @@ public class DxLinkClient {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Set<String> subscribedSymbols = ConcurrentHashMap.newKeySet();
+    private final Set<String> fundamentalsSubscribedSymbols = ConcurrentHashMap.newKeySet();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
     
     // L1 Cache to maintain the last known price during market data silence (OOH)
@@ -65,8 +66,12 @@ public class DxLinkClient {
 
     private volatile boolean authenticated = false;
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
+    // Consecutive-failure counter, reset to 0 on every successful reconnect (see
+    // performReconnect). Backoff is capped at MAX_RECONNECT_DELAY_SECONDS, and there
+    // is deliberately no attempt cap: a Trading connection that gives up retrying
+    // after N failures and waits for a manual redeploy is worse than one that keeps
+    // trying at a slow, bounded pace forever.
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
-    private static final int MAX_RECONNECT_ATTEMPTS = 10;
     private static final int INITIAL_RECONNECT_DELAY_SECONDS = 5;
     private static final int MAX_RECONNECT_DELAY_SECONDS = 300;
     private static final int HEALTH_CHECK_INTERVAL_SECONDS = 60;
@@ -179,8 +184,8 @@ public class DxLinkClient {
         if (!reconnecting.compareAndSet(false, true)) return;
         if (isConnected()) { reconnecting.set(false); return; }
         int attempts = reconnectAttempts.incrementAndGet();
-        if (attempts > MAX_RECONNECT_ATTEMPTS) { reconnecting.set(false); return; }
         int delay = Math.min(INITIAL_RECONNECT_DELAY_SECONDS * (int) Math.pow(2, attempts - 1), MAX_RECONNECT_DELAY_SECONDS);
+        log.warn("DxLink reconnect attempt {} scheduled in {}s", attempts, delay);
         scheduler.schedule(() -> { try { performReconnect(); } finally { reconnecting.set(false); } }, delay, TimeUnit.SECONDS);
     }
 
@@ -191,6 +196,7 @@ public class DxLinkClient {
         try {
             connect(dxLinkUrl, token);
             if (authenticated) {
+                reconnectAttempts.set(0);
                 if (fundamentalCallback != null && defaultChannel != null) {
                     defaultChannel.addFundamentalListener(fundamentalCallback);
                 }
@@ -204,6 +210,10 @@ public class DxLinkClient {
 
     private void resubscribeAll() {
         resubscribeAllSymbols();
+        if (!fundamentalsSubscribedSymbols.isEmpty()) {
+            log.info("Resubscribing {} symbols to fundamentals feed after reconnect", fundamentalsSubscribedSymbols.size());
+            subscribeFundamentalsBatch(new ArrayList<>(fundamentalsSubscribedSymbols));
+        }
     }
 
     public void resubscribeAllSymbols() {
@@ -245,7 +255,27 @@ public class DxLinkClient {
     }
     public void unsubscribe(String symbol) { if (defaultChannel != null) defaultChannel.unsubscribe(symbol); subscribedSymbols.remove(symbol); }
     public int getActiveSubscriptionCount() { return subscribedSymbols.size(); }
+    public int getFundamentalsSubscriptionCount() { return fundamentalsSubscribedSymbols.size(); }
     public boolean isConnected() { return session != null && session.isOpen() && authenticated; }
+
+    /**
+     * Subscribes Summary+Profile+TradeETH (halt status, OHLC, shares/float/eps/
+     * dividend, pre/post-market volume, open interest) for the given symbols.
+     * Chunked and throttled the same way resubscribeAllSymbols() is, and tracked
+     * separately so a reconnect re-issues these too (see resubscribeAll()).
+     */
+    public void subscribeFundamentalsBatch(List<String> symbols) {
+        if (defaultChannel == null || !defaultChannel.isReady()) return;
+        fundamentalsSubscribedSymbols.addAll(symbols);
+        int chunkSize = 200;
+        for (int i = 0; i < symbols.size(); i += chunkSize) {
+            int end = Math.min(i + chunkSize, symbols.size());
+            defaultChannel.subscribeFundamentalsBatch(symbols.subList(i, end));
+            if (end < symbols.size()) {
+                try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            }
+        }
+    }
 
     public String connectionDiagnostics() {
         if (session == null) return "session=null";
@@ -266,6 +296,7 @@ public class DxLinkClient {
                 "authenticated", authenticated,
                 "channels", channels.size(),
                 "activeSubscriptions", subscribedSymbols.size(),
+                "fundamentalsSubscriptions", fundamentalsSubscribedSymbols.size(),
                 "reconnectAttempts", reconnectAttempts.get(),
                 "reconnecting", reconnecting.get(),
                 "totalMessages", messageCounter.get(),
