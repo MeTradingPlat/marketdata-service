@@ -225,12 +225,16 @@ public class TastyTradeService {
 
         log.info("DxLink initialized. Auto-subscribe and REST preload will start in 5s...");
 
+        // Ancladas antes de la apertura regular (9:30am ET) -- antes eran 8/9/10am,
+        // lo que dejaba el refresco diario a medio terminar (o sin empezar) cuando
+        // ya habia arrancado la sesion. Separadas por una hora para no golpear
+        // TastyTrade/FINRA/SEC al mismo tiempo.
         scheduler.scheduleAtFixedRate(this::refreshMarketMetrics,
-                millisUntilNextHour(8), 4 * 3600_000, TimeUnit.MILLISECONDS);
+                millisUntilNextHour(2), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
-                millisUntilNextHour(9), 4 * 3600_000, TimeUnit.MILLISECONDS);
+                millisUntilNextHour(3), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::refreshSharesOutstandingFromSecEdgar,
-                millisUntilNextHour(10), 24 * 3600_000, TimeUnit.MILLISECONDS);
+                millisUntilNextHour(4), 24 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::cleanupStaleCandles,
                 5, 5, TimeUnit.MINUTES);
         scheduler.scheduleAtFixedRate(this::cleanupStaleRestQuotes,
@@ -492,9 +496,15 @@ public class TastyTradeService {
                     if (haltStart != null) fund.setHaltStartTime(haltStart);
                     if (haltEnd != null) fund.setHaltEndTime(haltEnd);
 
-                    if (fund.getMarketCap() == null && fund.getSharesOutstanding() != null
-                            && fund.getSharesOutstanding() > 0) {
-                        Double price = prevClose != null ? prevClose : open;
+                    // Fuente principal de marketCap, recalculado cada 5 min con el precio
+                    // mas fresco disponible (para simbolos con suscripcion de velas activa,
+                    // recomputeMarketCapFromLivePrice ya lo mantiene al dia por bar/tick en
+                    // vivo). El market-cap real de TastyTrade solo se usa como semilla en el
+                    // preload inicial -- refreshMarketMetrics ya no lo vuelve a escribir, para
+                    // que no compitan dos fuentes con cadencias distintas por el mismo campo.
+                    if (fund.getSharesOutstanding() != null && fund.getSharesOutstanding() > 0) {
+                        Double price = prevClose != null ? prevClose : (open != null ? open : fund.getPrevClose());
+                        if (price == null) price = fund.getOpen();
                         if (price != null && price > 0) {
                             fund.setMarketCap(fund.getSharesOutstanding() * price);
                         }
@@ -541,9 +551,9 @@ public class TastyTradeService {
                     // Estos campos antes solo se llenaban una vez (en el preload inicial) y
                     // nunca se refrescaban en este job periodico. TastyTrade ya los trae en
                     // esta misma llamada, asi que actualizarlos aqui no agrega ninguna
-                    // peticion REST nueva.
-                    Double marketCap = safeConvertToDouble(m.get("market-cap"));
-                    if (marketCap != null && marketCap > 0) fund.setMarketCap(marketCap);
+                    // peticion REST nueva. marketCap NO se toca aqui: refreshOhlcData ya lo
+                    // recalcula cada 5 min (y en vivo por bar/tick si hay suscripcion activa
+                    // de velas), y es la fuente principal.
                     Double eps = safeConvertToDouble(m.get("earnings-per-share"));
                     if (eps != null) fund.setEps(eps);
                     Double dividendAmount = safeConvertToDouble(m.get("dividend-rate-per-share"));
@@ -625,14 +635,18 @@ public class TastyTradeService {
     }
 
     private void refreshSharesOutstandingFromSecEdgar() {
-        List<String> missing = new ArrayList<>();
-        for (var entry : fundamentalsCache.entrySet()) {
-            if (entry.getValue().getSharesOutstanding() == null) missing.add(entry.getKey());
-        }
-        if (!missing.isEmpty()) {
-            log.info("SEC EDGAR refresh: {} symbols missing sharesOutstanding", missing.size());
+        // Re-verifica todos los simbolos cacheados cada dia, no solo los que aun
+        // estan en null: sharesOutstanding puede cambiar (recompras, emisiones) y
+        // uno que ya tenga valor se quedaria congelado para siempre si solo
+        // llenamos huecos. Esto no cuesta nada extra: el companyfacts.zip completo
+        // de SEC se descarga una vez al dia sin importar cuantos simbolos pidamos,
+        // asi que filtrar a "solo los que faltan" solo reducia cuantos leiamos de
+        // un archivo que ya estaba en disco de todas formas.
+        List<String> allCached = new ArrayList<>(fundamentalsCache.keySet());
+        if (!allCached.isEmpty()) {
+            log.info("SEC EDGAR refresh: re-checking sharesOutstanding for {} symbols", allCached.size());
             try {
-                Map<String, Long> shares = secEdgarClient.fetchSharesOutstanding(missing);
+                Map<String, Long> shares = secEdgarClient.fetchSharesOutstanding(allCached);
                 for (var entry : shares.entrySet()) {
                     FundamentalData fund = fundamentalsCache.get(entry.getKey());
                     if (fund == null) continue;
@@ -1003,12 +1017,27 @@ public class TastyTradeService {
                 if (liveListeners != null) {
                     for (Consumer<Candle> liveListener : liveListeners) liveListener.accept(merged);
                 }
+                recomputeMarketCapFromLivePrice(cleanSymbol, merged.getClose());
             });
             log.info("Persistent candle channel opened");
         } catch (Exception e) {
             log.error("Failed to open candle channel", e);
             candleChannel = null;
         }
+    }
+
+    /**
+     * Recalcula marketCap (sharesOutstanding x precio) cada vez que llega una vela
+     * en vivo para un simbolo con suscripcion activa en el canal persistente de
+     * velas -- ya sea por un chart del frontend o porque un escaner la sigue
+     * pidiendo. En cuanto nadie la pide, cleanupStaleCandles() la da de baja y
+     * marketCap vuelve a depender solo del refresco REST de 5 min (refreshOhlcData).
+     */
+    private void recomputeMarketCapFromLivePrice(String symbol, Double price) {
+        if (price == null || price <= 0) return;
+        FundamentalData fund = fundamentalsCache.get(symbol.toUpperCase());
+        if (fund == null || fund.getSharesOutstanding() == null || fund.getSharesOutstanding() <= 0) return;
+        fund.setMarketCap(fund.getSharesOutstanding() * price);
     }
 
     private void subscribeToCandles(List<String> symbols, EnumTimeframe timeframe) {
