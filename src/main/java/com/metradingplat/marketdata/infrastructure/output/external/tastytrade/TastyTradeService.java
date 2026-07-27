@@ -225,12 +225,18 @@ public class TastyTradeService {
 
         log.info("DxLink initialized. Auto-subscribe and REST preload will start in 5s...");
 
+        // Anchored before the 9:30am ET regular-session open (was 8/9/10am, which
+        // meant the daily refresh for these often hadn't even run yet by the time
+        // trading started). Spread an hour apart so they don't all hit
+        // TastyTrade/FINRA/SEC at once.
         scheduler.scheduleAtFixedRate(this::refreshMarketMetrics,
-                millisUntilNextHour(8), 4 * 3600_000, TimeUnit.MILLISECONDS);
+                millisUntilNextHour(2), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
-                millisUntilNextHour(9), 4 * 3600_000, TimeUnit.MILLISECONDS);
+                millisUntilNextHour(3), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::refreshSharesOutstandingFromSecEdgar,
-                millisUntilNextHour(10), 24 * 3600_000, TimeUnit.MILLISECONDS);
+                millisUntilNextHour(4), 24 * 3600_000, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(this::refreshEquityClassification,
+                millisUntilNextHour(5), 24 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::cleanupStaleCandles,
                 5, 5, TimeUnit.MINUTES);
         scheduler.scheduleAtFixedRate(this::cleanupStaleRestQuotes,
@@ -279,8 +285,10 @@ public class TastyTradeService {
         }
         if (!symbols.isEmpty()) {
             List<String> distinctSymbols = symbols.stream().distinct().toList();
-            log.info("Starting fundamentals preload for {} symbols (streaming quotes on demand)", distinctSymbols.size());
+            log.info("Starting fundamentals preload for {} symbols (REST bulk + live DxLink subscription)", distinctSymbols.size());
             CompletableFuture.runAsync(() -> preloadFundamentalsFromRest(distinctSymbols));
+            log.info("Subscribing {} symbols to live DxLink fundamentals feed (Summary/Profile/TradeETH)", distinctSymbols.size());
+            dxLinkClient.subscribeFundamentalsBatch(distinctSymbols);
         }
     }
 
@@ -492,9 +500,15 @@ public class TastyTradeService {
                     if (haltStart != null) fund.setHaltStartTime(haltStart);
                     if (haltEnd != null) fund.setHaltEndTime(haltEnd);
 
-                    if (fund.getMarketCap() == null && fund.getSharesOutstanding() != null
-                            && fund.getSharesOutstanding() > 0) {
-                        Double price = prevClose != null ? prevClose : open;
+                    // Our own estimate is the primary marketCap source, recomputed every
+                    // cycle with the freshest price: TastyTrade's own "market-cap" field
+                    // (refreshMarketMetrics) only refreshes every 4h, so treating it as
+                    // primary meant a symbol with a real API value looked staler than one
+                    // without it. sharesOutstanding changes slowly enough that recomputing
+                    // here every 5 min with a fresh price is a better number either way.
+                    if (fund.getSharesOutstanding() != null && fund.getSharesOutstanding() > 0) {
+                        Double price = prevClose != null ? prevClose : (open != null ? open : fund.getPrevClose());
+                        if (price == null) price = fund.getOpen();
                         if (price != null && price > 0) {
                             fund.setMarketCap(fund.getSharesOutstanding() * price);
                         }
@@ -542,8 +556,11 @@ public class TastyTradeService {
                     // nunca se refrescaban en este job periodico. TastyTrade ya los trae en
                     // esta misma llamada, asi que actualizarlos aqui no agrega ninguna
                     // peticion REST nueva.
-                    Double marketCap = safeConvertToDouble(m.get("market-cap"));
-                    if (marketCap != null && marketCap > 0) fund.setMarketCap(marketCap);
+                    // marketCap NO se toca aqui: refreshOhlcData ya lo recalcula cada 5 min
+                    // (sharesOutstanding x precio), y es la fuente principal -- este REST de
+                    // TastyTrade solo se veria por hasta 5 minutos antes de ser sobreescrito,
+                    // asi que mantenerlo aqui solo generaba la inconsistencia de 2 fuentes con
+                    // 2 cadencias distintas para el mismo campo.
                     Double eps = safeConvertToDouble(m.get("earnings-per-share"));
                     if (eps != null) fund.setEps(eps);
                     Double dividendAmount = safeConvertToDouble(m.get("dividend-rate-per-share"));
@@ -625,14 +642,19 @@ public class TastyTradeService {
     }
 
     private void refreshSharesOutstandingFromSecEdgar() {
-        List<String> missing = new ArrayList<>();
-        for (var entry : fundamentalsCache.entrySet()) {
-            if (entry.getValue().getSharesOutstanding() == null) missing.add(entry.getKey());
-        }
-        if (!missing.isEmpty()) {
-            log.info("SEC EDGAR refresh: {} symbols missing sharesOutstanding", missing.size());
+        // Re-verifies every cached symbol daily, not just ones still missing a
+        // value: a symbol that already has sharesOutstanding can still change
+        // (buybacks, issuances) and would otherwise stay stuck at whatever was
+        // true the day it first got cached. This costs nothing extra: SEC's
+        // full companyfacts.zip is downloaded once a day regardless of how many
+        // symbols we ask about, so filtering to "missing only" was only
+        // narrowing which symbols we bothered to read out of a file already
+        // sitting on disk.
+        List<String> allCached = new ArrayList<>(fundamentalsCache.keySet());
+        if (!allCached.isEmpty()) {
+            log.info("SEC EDGAR refresh: re-checking sharesOutstanding for {} symbols", allCached.size());
             try {
-                Map<String, Long> shares = secEdgarClient.fetchSharesOutstanding(missing);
+                Map<String, Long> shares = secEdgarClient.fetchSharesOutstanding(allCached);
                 for (var entry : shares.entrySet()) {
                     FundamentalData fund = fundamentalsCache.get(entry.getKey());
                     if (fund == null) continue;
@@ -647,6 +669,31 @@ public class TastyTradeService {
             }
         }
         logSharesOutstandingCoverage();
+    }
+
+    private void refreshEquityClassification() {
+        List<String> allSymbols = new ArrayList<>(fundamentalsCache.keySet());
+        if (allSymbols.isEmpty()) return;
+        int updated = 0;
+        for (int i = 0; i < allSymbols.size(); i += 250) {
+            int end = Math.min(i + 250, allSymbols.size());
+            try {
+                List<Map<String, Object>> equities = tastyTradeClient.getEquitiesBatch(allSymbols.subList(i, end));
+                for (Map<String, Object> eq : equities) {
+                    String sym = (String) eq.get("symbol");
+                    if (sym == null) continue;
+                    FundamentalData fund = fundamentalsCache.get(sym.toUpperCase());
+                    if (fund == null) continue;
+                    boolean isEtf = Boolean.TRUE.equals(eq.get("is-etf"));
+                    fund.setIsEtf(isEtf);
+                    fund.setSecurityType(classifySecurityType(sym.toUpperCase(), isEtf, (String) eq.get("description")));
+                    updated++;
+                }
+            } catch (Exception e) {
+                log.warn("Equity classification refresh chunk at {} failed: {}", i, e.getMessage());
+            }
+        }
+        log.info("Equity classification refresh: {} symbols updated", updated);
     }
 
     private String classifySecurityType(String symbol, boolean isEtf, String description) {
