@@ -268,15 +268,14 @@ public class DxLinkClient {
         if (defaultChannel == null || !defaultChannel.isReady()) return;
         fundamentalsSubscribedSymbols.addAll(symbols);
         int chunkSize = 200;
-        // 2026-07-27: subscribing all ~13,600 symbols at the original 50ms pace (a
-        // ~3.3s burst) only got a Profile snapshot back for ~3,500 of them, arriving
-        // in one burst matching the send duration and then never again -- the
-        // symbols that DID answer skewed toward the front of the send order (e.g.
-        // alphabetically-early tickers), not toward low liquidity/coverage, which
-        // points at dxFeed's snapshot-generation backend falling behind our send
-        // rate rather than a real data-availability gap. Slowing the pace 10x to
-        // see whether that recovers coverage.
-        int delayMs = 500;
+        // 2026-07-27: subscribing all ~13,600 symbols at 50ms/chunk got a Profile
+        // snapshot back for ~3,500 (26.7%); bumping to 500ms/chunk got ~5,100
+        // (38.9%) -- the receive-burst duration tracked the send duration exactly
+        // both times, confirming dxFeed's snapshot-generation backend (not just raw
+        // event throughput) is the bottleneck. Improvement wasn't proportional to
+        // the 10x slowdown though, so there's likely also an absolute cap, not just
+        // a "go slower" fix. Trying 2000ms next to see where coverage lands.
+        int delayMs = 2000;
         for (int i = 0; i < symbols.size(); i += chunkSize) {
             int end = Math.min(i + chunkSize, symbols.size());
             defaultChannel.subscribeFundamentalsBatch(symbols.subList(i, end));
