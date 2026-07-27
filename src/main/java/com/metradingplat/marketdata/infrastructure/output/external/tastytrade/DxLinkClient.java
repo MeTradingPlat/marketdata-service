@@ -368,6 +368,20 @@ public class DxLinkClient {
         private volatile boolean ready = false;
         private final Set<BiConsumer<String, MarketDataStreamDTO>> marketDataListeners = ConcurrentHashMap.newKeySet();
 
+        // Temporary (2026-07-27): dumps the raw compact array for the first few
+        // messages of a type so the actual wire shape can be read directly,
+        // instead of guessing at forEachRecord's boundary-detection bug from
+        // symptoms. Remove once Profile/TradeETH parsing is fixed and re-enabled.
+        private final Map<String, AtomicInteger> diagnosticLogCounts = new ConcurrentHashMap<>();
+        private static final int MAX_DIAGNOSTIC_LOGS_PER_TYPE = 5;
+
+        private void logRawRecordsForDiagnosis(String type, JsonNode data, int recordStart, int recordEnd) {
+            int seen = diagnosticLogCounts.computeIfAbsent(type, k -> new AtomicInteger(0)).incrementAndGet();
+            if (seen > MAX_DIAGNOSTIC_LOGS_PER_TYPE) return;
+            log.info("DIAGNOSTIC {} (#{}/{}): forEachRecord picked boundary [{},{}) out of {} total elements. Full raw batch: {}",
+                    type, seen, MAX_DIAGNOSTIC_LOGS_PER_TYPE, recordStart, recordEnd, data.size(), data);
+        }
+
         public DxLinkChannel(int id) { this.id = id; }
         public int getId() { return id; }
         public boolean isReady() { return ready; }
@@ -515,26 +529,26 @@ public class DxLinkClient {
                                     .build());
                         }
                         case "TradeETH" -> {
-                            long v = field(data, recordStart, IDX_ETH_VOL, recordEnd).asLong();
-                            long t = field(data, recordStart, IDX_ETH_TIME, recordEnd).asLong();
-                            FundamentalData f = FundamentalData.builder().symbol(symbol).build();
-                            if (isPreMarket(t)) f.setPreMarketVolume(v); else f.setPostMarketVolume(v);
-                            notifyFundamentals(symbol, f);
+                            // DISABLED 2026-07-27: forEachRecord finds record boundaries by
+                            // scanning for "the next textual node", which only works when a
+                            // record has exactly one textual field (the leading symbol). Confirmed
+                            // in prod logs that Profile's extra textual fields (tradingStatus,
+                            // statusReason, dividendFrequency) break that assumption -- records
+                            // got misaligned and "DxLink Profile received for ACTIVE"/"NaN" showed
+                            // up instead of real symbols. TradeETH's extendedTradingHours field is
+                            // unverified (no confirmed evidence either way), so it's paused too
+                            // until logRawRecordsForDiagnosis confirms its actual wire shape.
+                            logRawRecordsForDiagnosis(type, data, recordStart, recordEnd);
                         }
                         case "Profile" -> {
-                            log.info("DxLink Profile received for {}", symbol);
-                            notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol)
-                                    .sharesOutstanding(asNullableLong(field(data, recordStart, IDX_PROF_SHARES, recordEnd)))
-                                    .eps(extractNullableDouble(field(data, recordStart, IDX_PROF_EPS, recordEnd)))
-                                    .dividendAmount(extractNullableDouble(field(data, recordStart, IDX_PROF_DIV_AMT, recordEnd)))
-                                    .dividendFrequency(asNullableString(field(data, recordStart, IDX_PROF_DIV_FREQ, recordEnd)))
-                                    .tradingStatus(asNullableString(field(data, recordStart, IDX_PROF_STATUS, recordEnd)))
-                                    .statusReason(asNullableString(field(data, recordStart, IDX_PROF_STATUS_RSN, recordEnd)))
-                                    .haltStartTime(field(data, recordStart, IDX_PROF_HALT_START, recordEnd).asLong())
-                                    .haltEndTime(field(data, recordStart, IDX_PROF_HALT_END, recordEnd).asLong())
-                                    .beta(extractNullableDouble(field(data, recordStart, IDX_PROF_BETA, recordEnd)))
-                                    .floatShares(asNullableLong(field(data, recordStart, IDX_PROF_FLOAT, recordEnd)))
-                                    .build());
+                            // DISABLED 2026-07-27: see TradeETH comment above -- this event has
+                            // 3 non-leading textual fields (dividendFrequency, tradingStatus,
+                            // statusReason), which is exactly what broke forEachRecord's
+                            // boundary detection. Confirmed via prod logs: "DxLink Profile
+                            // received for ACTIVE"/"NaN" instead of real symbols, meaning fields
+                            // were being merged under the wrong symbol. Paused until the parser
+                            // is fixed and re-verified against real traffic.
+                            logRawRecordsForDiagnosis(type, data, recordStart, recordEnd);
                         }
                         case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol)
                                 .impliedVolatility(extractNullableDouble(field(data, recordStart, IDX_GRK_IV, recordEnd)))
