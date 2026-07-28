@@ -357,6 +357,7 @@ public class DxLinkClient {
         public void addCandleListener(CandleCallback listener) { candleListeners.add(listener); }
         public void removeCandleListener(CandleCallback listener) { candleListeners.remove(listener); }
         public void addFundamentalListener(BiConsumer<String, FundamentalData> listener) { fundamentalListeners.add(listener); }
+        public void removeFundamentalListener(BiConsumer<String, FundamentalData> listener) { fundamentalListeners.remove(listener); }
         public void addGreeksListener(BiConsumer<String, OptionContract> listener) { greeksListeners.add(listener); }
         public void addMessageListener(BiConsumer<String, JsonNode> listener) { messageListeners.add(listener); }
         public void addMarketDataListener(BiConsumer<String, MarketDataStreamDTO> listener) { marketDataListeners.add(listener); }
