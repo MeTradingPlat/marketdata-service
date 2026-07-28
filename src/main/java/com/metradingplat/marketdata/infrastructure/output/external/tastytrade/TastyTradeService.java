@@ -241,6 +241,8 @@ public class TastyTradeService {
                 5, 5, TimeUnit.MINUTES);
         scheduler.scheduleAtFixedRate(this::refreshOhlcData,
                 5, 5, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(this::fillMissingSharesOutstandingFromSecEdgar,
+                5, 5, TimeUnit.MINUTES);
 
         CompletableFuture.runAsync(() -> {
             try {
@@ -586,16 +588,17 @@ public class TastyTradeService {
         } catch (Exception e) {
             log.warn("Market-metrics refresh failed: {}", e.getMessage());
         }
-        fillMissingSharesOutstandingFromSecEdgar();
     }
 
     /**
-     * Gap-filler llamado despues de cada refresco de TastyTrade (cada 4h): revisa
-     * SOLO los simbolos que aun sigan sin sharesOutstanding contra el archivo de
-     * SEC EDGAR ya cacheado en disco (secEdgarClient.ensureCachedZip() reutiliza el
-     * de hoy si existe, no descarga de nuevo). El refresco diario completo de todos
-     * los simbolos sigue siendo refreshSharesOutstandingFromSecEdgar(); esto es
-     * barato porque la lista de "todavia falta" es pequena y no toca red.
+     * Gap-filler independiente, cada 5 min (igual que refreshOhlcData, del cual
+     * depende marketCap): revisa SOLO los simbolos que aun sigan sin sharesOutstanding
+     * contra el archivo de SEC EDGAR ya cacheado en disco (secEdgarClient.ensureCachedZip()
+     * reutiliza el de hoy si existe, no descarga de nuevo). TastyTrade nunca trae
+     * sharesOutstanding, asi que sin esto el campo se quedaria null para siempre en
+     * los simbolos que el refresco diario no alcanzo a resolver. El refresco diario
+     * completo de todos los simbolos sigue siendo refreshSharesOutstandingFromSecEdgar();
+     * esto es barato porque no toca red, solo CPU local sobre el archivo ya en disco.
      */
     private void fillMissingSharesOutstandingFromSecEdgar() {
         List<String> stillMissing = new ArrayList<>();
