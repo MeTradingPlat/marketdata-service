@@ -1024,7 +1024,7 @@ public class TastyTradeService {
     private synchronized void ensureCandleChannel() {
         if (candleChannel != null && candleChannel.isReady()) return;
         try {
-            candleChannel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
+            candleChannel = dxLinkClient.openNewChannel(Set.of("Candle")).get(10, TimeUnit.SECONDS);
             candleChannel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
@@ -1215,7 +1215,7 @@ public class TastyTradeService {
             int consecutiveFails = 0;
             for (int c = 0; c < channelCount; c++) {
                 try {
-                    DxLinkClient.DxLinkChannel ch = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
+                    DxLinkClient.DxLinkChannel ch = dxLinkClient.openNewChannel(Set.of("Candle")).get(10, TimeUnit.SECONDS);
                     openedChannels.add(ch);
                     consecutiveFails = 0;
                 } catch (Exception e) {

@@ -87,6 +87,10 @@ public class DxLinkClient {
     private static final List<String> TRADE_ETH_FIELDS = List.of("eventSymbol", "dayVolume", "extendedTradingHours", "time");
     private static final List<String> GREEKS_FIELDS = List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice");
     private static final List<String> CANDLE_FIELDS = List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility");
+    private static final Map<String, Object> ALL_EVENT_FIELDS = Map.of(
+            "Quote", QUOTE_FIELDS, "Trade", TRADE_FIELDS, "Summary", SUMMARY_FIELDS,
+            "Profile", PROFILE_FIELDS, "TradeETH", TRADE_ETH_FIELDS, "Greeks", GREEKS_FIELDS,
+            "Message", List.of("eventSymbol", "eventTime", "messageType", "message"), "Candle", CANDLE_FIELDS);
 
     private static final int IDX_TRADE_PRICE = 1;
     private static final int IDX_TRADE_VOLUME = 2;
@@ -137,10 +141,12 @@ public class DxLinkClient {
     }
     public void setTokenRefresher(Supplier<String> tokenRefresher) { this.tokenRefresher = tokenRefresher; }
 
-    public CompletableFuture<DxLinkChannel> openNewChannel() {
+    public CompletableFuture<DxLinkChannel> openNewChannel() { return openNewChannel(null); }
+
+    public CompletableFuture<DxLinkChannel> openNewChannel(Set<String> eventTypes) {
         if (!authenticated || session == null || !session.isOpen()) return CompletableFuture.failedFuture(new IllegalStateException("Not connected"));
         int newId = nextChannelId.addAndGet(2);
-        DxLinkChannel channel = new DxLinkChannel(newId);
+        DxLinkChannel channel = new DxLinkChannel(newId, eventTypes);
         channels.put(newId, channel);
         return channel.initialize();
     }
@@ -336,8 +342,15 @@ public class DxLinkClient {
         private final CompletableFuture<DxLinkChannel> initFuture = new CompletableFuture<>();
         private volatile boolean ready = false;
         private final Set<BiConsumer<String, MarketDataStreamDTO>> marketDataListeners = ConcurrentHashMap.newKeySet();
+        // Tipos de evento que este canal en particular declara en FEED_SETUP.
+        // null = todos (comportamiento historico, usado por el canal por defecto
+        // que sirve varios propositos). Canales de un solo uso (ej. historial de
+        // velas) declaran solo lo que realmente necesitan, para no cargar cada
+        // canal con la capacidad de los 8 tipos de evento si solo va a usar uno.
+        private final Set<String> eventTypes;
 
-        public DxLinkChannel(int id) { this.id = id; }
+        public DxLinkChannel(int id) { this(id, null); }
+        public DxLinkChannel(int id, Set<String> eventTypes) { this.id = id; this.eventTypes = eventTypes; }
         public int getId() { return id; }
         public boolean isReady() { return ready; }
 
@@ -416,7 +429,12 @@ public class DxLinkClient {
             // web de TastyTrade segun su documentacion oficial (developer.tastytrade.com/
             // streaming-market-data) -- deja que el servidor agrupe varios eventos en
             // menos mensajes antes de mandarlos, en vez de mandar cada uno individual.
-            sendMessage(Map.of("type", "FEED_SETUP", "channel", id, "acceptAggregationPeriod", 0.1, "acceptDataFormat", "COMPACT", "acceptEventFields", Map.of("Quote", QUOTE_FIELDS, "Trade", TRADE_FIELDS, "Summary", SUMMARY_FIELDS, "Profile", PROFILE_FIELDS, "TradeETH", TRADE_ETH_FIELDS, "Greeks", GREEKS_FIELDS, "Message", List.of("eventSymbol", "eventTime", "messageType", "message"), "Candle", CANDLE_FIELDS)));
+            Map<String, Object> fields = eventTypes == null
+                    ? ALL_EVENT_FIELDS
+                    : ALL_EVENT_FIELDS.entrySet().stream()
+                            .filter(e -> eventTypes.contains(e.getKey()))
+                            .collect(java.util.stream.Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            sendMessage(Map.of("type", "FEED_SETUP", "channel", id, "acceptAggregationPeriod", 0.1, "acceptDataFormat", "COMPACT", "acceptEventFields", fields));
         }
 
         private void handleConfigured() { this.ready = true; initFuture.complete(this); if (this == defaultChannel) startKeepalive(); }
