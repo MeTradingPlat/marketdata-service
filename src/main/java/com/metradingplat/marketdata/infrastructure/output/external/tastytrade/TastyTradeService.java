@@ -1110,14 +1110,14 @@ public class TastyTradeService {
      * overall hard timeout. This is also safer than assuming a single message contains
      * the whole batch, in case dxLink ever splits a large history across more than one.
      *
-     * EXPERIMENTO temporal: subido de 1000 a 5000ms para probar si dxLink's backpressure
-     * (documentado oficialmente: el servidor baja la velocidad de entrega segun que tan
-     * rapido consume el cliente) estaba causando cortes prematuros en lotes grandes
-     * (1000 simbolos en frio dieron solo 10% de cobertura con 1000ms). El limite duro de
-     * 30s (mas abajo) sigue igual, asi que esto no puede alargar una respuesta normal
-     * mas alla de ese tope -- solo evita rendirse demasiado rapido ante un silencio breve.
+     * Se probo subir esto a 5000ms para descartar que el backpressure documentado de
+     * dxLink (el servidor baja la velocidad de entrega segun consumo del cliente) causara
+     * cortes prematuros en lotes grandes -- 1000 simbolos en frio dieron exactamente los
+     * mismos 100 simbolos/478 velas con 1000ms y con 5000ms (mas eventos crudos duplicados,
+     * cero simbolos nuevos), descartando esa hipotesis. El techo es real del lado de dxLink,
+     * no un heuristico nuestro demasiado impaciente -- no vale la pena la latencia extra.
      */
-    private static final long CANDLE_QUIET_PERIOD_MS = 5000;
+    private static final long CANDLE_QUIET_PERIOD_MS = 1000;
 
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
         log.info("Fetching candles via DxLink: {} symbols, timeframe={}", symbols.size(), timeframe);
