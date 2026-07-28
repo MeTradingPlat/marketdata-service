@@ -586,6 +586,38 @@ public class TastyTradeService {
         } catch (Exception e) {
             log.warn("Market-metrics refresh failed: {}", e.getMessage());
         }
+        fillMissingSharesOutstandingFromSecEdgar();
+    }
+
+    /**
+     * Gap-filler llamado despues de cada refresco de TastyTrade (cada 4h): revisa
+     * SOLO los simbolos que aun sigan sin sharesOutstanding contra el archivo de
+     * SEC EDGAR ya cacheado en disco (secEdgarClient.ensureCachedZip() reutiliza el
+     * de hoy si existe, no descarga de nuevo). El refresco diario completo de todos
+     * los simbolos sigue siendo refreshSharesOutstandingFromSecEdgar(); esto es
+     * barato porque la lista de "todavia falta" es pequena y no toca red.
+     */
+    private void fillMissingSharesOutstandingFromSecEdgar() {
+        List<String> stillMissing = new ArrayList<>();
+        for (var entry : fundamentalsCache.entrySet()) {
+            if (entry.getValue().getSharesOutstanding() == null) stillMissing.add(entry.getKey());
+        }
+        if (stillMissing.isEmpty()) return;
+        log.info("SEC EDGAR gap-fill: {} symbols still missing sharesOutstanding", stillMissing.size());
+        try {
+            Map<String, Long> shares = secEdgarClient.fetchSharesOutstanding(stillMissing);
+            for (var entry : shares.entrySet()) {
+                FundamentalData fund = fundamentalsCache.get(entry.getKey());
+                if (fund == null) continue;
+                fund.setSharesOutstanding(entry.getValue());
+                if (fund.getFloatShares() == null) {
+                    fund.setFloatShares(Math.round(entry.getValue() * 0.90));
+                }
+            }
+            log.info("SEC EDGAR gap-fill: filled sharesOutstanding for {} symbols", shares.size());
+        } catch (Exception e) {
+            log.warn("SEC EDGAR gap-fill failed: {}", e.getMessage());
+        }
     }
 
     private EnumTimeframe parseTimeframeFromLabel(String label) {
