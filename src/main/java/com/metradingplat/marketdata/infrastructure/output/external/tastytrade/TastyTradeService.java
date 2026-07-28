@@ -556,6 +556,8 @@ public class TastyTradeService {
                     // peticion REST nueva. marketCap NO se toca aqui: refreshOhlcData ya lo
                     // recalcula cada 5 min (y en vivo por bar/tick si hay suscripcion activa
                     // de velas), y es la fuente principal.
+                    Double betaVal = safeConvertToDouble(m.get("beta"));
+                    if (betaVal != null && betaVal != 0.0) fund.setBeta(betaVal);
                     Double eps = safeConvertToDouble(m.get("earnings-per-share"));
                     if (eps != null) fund.setEps(eps);
                     Double dividendAmount = safeConvertToDouble(m.get("dividend-rate-per-share"));
@@ -613,9 +615,7 @@ public class TastyTradeService {
                 FundamentalData fund = fundamentalsCache.get(entry.getKey());
                 if (fund == null) continue;
                 fund.setSharesOutstanding(entry.getValue());
-                if (fund.getFloatShares() == null) {
-                    fund.setFloatShares(Math.round(entry.getValue() * 0.90));
-                }
+                fund.setFloatShares(Math.round(entry.getValue() * 0.90));
             }
             log.info("SEC EDGAR gap-fill: filled sharesOutstanding for {} symbols", shares.size());
         } catch (Exception e) {
@@ -686,9 +686,10 @@ public class TastyTradeService {
                     FundamentalData fund = fundamentalsCache.get(entry.getKey());
                     if (fund == null) continue;
                     fund.setSharesOutstanding(entry.getValue());
-                    if (fund.getFloatShares() == null) {
-                        fund.setFloatShares(Math.round(entry.getValue() * 0.90));
-                    }
+                    // floatShares no tiene fuente propia -- siempre es 90% de
+                    // sharesOutstanding, asi que se recalcula junto con el,
+                    // sin importar si ya tenia un valor de un dia anterior.
+                    fund.setFloatShares(Math.round(entry.getValue() * 0.90));
                 }
                 log.info("SEC EDGAR refresh: updated sharesOutstanding for {} symbols", shares.size());
             } catch (Exception e) {
