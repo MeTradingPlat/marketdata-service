@@ -1122,15 +1122,19 @@ public class TastyTradeService {
     /**
      * EXPERIMENTO: por encima de este tamano, el histórico se reparte entre varios
      * canales DxLink en paralelo en vez de uno solo. Confirmado que el techo (~10%
-     * de cobertura en frio con 1 solo canal) es por canal, no por la conexion: con
-     * 10 canales de ~100 simbolos c/u se llego a 76.6%, pero 2/10 canales fallaron
-     * al abrir (probable causa: dxFeed recomienda evitar "muchos canales con pocas
-     * suscripciones cada uno"). Probando ahora con canales mas grandes (~200 c/u,
-     * menos canales totales) a ver si sube la confiabilidad de apertura.
+     * de cobertura en frio con 1 solo canal) es por canal, no por la conexion.
+     * Datos hasta ahora (1000 simbolos en frio):
+     *  - 10 canales de ~100: 76.6% cobertura, pero 2/10 canales fallaron al abrir.
+     *  - 5 canales de ~200: 38.5% cobertura, 0 fallos al abrir -- pero cada canal
+     *    igual se corta en ~100-120 simbolos entregados sin importar que le
+     *    asignamos 200, confirmando que el techo por canal ronda ~100-120 y
+     *    asignarle mas de eso a un canal solo desperdicia cupo.
+     * Probando ahora canales mas chicos (~50 c/u, mas canales totales) para ver
+     * si la apertura es mas confiable sin perder cobertura por canal.
      */
     private static final int CANDLE_CHANNEL_SPLIT_THRESHOLD = 150;
-    private static final int CANDLE_SYMBOLS_PER_CHANNEL = 200;
-    private static final int CANDLE_MAX_CHANNELS = 10;
+    private static final int CANDLE_SYMBOLS_PER_CHANNEL = 50;
+    private static final int CANDLE_MAX_CHANNELS = 20;
 
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
         int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
