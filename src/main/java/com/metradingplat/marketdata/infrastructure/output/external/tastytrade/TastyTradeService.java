@@ -1143,6 +1143,7 @@ public class TastyTradeService {
     private static final int CANDLE_SYMBOLS_PER_CHANNEL = 125;
     private static final int CANDLE_MAX_CHANNELS = 8;
     private static final int CANDLE_OPEN_MAX_CONSECUTIVE_FAILS = 2;
+    private static final long CANDLE_CHANNEL_OPEN_STAGGER_MS = 1000;
 
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
         int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
@@ -1213,7 +1214,7 @@ public class TastyTradeService {
                         break;
                     }
                 }
-                if (c < channelCount - 1) Thread.sleep(150);
+                if (c < channelCount - 1) Thread.sleep(CANDLE_CHANNEL_OPEN_STAGGER_MS);
             }
             if (openedChannels.isEmpty()) {
                 log.error("Candles failed: no channel could be opened");
