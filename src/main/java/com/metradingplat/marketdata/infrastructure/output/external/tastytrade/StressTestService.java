@@ -7,12 +7,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiConsumer;
 
 @Service
 @RequiredArgsConstructor
@@ -93,55 +89,5 @@ public class StressTestService {
 
     public Map<String, Object> getSystemStats() {
         return dxLinkClient.getConnectionStats();
-    }
-
-    /**
-     * Diagnostico temporal: mide cuantos simbolos realmente entregan Summary/
-     * Profile/TradeETH en un solo canal, antes de disenar el reparto multi-canal
-     * para fundamentales en vivo. Usa una conexion DxLink separada y dedicada
-     * para no competir con los canales de velas ni con el canal por defecto.
-     * Se elimina despues de la prueba.
-     */
-    public Map<String, Object> testFundamentalsChannelCapacity(List<String> symbols, int waitSeconds) {
-        DxLinkClient probe = null;
-        DxLinkClient.DxLinkChannel channel = null;
-        Set<String> received = ConcurrentHashMap.newKeySet();
-        BiConsumer<String, com.metradingplat.marketdata.domain.models.FundamentalData> listener =
-                (symbol, data) -> received.add(symbol);
-        try {
-            String token = tastyTradeClient.getApiQuoteToken();
-            String url = tastyTradeClient.getDxlinkUrl();
-            probe = new DxLinkClient();
-            probe.connect(url, token);
-            if (!probe.isConnected()) {
-                return Map.of("connected", false, "symbolsRequested", symbols.size());
-            }
-
-            channel = probe.openNewChannel(Set.of("Summary", "Profile", "TradeETH"))
-                    .get(10, TimeUnit.SECONDS);
-            channel.addFundamentalListener(listener);
-            channel.subscribeFundamentalsBatch(symbols);
-
-            long deadline = System.currentTimeMillis() + waitSeconds * 1000L;
-            while (System.currentTimeMillis() < deadline) {
-                Thread.sleep(1000);
-            }
-
-            return Map.of(
-                    "connected", true,
-                    "symbolsRequested", symbols.size(),
-                    "waitSeconds", waitSeconds,
-                    "symbolsWithData", received.size(),
-                    "sampleReceived", received.stream().limit(20).toList());
-        } catch (Exception e) {
-            log.error("Fundamentals channel capacity test failed: {}", e.getMessage());
-            return Map.of("error", String.valueOf(e.getMessage()), "symbolsWithData", received.size());
-        } finally {
-            if (channel != null) {
-                channel.removeFundamentalListener(listener);
-                channel.close();
-            }
-            if (probe != null) probe.disconnect();
-        }
     }
 }

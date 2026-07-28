@@ -29,10 +29,4 @@ public class StressTestController {
     public CompletableFuture<Map<String, Object>> validateOrdersBurst(@RequestParam(defaultValue = "10") int count) {
         return stressTestService.validateOrdersBurst(count);
     }
-
-    @PostMapping("/fundamentals-channel-capacity")
-    public Map<String, Object> testFundamentalsChannelCapacity(@RequestBody List<String> symbols,
-            @RequestParam(defaultValue = "60") int waitSeconds) {
-        return stressTestService.testFundamentalsChannelCapacity(symbols, waitSeconds);
-    }
 }
