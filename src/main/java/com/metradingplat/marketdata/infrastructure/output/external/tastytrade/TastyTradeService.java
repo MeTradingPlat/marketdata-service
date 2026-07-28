@@ -1120,21 +1120,29 @@ public class TastyTradeService {
     private static final long CANDLE_QUIET_PERIOD_MS = 1000;
 
     /**
-     * EXPERIMENTO: por encima de este tamano, el histórico se reparte entre varios
-     * canales DxLink en paralelo en vez de uno solo. Confirmado que el techo (~10%
-     * de cobertura en frio con 1 solo canal) es por canal, no por la conexion.
-     * Datos hasta ahora (1000 simbolos en frio):
-     *  - 10 canales de ~100: 76.6% cobertura, pero 2/10 canales fallaron al abrir.
-     *  - 5 canales de ~200: 38.5% cobertura, 0 fallos al abrir -- pero cada canal
-     *    igual se corta en ~100-120 simbolos entregados sin importar que le
-     *    asignamos 200, confirmando que el techo por canal ronda ~100-120 y
-     *    asignarle mas de eso a un canal solo desperdicia cupo.
-     * Probando ahora canales mas chicos (~50 c/u, mas canales totales) para ver
-     * si la apertura es mas confiable sin perder cobertura por canal.
+     * Por encima de este tamano, el histórico se reparte entre varios canales
+     * DxLink en paralelo en vez de uno solo. Confirmado que el techo (~10% de
+     * cobertura en frio con 1 solo canal) es por canal, no por la conexion.
+     * Datos empiricos (1000 simbolos en frio):
+     *  - 10 canales de ~100: 76.6% cobertura, 2/10 fallaron al abrir (el 9 y el 10).
+     *  - 5 canales de ~200: 38.5% cobertura, 0 fallos -- pero cada canal igual se
+     *    corta en ~100-120 simbolos entregados sin importar que le asignamos 200,
+     *    confirmando que el techo por canal ronda ~100-120.
+     *  - 20 canales de ~50: los primeros 8 abrieron bien, y DEL 9 EN ADELANTE
+     *    fallaron los 12 restantes, todos, sin excepcion -- confirma un techo
+     *    duro real de ~8 canales nuevos concurrentes por conexion, no un
+     *    problema de reintentos ni de tamano de canal. Con el codigo viejo (sin
+     *    corte temprano) esto hizo que la peticion tardara mas de 2 minutos,
+     *    reintentando canales que nunca iban a abrir -- de ahi el circuit
+     *    breaker de abajo.
+     * CANDLE_MAX_CHANNELS=8 refleja ese techo real. CANDLE_OPEN_MAX_CONSECUTIVE_FAILS
+     * corta la apertura apenas se detecta el techo, en vez de seguir intentando
+     * canal por canal hasta agotar CANDLE_MAX_CHANNELS.
      */
     private static final int CANDLE_CHANNEL_SPLIT_THRESHOLD = 150;
-    private static final int CANDLE_SYMBOLS_PER_CHANNEL = 50;
-    private static final int CANDLE_MAX_CHANNELS = 20;
+    private static final int CANDLE_SYMBOLS_PER_CHANNEL = 125;
+    private static final int CANDLE_MAX_CHANNELS = 8;
+    private static final int CANDLE_OPEN_MAX_CONSECUTIVE_FAILS = 2;
 
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
         int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
@@ -1184,16 +1192,26 @@ public class TastyTradeService {
             };
 
             // Abrir los canales con un pequeno stagger (no todos de golpe): abrir
-            // 10 canales nuevos instantaneamente resulto no ser confiable -- al
-            // menos uno no completaba el handshake CHANNEL_REQUEST/FEED_CONFIG
-            // dentro del timeout. Cada apertura es independiente: si una falla,
-            // se salta y se sigue con las demas en vez de tumbar todo el lote.
+            // muchos canales nuevos instantaneamente no es confiable. Cada apertura
+            // es independiente: si una falla, se salta y se sigue con las demas.
+            // Corte temprano: si hay CANDLE_OPEN_MAX_CONSECUTIVE_FAILS fallos
+            // seguidos, se asume que se llego al techo de canales concurrentes y
+            // se deja de intentar -- sin esto, una peticion grande podia quedarse
+            // reintentando canal por canal que nunca iban a abrir por minutos.
+            int consecutiveFails = 0;
             for (int c = 0; c < channelCount; c++) {
                 try {
                     DxLinkClient.DxLinkChannel ch = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
                     openedChannels.add(ch);
+                    consecutiveFails = 0;
                 } catch (Exception e) {
                     log.warn("Candle channel {}/{} failed to open: {}", c + 1, channelCount, e.getMessage());
+                    consecutiveFails++;
+                    if (consecutiveFails >= CANDLE_OPEN_MAX_CONSECUTIVE_FAILS) {
+                        log.warn("Stopping channel opening after {} consecutive failures, using {} opened channels",
+                                consecutiveFails, openedChannels.size());
+                        break;
+                    }
                 }
                 if (c < channelCount - 1) Thread.sleep(150);
             }
