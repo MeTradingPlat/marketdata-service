@@ -1110,14 +1110,19 @@ public class TastyTradeService {
      * overall hard timeout. This is also safer than assuming a single message contains
      * the whole batch, in case dxLink ever splits a large history across more than one.
      *
-     * Se probo subir esto a 5000ms para descartar que el backpressure documentado de
-     * dxLink (el servidor baja la velocidad de entrega segun consumo del cliente) causara
-     * cortes prematuros en lotes grandes -- 1000 simbolos en frio dieron exactamente los
-     * mismos 100 simbolos/478 velas con 1000ms y con 5000ms (mas eventos crudos duplicados,
-     * cero simbolos nuevos), descartando esa hipotesis. El techo es real del lado de dxLink,
-     * no un heuristico nuestro demasiado impaciente -- no vale la pena la latencia extra.
+     * Se probo subir esto a 5000ms ANTES del fix del piso de lookback para descartar
+     * backpressure -- dio identico resultado, asi que se dejo en 1000ms. Pero con el
+     * piso de lookback ya arreglado, el analisis de las respuestas (comparando
+     * multiples corridas de 1000 simbolos en frio) mostro que el ~20% que falta
+     * siempre es el mismo: los ultimos ~25 simbolos de CADA canal (los ultimos
+     * lotes de 10 enviados por canal), sin importar si son tickers ilíquidos o
+     * mega-caps como AAPL/GOOG/IBIT -- descarta que sea falta real de datos y
+     * apunta a que el corte por quiet-period de 1000ms llega antes de que el
+     * servidor termine de procesar las ultimas suscripciones encoladas por canal.
+     * Subiendo esto a 4000ms para probar si esos rezagados alcanzan a llegar --
+     * el timeout duro de 30s da margen de sobra (la corrida actual termina en ~15s).
      */
-    private static final long CANDLE_QUIET_PERIOD_MS = 1000;
+    private static final long CANDLE_QUIET_PERIOD_MS = 4000;
 
     /**
      * Por encima de este tamano, el histórico se reparte entre varios canales
