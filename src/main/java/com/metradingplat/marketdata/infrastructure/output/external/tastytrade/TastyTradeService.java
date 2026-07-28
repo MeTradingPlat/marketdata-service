@@ -1111,18 +1111,17 @@ public class TastyTradeService {
      * the whole batch, in case dxLink ever splits a large history across more than one.
      *
      * Se probo subir esto a 5000ms ANTES del fix del piso de lookback para descartar
-     * backpressure -- dio identico resultado, asi que se dejo en 1000ms. Pero con el
-     * piso de lookback ya arreglado, el analisis de las respuestas (comparando
-     * multiples corridas de 1000 simbolos en frio) mostro que el ~20% que falta
-     * siempre es el mismo: los ultimos ~25 simbolos de CADA canal (los ultimos
-     * lotes de 10 enviados por canal), sin importar si son tickers ilíquidos o
-     * mega-caps como AAPL/GOOG/IBIT -- descarta que sea falta real de datos y
-     * apunta a que el corte por quiet-period de 1000ms llega antes de que el
-     * servidor termine de procesar las ultimas suscripciones encoladas por canal.
-     * Subiendo esto a 4000ms para probar si esos rezagados alcanzan a llegar --
-     * el timeout duro de 30s da margen de sobra (la corrida actual termina en ~15s).
+     * backpressure -- dio identico resultado. Con el piso de lookback ya arreglado,
+     * el analisis de las respuestas (comparando multiples corridas de 1000 simbolos
+     * en frio) mostro que el ~20% que falta siempre es el mismo: los ultimos ~25
+     * simbolos de CADA canal, sin importar si son tickers iliquidos o mega-caps como
+     * AAPL/GOOG/IBIT. Se probo subir esto a 4000ms (con margen de sobra bajo el
+     * timeout de 30s) y NO recupero ni un solo simbolo de ese conjunto -- descarta
+     * que sea un corte prematuro por impaciencia y confirma que es un techo real
+     * de suscripciones aceptadas por canal (ver CANDLE_SYMBOLS_PER_CHANNEL). Se
+     * revierte a 1000ms porque esperar mas no ayuda a nada.
      */
-    private static final long CANDLE_QUIET_PERIOD_MS = 4000;
+    private static final long CANDLE_QUIET_PERIOD_MS = 1000;
 
     /**
      * Por encima de este tamano, el histórico se reparte entre varios canales
@@ -1143,9 +1142,21 @@ public class TastyTradeService {
      * CANDLE_MAX_CHANNELS=8 refleja ese techo real. CANDLE_OPEN_MAX_CONSECUTIVE_FAILS
      * corta la apertura apenas se detecta el techo, en vez de seguir intentando
      * canal por canal hasta agotar CANDLE_MAX_CHANNELS.
+     *
+     * CANDLE_SYMBOLS_PER_CHANNEL bajo de 125 a 100: comparando 5 corridas de 1000
+     * simbolos en frio, el ~20% que siempre falta son exactamente los simbolos en
+     * la posicion 100-124 de cada canal de 125 (los ultimos ~2 lotes de 10
+     * enviados) -- nunca los primeros 100, nunca al azar, y ni subir el quiet
+     * period a 4000ms (con margen de sobra bajo los 30s) recupero ninguno. Eso
+     * confirma que dxLink acepta ~100 suscripciones de historico por canal y el
+     * resto las ignora en silencio (no hay NACK), no que sean lentas. Con el techo
+     * de canales en 8, eso pone un limite duro de 800 simbolos por "oleada". Para
+     * pedidos mas grandes, fetchCandlesFromDxLink reparte en varias oleadas
+     * secuenciales (fetchCandleWave), cada una con canales nuevos, en vez de asumir
+     * que una sola pasada de 8 canales estaticos puede cubrir cualquier tamano.
      */
     private static final int CANDLE_CHANNEL_SPLIT_THRESHOLD = 150;
-    private static final int CANDLE_SYMBOLS_PER_CHANNEL = 125;
+    private static final int CANDLE_SYMBOLS_PER_CHANNEL = 100;
     private static final int CANDLE_MAX_CHANNELS = 8;
     private static final int CANDLE_OPEN_MAX_CONSECUTIVE_FAILS = 2;
     private static final long CANDLE_CHANNEL_OPEN_STAGGER_MS = 150;
@@ -1188,28 +1199,51 @@ public class TastyTradeService {
         String period = label.substring(0, label.length() - 1);
         ensureConnected();
         Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
+        // El techo real de ~100 suscripciones aceptadas por canal (ver comentario de
+        // CANDLE_SYMBOLS_PER_CHANNEL) pone un limite duro de CANDLE_MAX_CHANNELS*100
+        // simbolos por pasada. Pedidos mas grandes se reparten en oleadas
+        // secuenciales, cada una con canales nuevos (los canales de la oleada
+        // anterior ya se cerraron y no aceptan mas suscripciones).
+        int waveMax = CANDLE_MAX_CHANNELS * CANDLE_SYMBOLS_PER_CHANNEL;
+        List<String> remaining = new ArrayList<>(symbols);
+        int wave = 0;
+        while (!remaining.isEmpty()) {
+            int waveSize = Math.min(remaining.size(), waveMax);
+            List<String> waveSymbols = new ArrayList<>(remaining.subList(0, waveSize));
+            remaining.subList(0, waveSize).clear();
+            wave++;
+            log.info("Candle wave {}: {} symbols ({} remaining)", wave, waveSymbols.size(), remaining.size());
+            fetchCandleWave(waveSymbols, timeframe, period, type, fromTime, resultado);
+        }
+        return resultado;
+    }
+
+    private void fetchCandleWave(List<String> symbols, EnumTimeframe timeframe, String period, String type,
+            Instant fromTime, Map<String, List<Candle>> resultado) {
+        int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
+                ? Math.min(CANDLE_MAX_CHANNELS, (symbols.size() + CANDLE_SYMBOLS_PER_CHANNEL - 1) / CANDLE_SYMBOLS_PER_CHANNEL)
+                : 1;
         java.util.concurrent.atomic.AtomicLong lastEventAt = new java.util.concurrent.atomic.AtomicLong(0);
         List<DxLinkClient.DxLinkChannel> openedChannels = new ArrayList<>();
+        DxLinkClient.CandleCallback sharedListener = (symbol, candle, isSnapshotComplete) -> {
+            String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
+            candle.setSymbol(cleanSymbol);
+            candle.setTimeframe(timeframe);
+            List<Candle> list = resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>());
+            java.util.Optional<Candle> ex = list.stream()
+                    .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
+            if (ex.isPresent()) {
+                Candle c = ex.get();
+                if (candle.getHigh() != null && (c.getHigh() == null || candle.getHigh() > c.getHigh())) c.setHigh(candle.getHigh());
+                if (candle.getLow() != null && (c.getLow() == null || candle.getLow() < c.getLow())) c.setLow(candle.getLow());
+                if (candle.getClose() != null) c.setClose(candle.getClose());
+                if (candle.getVolume() != null) c.setVolume(candle.getVolume());
+            } else {
+                list.add(candle);
+            }
+            lastEventAt.set(System.currentTimeMillis());
+        };
         try {
-            DxLinkClient.CandleCallback sharedListener = (symbol, candle, isSnapshotComplete) -> {
-                String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
-                candle.setSymbol(cleanSymbol);
-                candle.setTimeframe(timeframe);
-                List<Candle> list = resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>());
-                java.util.Optional<Candle> ex = list.stream()
-                        .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
-                if (ex.isPresent()) {
-                    Candle c = ex.get();
-                    if (candle.getHigh() != null && (c.getHigh() == null || candle.getHigh() > c.getHigh())) c.setHigh(candle.getHigh());
-                    if (candle.getLow() != null && (c.getLow() == null || candle.getLow() < c.getLow())) c.setLow(candle.getLow());
-                    if (candle.getClose() != null) c.setClose(candle.getClose());
-                    if (candle.getVolume() != null) c.setVolume(candle.getVolume());
-                } else {
-                    list.add(candle);
-                }
-                lastEventAt.set(System.currentTimeMillis());
-            };
-
             // Abrir los canales con un pequeno stagger (no todos de golpe): abrir
             // muchos canales nuevos instantaneamente no es confiable. Cada apertura
             // es independiente: si una falla, se salta y se sigue con las demas.
@@ -1235,8 +1269,8 @@ public class TastyTradeService {
                 if (c < channelCount - 1) Thread.sleep(CANDLE_CHANNEL_OPEN_STAGGER_MS);
             }
             if (openedChannels.isEmpty()) {
-                log.error("Candles failed: no channel could be opened");
-                return Map.of();
+                log.error("Candle wave failed: no channel could be opened");
+                return;
             }
             // addCandleListener registra en una lista global del cliente (no por
             // canal), asi que basta con una sola registracion para recibir eventos
@@ -1244,13 +1278,12 @@ public class TastyTradeService {
             openedChannels.get(0).addCandleListener(sharedListener);
 
             int openedCount = openedChannels.size();
-            List<String> symList = new ArrayList<>(symbols);
-            int perChannel = (int) Math.ceil(symList.size() / (double) openedCount);
+            int perChannel = (int) Math.ceil(symbols.size() / (double) openedCount);
             for (int c = 0; c < openedCount; c++) {
                 int groupStart = c * perChannel;
-                if (groupStart >= symList.size()) break;
-                int groupEnd = Math.min(groupStart + perChannel, symList.size());
-                List<String> group = symList.subList(groupStart, groupEnd);
+                if (groupStart >= symbols.size()) break;
+                int groupEnd = Math.min(groupStart + perChannel, symbols.size());
+                List<String> group = symbols.subList(groupStart, groupEnd);
                 DxLinkClient.DxLinkChannel ch = openedChannels.get(c);
                 for (int i = 0; i < group.size(); i += 10) {
                     int end = Math.min(i + 10, group.size());
@@ -1264,10 +1297,9 @@ public class TastyTradeService {
                     ch.subscribeCandlesHistory(items, fromTime.toEpochMilli());
                 }
             }
-            // Con el piso de lookback proporcional a la temporalidad (arriba), un
-            // lote frio de 1000 simbolos M1 ya completa en ~15s con 8 canales --
-            // el tope de 150s que se probo para descartar la hipotesis de
-            // backpressure ya no hace falta, 30s da margen de sobra.
+            // Con el piso de lookback proporcional a la temporalidad y el reparto en
+            // oleadas de <=100 simbolos/canal, una oleada completa en ~15s -- el tope
+            // de 150s que se probo para descartar backpressure ya no hace falta.
             int timeoutSec = Math.min(10 + symbols.size() / 10, 30);
             long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
             while (System.currentTimeMillis() < deadline) {
@@ -1275,12 +1307,11 @@ public class TastyTradeService {
                 long last = lastEventAt.get();
                 if (last > 0 && System.currentTimeMillis() - last > CANDLE_QUIET_PERIOD_MS) break;
             }
-            return resultado;
         } catch (Exception e) {
-            log.error("Candles failed: {}", e.getMessage());
-            return resultado.isEmpty() ? Map.of() : resultado;
+            log.error("Candle wave failed: {}", e.getMessage());
         } finally {
             for (var ch : openedChannels) ch.close();
+            if (!openedChannels.isEmpty()) openedChannels.get(0).removeCandleListener(sharedListener);
         }
     }
 
