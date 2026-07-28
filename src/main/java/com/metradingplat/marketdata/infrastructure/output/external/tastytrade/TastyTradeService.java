@@ -1121,16 +1121,20 @@ public class TastyTradeService {
 
     /**
      * EXPERIMENTO: por encima de este tamano, el histórico se reparte entre varios
-     * canales DxLink en paralelo en vez de uno solo, para averiguar si el techo de
-     * ~100 simbolos que vimos en pruebas (1000 simbolos en frio -> siempre 100, sin
-     * importar el quiet-period) es un limite por canal o por conexion completa.
+     * canales DxLink en paralelo en vez de uno solo. Confirmado que el techo (~10%
+     * de cobertura en frio con 1 solo canal) es por canal, no por la conexion: con
+     * 10 canales de ~100 simbolos c/u se llego a 76.6%, pero 2/10 canales fallaron
+     * al abrir (probable causa: dxFeed recomienda evitar "muchos canales con pocas
+     * suscripciones cada uno"). Probando ahora con canales mas grandes (~200 c/u,
+     * menos canales totales) a ver si sube la confiabilidad de apertura.
      */
     private static final int CANDLE_CHANNEL_SPLIT_THRESHOLD = 150;
+    private static final int CANDLE_SYMBOLS_PER_CHANNEL = 200;
     private static final int CANDLE_MAX_CHANNELS = 10;
 
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
         int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
-                ? Math.min(CANDLE_MAX_CHANNELS, (symbols.size() + 99) / 100)
+                ? Math.min(CANDLE_MAX_CHANNELS, (symbols.size() + CANDLE_SYMBOLS_PER_CHANNEL - 1) / CANDLE_SYMBOLS_PER_CHANNEL)
                 : 1;
         log.info("Fetching candles via DxLink: {} symbols, timeframe={}, channels={}", symbols.size(), timeframe, channelCount);
         Instant now = Instant.now();
