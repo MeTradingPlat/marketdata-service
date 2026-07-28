@@ -29,20 +29,4 @@ public class StressTestController {
     public CompletableFuture<Map<String, Object>> validateOrdersBurst(@RequestParam(defaultValue = "10") int count) {
         return stressTestService.validateOrdersBurst(count);
     }
-
-    @PostMapping("/fundamentals-live-probe/start")
-    public Map<String, Object> startFundamentalsLiveProbe(@RequestBody List<String> symbols,
-            @RequestParam(defaultValue = "5") int connectionCount) {
-        return stressTestService.startFundamentalsLiveProbeMultiConnection(symbols, connectionCount);
-    }
-
-    @GetMapping("/fundamentals-live-probe/status")
-    public Map<String, Object> getFundamentalsLiveProbeStatus() {
-        return stressTestService.getFundamentalsLiveProbeStatus();
-    }
-
-    @PostMapping("/fundamentals-live-probe/stop")
-    public Map<String, Object> stopFundamentalsLiveProbe() {
-        return stressTestService.stopFundamentalsLiveProbe();
-    }
 }
