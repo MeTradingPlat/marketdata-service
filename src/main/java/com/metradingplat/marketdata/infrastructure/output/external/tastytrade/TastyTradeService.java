@@ -1175,23 +1175,33 @@ public class TastyTradeService {
                 lastEventAt.set(System.currentTimeMillis());
             };
 
-            // Abrir todos los canales primero (en paralelo) y recien despues
-            // mandar las suscripciones, para que las N tandas salgan practicamente
-            // al mismo tiempo en vez de una tras otra por la latencia de apertura.
-            List<CompletableFuture<DxLinkClient.DxLinkChannel>> openFutures = new ArrayList<>();
-            for (int c = 0; c < channelCount; c++) openFutures.add(dxLinkClient.openNewChannel());
-            for (var f : openFutures) {
-                DxLinkClient.DxLinkChannel ch = f.get(10, TimeUnit.SECONDS);
-                openedChannels.add(ch);
+            // Abrir los canales con un pequeno stagger (no todos de golpe): abrir
+            // 10 canales nuevos instantaneamente resulto no ser confiable -- al
+            // menos uno no completaba el handshake CHANNEL_REQUEST/FEED_CONFIG
+            // dentro del timeout. Cada apertura es independiente: si una falla,
+            // se salta y se sigue con las demas en vez de tumbar todo el lote.
+            for (int c = 0; c < channelCount; c++) {
+                try {
+                    DxLinkClient.DxLinkChannel ch = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
+                    openedChannels.add(ch);
+                } catch (Exception e) {
+                    log.warn("Candle channel {}/{} failed to open: {}", c + 1, channelCount, e.getMessage());
+                }
+                if (c < channelCount - 1) Thread.sleep(150);
+            }
+            if (openedChannels.isEmpty()) {
+                log.error("Candles failed: no channel could be opened");
+                return Map.of();
             }
             // addCandleListener registra en una lista global del cliente (no por
             // canal), asi que basta con una sola registracion para recibir eventos
             // de los N canales -- registrarlo en cada uno duplicaria el trabajo.
             openedChannels.get(0).addCandleListener(sharedListener);
 
+            int openedCount = openedChannels.size();
             List<String> symList = new ArrayList<>(symbols);
-            int perChannel = (int) Math.ceil(symList.size() / (double) channelCount);
-            for (int c = 0; c < channelCount; c++) {
+            int perChannel = (int) Math.ceil(symList.size() / (double) openedCount);
+            for (int c = 0; c < openedCount; c++) {
                 int groupStart = c * perChannel;
                 if (groupStart >= symList.size()) break;
                 int groupEnd = Math.min(groupStart + perChannel, symList.size());
