@@ -5,10 +5,15 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 
 @Service
 @RequiredArgsConstructor
@@ -18,6 +23,82 @@ public class StressTestService {
     private final TastyTradeService tastyTradeService;
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
+
+    /**
+     * Estado del probe de fundamentales en vivo (diagnostico temporal): una
+     * conexion DxLink DEDICADA y separada de la principal, para que sus canales
+     * nunca compitan con los que usan velas o el canal por defecto de Quote/Trade.
+     * Se elimina despues de la prueba.
+     */
+    private DxLinkClient fundamentalsProbeConnection;
+    private final List<DxLinkClient.DxLinkChannel> fundamentalsProbeChannels = new ArrayList<>();
+    private final Set<String> fundamentalsProbeReceived = ConcurrentHashMap.newKeySet();
+    private BiConsumer<String, com.metradingplat.marketdata.domain.models.FundamentalData> fundamentalsProbeListener;
+
+    public Map<String, Object> startFundamentalsLiveProbe(List<String> symbols, int channelCount) {
+        if (fundamentalsProbeConnection != null) {
+            return Map.of("error", "Probe already running, stop it first");
+        }
+        String token = tastyTradeClient.getApiQuoteToken();
+        String url = tastyTradeClient.getDxlinkUrl();
+        fundamentalsProbeConnection = new DxLinkClient();
+        fundamentalsProbeConnection.connect(url, token);
+        if (!fundamentalsProbeConnection.isConnected()) {
+            fundamentalsProbeConnection = null;
+            return Map.of("error", "Dedicated probe connection failed to authenticate");
+        }
+
+        fundamentalsProbeListener = (symbol, data) -> fundamentalsProbeReceived.add(symbol);
+        int perChannel = (int) Math.ceil(symbols.size() / (double) channelCount);
+        for (int c = 0; c < channelCount; c++) {
+            int start = c * perChannel;
+            if (start >= symbols.size()) break;
+            int end = Math.min(start + perChannel, symbols.size());
+            try {
+                DxLinkClient.DxLinkChannel ch = fundamentalsProbeConnection
+                        .openNewChannel(Set.of("Summary", "Profile", "TradeETH"))
+                        .get(10, TimeUnit.SECONDS);
+                fundamentalsProbeChannels.add(ch);
+                if (fundamentalsProbeChannels.size() == 1) ch.addFundamentalListener(fundamentalsProbeListener);
+                ch.subscribeFundamentalsBatch(symbols.subList(start, end));
+            } catch (Exception e) {
+                log.warn("Fundamentals probe channel {}/{} failed: {}", c + 1, channelCount, e.getMessage());
+            }
+        }
+
+        return Map.of(
+                "channelsRequested", channelCount,
+                "channelsOpened", fundamentalsProbeChannels.size(),
+                "symbolsSubscribed", symbols.size());
+    }
+
+    public Map<String, Object> getFundamentalsLiveProbeStatus() {
+        if (fundamentalsProbeConnection == null) {
+            return Map.of("running", false);
+        }
+        return Map.of(
+                "running", true,
+                "connected", fundamentalsProbeConnection.isConnected(),
+                "channelsOpen", fundamentalsProbeChannels.size(),
+                "symbolsWithData", fundamentalsProbeReceived.size());
+    }
+
+    public Map<String, Object> stopFundamentalsLiveProbe() {
+        if (fundamentalsProbeConnection == null) {
+            return Map.of("wasRunning", false);
+        }
+        int finalCount = fundamentalsProbeReceived.size();
+        if (!fundamentalsProbeChannels.isEmpty() && fundamentalsProbeListener != null) {
+            fundamentalsProbeChannels.get(0).removeFundamentalListener(fundamentalsProbeListener);
+        }
+        for (var ch : fundamentalsProbeChannels) ch.close();
+        fundamentalsProbeConnection.disconnect();
+        fundamentalsProbeChannels.clear();
+        fundamentalsProbeReceived.clear();
+        fundamentalsProbeConnection = null;
+        fundamentalsProbeListener = null;
+        return Map.of("wasRunning", true, "finalSymbolsWithData", finalCount);
+    }
 
     /**
      * Suscribe masivamente a una lista de símbolos para probar el throughput del WebSocket.
