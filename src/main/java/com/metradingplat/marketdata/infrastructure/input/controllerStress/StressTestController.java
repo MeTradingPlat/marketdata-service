@@ -32,8 +32,8 @@ public class StressTestController {
 
     @PostMapping("/fundamentals-live-probe/start")
     public Map<String, Object> startFundamentalsLiveProbe(@RequestBody List<String> symbols,
-            @RequestParam(defaultValue = "5") int channelCount) {
-        return stressTestService.startFundamentalsLiveProbe(symbols, channelCount);
+            @RequestParam(defaultValue = "5") int connectionCount) {
+        return stressTestService.startFundamentalsLiveProbeMultiConnection(symbols, connectionCount);
     }
 
     @GetMapping("/fundamentals-live-probe/status")
