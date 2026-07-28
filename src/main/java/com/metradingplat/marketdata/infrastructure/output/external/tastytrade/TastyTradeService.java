@@ -1245,7 +1245,14 @@ public class TastyTradeService {
                     ch.subscribeCandlesHistory(items, fromTime.toEpochMilli());
                 }
             }
-            int timeoutSec = Math.min(10 + symbols.size() / 10, 30);
+            // EXPERIMENTO: tope subido de 30 a 150s para probar si la entrega de
+            // dxLink solo se va desacelerando con el tiempo (backpressure real,
+            // sigue llegando mas si se espera mas) en vez de detenerse del todo --
+            // con canales abriendo rapido y sin fallos, el viejo tope de 30s se
+            // cumplia casi de inmediato despues de subscribir, cortando la espera
+            // mucho antes que en pruebas previas donde fallos de apertura ya
+            // consumian tiempo antes de siquiera empezar a suscribir.
+            int timeoutSec = Math.min(10 + symbols.size() / 10, 150);
             long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
             while (System.currentTimeMillis() < deadline) {
                 Thread.sleep(200);
