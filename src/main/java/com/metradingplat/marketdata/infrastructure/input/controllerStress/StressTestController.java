@@ -29,9 +29,4 @@ public class StressTestController {
     public CompletableFuture<Map<String, Object>> validateOrdersBurst(@RequestParam(defaultValue = "10") int count) {
         return stressTestService.validateOrdersBurst(count);
     }
-
-    @GetMapping("/dual-connection-channel-limit")
-    public Map<String, Object> testDualConnectionChannelLimit() {
-        return stressTestService.testDualConnectionChannelLimit();
-    }
 }
