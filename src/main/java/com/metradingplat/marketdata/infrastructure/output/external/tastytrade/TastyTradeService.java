@@ -1145,6 +1145,15 @@ public class TastyTradeService {
     private static final int CANDLE_OPEN_MAX_CONSECUTIVE_FAILS = 2;
     private static final long CANDLE_CHANNEL_OPEN_STAGGER_MS = 1000;
 
+    private static java.time.Duration minLookbackFor(EnumTimeframe timeframe) {
+        return switch (timeframe) {
+            case M1 -> java.time.Duration.ofDays(3);
+            case M5 -> java.time.Duration.ofDays(7);
+            case M15, M30 -> java.time.Duration.ofDays(10);
+            default -> java.time.Duration.ofDays(7);
+        };
+    }
+
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
         int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
                 ? Math.min(CANDLE_MAX_CHANNELS, (symbols.size() + CANDLE_SYMBOLS_PER_CHANNEL - 1) / CANDLE_SYMBOLS_PER_CHANNEL)
@@ -1152,12 +1161,16 @@ public class TastyTradeService {
         log.info("Fetching candles via DxLink: {} symbols, timeframe={}, channels={}", symbols.size(), timeframe, channelCount);
         Instant now = Instant.now();
         Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
-        // Floor the lookback at a week: for short timeframes (M1..H1) the natural
-        // bars*1.5 window can be as little as ~17h, which comes up empty outside
-        // market hours (weekends, holidays) since there's simply no candle within
-        // that window yet — not a bug, just too short a net. A week comfortably
-        // spans any weekend/holiday gap back to the last real trading session.
-        Instant minFromTime = now.minus(7, java.time.temporal.ChronoUnit.DAYS);
+        // Piso minimo de lookback para no venir vacios fuera de horario de mercado
+        // (fines de semana/feriados), pero proporcional a la temporalidad en vez de
+        // 7 dias fijos para todas: TastyTrade recomienda oficialmente 1 dia para M1,
+        // 1 semana para M5, 1 mes para M15/M30 (developer.tastytrade.com/streaming-market-data,
+        // seccion "Candle Events") -- pedir M1 con un piso de 7 dias fijo significaba
+        // ~10,080 eventos posibles por simbolo quando el propio proveedor recomienda
+        // ~1,440 para ese caso, saturando los canales con mucha mas data de la
+        // necesaria. Los pisos de abajo dejan margen para un fin de semana/feriado
+        // largo sin llegar a pedir el maximo que la guia oficial considera excesivo.
+        Instant minFromTime = now.minus(minLookbackFor(timeframe));
         if (fromTime.isAfter(minFromTime)) fromTime = minFromTime;
         // 270 days was cutting D1's natural ~3-year (bars*1.5) window down to ~9
         // months, and gutting W1/MO1 (whose natural window is decades) to a
