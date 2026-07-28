@@ -1119,8 +1119,20 @@ public class TastyTradeService {
      */
     private static final long CANDLE_QUIET_PERIOD_MS = 1000;
 
+    /**
+     * EXPERIMENTO: por encima de este tamano, el histórico se reparte entre varios
+     * canales DxLink en paralelo en vez de uno solo, para averiguar si el techo de
+     * ~100 simbolos que vimos en pruebas (1000 simbolos en frio -> siempre 100, sin
+     * importar el quiet-period) es un limite por canal o por conexion completa.
+     */
+    private static final int CANDLE_CHANNEL_SPLIT_THRESHOLD = 150;
+    private static final int CANDLE_MAX_CHANNELS = 10;
+
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Fetching candles via DxLink: {} symbols, timeframe={}", symbols.size(), timeframe);
+        int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
+                ? Math.min(CANDLE_MAX_CHANNELS, (symbols.size() + 99) / 100)
+                : 1;
+        log.info("Fetching candles via DxLink: {} symbols, timeframe={}, channels={}", symbols.size(), timeframe, channelCount);
         Instant now = Instant.now();
         Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
         // Floor the lookback at a week: for short timeframes (M1..H1) the natural
@@ -1142,9 +1154,9 @@ public class TastyTradeService {
         ensureConnected();
         Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
         java.util.concurrent.atomic.AtomicLong lastEventAt = new java.util.concurrent.atomic.AtomicLong(0);
+        List<DxLinkClient.DxLinkChannel> openedChannels = new ArrayList<>();
         try {
-            DxLinkClient.DxLinkChannel channel = dxLinkClient.openNewChannel().get(10, TimeUnit.SECONDS);
-            channel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
+            DxLinkClient.CandleCallback sharedListener = (symbol, candle, isSnapshotComplete) -> {
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
                 candle.setTimeframe(timeframe);
@@ -1161,18 +1173,41 @@ public class TastyTradeService {
                     list.add(candle);
                 }
                 lastEventAt.set(System.currentTimeMillis());
-            });
+            };
+
+            // Abrir todos los canales primero (en paralelo) y recien despues
+            // mandar las suscripciones, para que las N tandas salgan practicamente
+            // al mismo tiempo en vez de una tras otra por la latencia de apertura.
+            List<CompletableFuture<DxLinkClient.DxLinkChannel>> openFutures = new ArrayList<>();
+            for (int c = 0; c < channelCount; c++) openFutures.add(dxLinkClient.openNewChannel());
+            for (var f : openFutures) {
+                DxLinkClient.DxLinkChannel ch = f.get(10, TimeUnit.SECONDS);
+                openedChannels.add(ch);
+            }
+            // addCandleListener registra en una lista global del cliente (no por
+            // canal), asi que basta con una sola registracion para recibir eventos
+            // de los N canales -- registrarlo en cada uno duplicaria el trabajo.
+            openedChannels.get(0).addCandleListener(sharedListener);
+
             List<String> symList = new ArrayList<>(symbols);
-            for (int i = 0; i < symList.size(); i += 10) {
-                int end = Math.min(i + 10, symList.size());
-                List<Map<String, Object>> items = new java.util.ArrayList<>();
-                for (String s : symList.subList(i, end)) {
-                    Map<String, Object> item = new java.util.HashMap<>();
-                    item.put("symbol", String.format("%s{=%s%s}", s, period, type));
-                    item.put("type", "Candle");
-                    items.add(item);
+            int perChannel = (int) Math.ceil(symList.size() / (double) channelCount);
+            for (int c = 0; c < channelCount; c++) {
+                int groupStart = c * perChannel;
+                if (groupStart >= symList.size()) break;
+                int groupEnd = Math.min(groupStart + perChannel, symList.size());
+                List<String> group = symList.subList(groupStart, groupEnd);
+                DxLinkClient.DxLinkChannel ch = openedChannels.get(c);
+                for (int i = 0; i < group.size(); i += 10) {
+                    int end = Math.min(i + 10, group.size());
+                    List<Map<String, Object>> items = new java.util.ArrayList<>();
+                    for (String s : group.subList(i, end)) {
+                        Map<String, Object> item = new java.util.HashMap<>();
+                        item.put("symbol", String.format("%s{=%s%s}", s, period, type));
+                        item.put("type", "Candle");
+                        items.add(item);
+                    }
+                    ch.subscribeCandlesHistory(items, fromTime.toEpochMilli());
                 }
-                channel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
             }
             int timeoutSec = Math.min(10 + symbols.size() / 10, 30);
             long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
@@ -1181,11 +1216,12 @@ public class TastyTradeService {
                 long last = lastEventAt.get();
                 if (last > 0 && System.currentTimeMillis() - last > CANDLE_QUIET_PERIOD_MS) break;
             }
-            channel.close();
             return resultado;
         } catch (Exception e) {
             log.error("Candles failed: {}", e.getMessage());
             return resultado.isEmpty() ? Map.of() : resultado;
+        } finally {
+            for (var ch : openedChannels) ch.close();
         }
     }
 
