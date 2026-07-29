@@ -25,6 +25,8 @@ class CandleIdleEvictor {
 
     void evict(List<PooledCandleConnection> connections) {
         long now = System.currentTimeMillis();
+        int totalSymbols = connections.stream().flatMap(c -> c.channels.stream()).mapToInt(PooledCandleChannel::occupancy).sum();
+        log.info("Candle pool cleanup: checking {} symbols across {} connections", totalSymbols, connections.size());
         for (PooledCandleConnection conn : connections) {
             for (PooledCandleChannel ch : conn.channels) {
                 evictIdleSymbols(ch, now);

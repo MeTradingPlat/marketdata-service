@@ -58,8 +58,12 @@ public class CandleSubscriptionPool {
             candle.setSymbol(cleanSymbol);
             candle.setTimeframe(tf);
             String key = CandleCacheStore.key(cleanSymbol, tf);
+            // Un tick llegando NO cuenta como "alguien lo esta pidiendo": el
+            // reloj de inactividad (ver touchIfSubscribed) solo se resetea con
+            // peticiones reales de un consumidor, para que un simbolo liquido
+            // que nadie consulta ya se pueda desuscribir igual. Los datos
+            // siguen quedando cacheados para cuando alguien pregunte.
             Candle merged = cacheStore.merge(key, candle);
-            touchIfSubscribed(key);
             liveListeners.notify(key, merged);
             if (onEveryCandle != null) onEveryCandle.accept(merged);
         };
@@ -123,6 +127,9 @@ public class CandleSubscriptionPool {
         awaitHistory(onboardedKeys);
     }
 
+    // Unica fuente del reloj de inactividad: se llama solo desde una peticion
+    // real de un consumidor (ensureSubscribedBatch), nunca desde el merge de
+    // un tick en vivo.
     private boolean touchIfSubscribed(String key) {
         for (PooledCandleConnection conn : connections) {
             for (PooledCandleChannel ch : conn.channels) {
