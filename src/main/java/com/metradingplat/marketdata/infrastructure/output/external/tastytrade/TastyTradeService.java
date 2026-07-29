@@ -608,19 +608,22 @@ public class TastyTradeService {
         }
     }
 
+    // dxFeed omite el "1" de periodo en el symbol que devuelve para candles de
+    // periodo 1 (ej. suscribimos "AAPL{=1m}" pero el FEED_DATA que llega trae
+    // "AAPL{=m}", no "AAPL{=1m}") -- confirmado con logs en vivo: M5/M15 (que
+    // no arrancan en "1") llegaban bien, pero M1 se cacheaba bajo una clave
+    // "UNKNOWN" en vez de "M1" y por eso nunca alcanzaba a los listeners en
+    // vivo del WebSocket, aunque el historico si se actualizaba (por eso al
+    // cambiar de temporalidad y volver aparecian barras nuevas de golpe).
+    // Afecta a cualquier EnumTimeframe cuyo label empiece en "1" (M1/H1/D1/W1/MO1).
     private EnumTimeframe parseTimeframeFromLabel(String label) {
         if (label == null) return null;
-        return switch (label) {
-            case "1m" -> EnumTimeframe.M1;
-            case "5m" -> EnumTimeframe.M5;
-            case "15m" -> EnumTimeframe.M15;
-            case "30m" -> EnumTimeframe.M30;
-            case "1h" -> EnumTimeframe.H1;
-            case "1d" -> EnumTimeframe.D1;
-            case "1w" -> EnumTimeframe.W1;
-            case "1mo" -> EnumTimeframe.MO1;
-            default -> null;
-        };
+        for (EnumTimeframe tf : EnumTimeframe.values()) {
+            String canonical = tf.getLabel();
+            String withoutImplicitPeriod = canonical.startsWith("1") ? canonical.substring(1) : canonical;
+            if (label.equals(canonical) || label.equals(withoutImplicitPeriod)) return tf;
+        }
+        return null;
     }
 
     private void cleanupStaleCandles() {
@@ -1011,9 +1014,6 @@ public class TastyTradeService {
         try {
             candleChannel = dxLinkClient.openNewChannel(Set.of("Candle")).get(10, TimeUnit.SECONDS);
             candleChannel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
-                // DIAGNOSTICO TEMPORAL -- se elimina despues de la prueba.
-                log.info("DIAG live candle event: symbol={} close={} liveListenersForKey={}",
-                        symbol, candle.getClose(), candleLiveListeners.keySet());
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
                 java.util.regex.Matcher tfMatcher = java.util.regex.Pattern.compile("\\{=(.*?)\\}").matcher(symbol);
