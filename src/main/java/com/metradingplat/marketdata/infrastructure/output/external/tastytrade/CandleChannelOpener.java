@@ -12,10 +12,10 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class CandleChannelOpener {
 
-    // Abrir muchos canales nuevos de golpe no es confiable (ver
-    // CandleWaveFetcher). Un stagger chico entre aperturas, mas un corte
-    // temprano tras fallos seguidos, evita quedarse reintentando canales que
-    // ya sabemos que no van a abrir (techo real de ~8 canales/conexion).
+    // Abrir muchos canales nuevos de golpe no es confiable. Un stagger chico
+    // entre aperturas, mas un corte temprano tras fallos seguidos, evita
+    // quedarse reintentando canales que ya sabemos que no van a abrir
+    // (techo real de ~8 canales/conexion, medido esta sesion).
     private static final int MAX_CONSECUTIVE_FAILS = 2;
     private static final long OPEN_STAGGER_MS = 150;
 

@@ -18,7 +18,7 @@ public class StressTestService {
     private final TastyTradeService tastyTradeService;
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
-    private final CandleBurstOrchestrator candleBurstOrchestrator;
+    private final CandleSubscriptionPool candleSubscriptionPool;
     private final TastyTradeConfig tastyTradeConfig;
 
     /**
@@ -91,10 +91,10 @@ public class StressTestService {
 
     public Map<String, Object> getSystemStats() {
         Map<String, Object> stats = new java.util.HashMap<>(dxLinkClient.getConnectionStats());
-        int maxConcurrent = tastyTradeConfig.getCandleBurst().getMaxConcurrentConnections();
-        int available = candleBurstOrchestrator.getAvailableConnectionPermits();
-        stats.put("candleBurstConnectionsInUse", maxConcurrent - available);
-        stats.put("candleBurstConnectionsMax", maxConcurrent);
+        int maxConcurrent = tastyTradeConfig.getCandlePool().getMaxConcurrentConnections();
+        int available = candleSubscriptionPool.availableConnectionPermits();
+        stats.put("candlePoolConnectionsInUse", maxConcurrent - available);
+        stats.put("candlePoolConnectionsMax", maxConcurrent);
         return stats;
     }
 }

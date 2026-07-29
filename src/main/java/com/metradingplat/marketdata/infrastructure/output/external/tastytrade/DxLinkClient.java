@@ -442,6 +442,16 @@ public class DxLinkClient {
             sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "add", itemsWithTime));
         }
 
+        // Candle no tenia forma de desuscribirse por simbolo (unsubscribe() de
+        // arriba solo cubre Quote/Trade/TradeETH/Summary/Profile/Message) --
+        // necesario para el pool de suscripciones persistentes de velas, que
+        // libera simbolos individuales por inactividad sin cerrar el canal entero.
+        public void unsubscribeCandle(String symbol, String period, String type) {
+            sendMessage(Map.of("type", "FEED_SUBSCRIPTION", "channel", id, "remove", List.of(
+                Map.of("symbol", String.format("%s{=%s%s}", symbol, period, type), "type", "Candle")
+            )));
+        }
+
         public void close() { sendMessage(Map.of("type", "CHANNEL_CANCEL", "channel", id)); channels.remove(id); }
 
         private void handleOpened() {

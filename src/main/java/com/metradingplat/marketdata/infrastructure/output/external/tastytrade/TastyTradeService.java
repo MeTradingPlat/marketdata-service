@@ -61,8 +61,7 @@ public class TastyTradeService {
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
     private final FinraClient finraClient;
     private final SecEdgarClient secEdgarClient;
-    private final CandleWaveFetcher candleWaveFetcher;
-    private final CandleBurstOrchestrator candleBurstOrchestrator;
+    private final CandleSubscriptionPool candleSubscriptionPool;
     private final EquitiesUniverseProvider equitiesUniverseProvider;
     private final FundamentalsConnectionPool fundamentalsConnectionPool;
     private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
@@ -214,8 +213,7 @@ public class TastyTradeService {
                 millisUntilNextHour(3), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::refreshSharesOutstandingFromSecEdgar,
                 millisUntilNextHour(4), 24 * 3600_000, TimeUnit.MILLISECONDS);
-        scheduler.scheduleAtFixedRate(this::cleanupStaleCandles,
-                5, 5, TimeUnit.MINUTES);
+        candleSubscriptionPool.setOnEveryCandle(candle -> recomputeMarketCapFromLivePrice(candle.getSymbol(), candle.getClose()));
         scheduler.scheduleAtFixedRate(this::cleanupStaleRestQuotes,
                 5, 5, TimeUnit.MINUTES);
         scheduler.scheduleAtFixedRate(this::refreshOhlcData,
@@ -608,54 +606,6 @@ public class TastyTradeService {
         }
     }
 
-    // dxFeed omite el "1" de periodo en el symbol que devuelve para candles de
-    // periodo 1 (ej. suscribimos "AAPL{=1m}" pero el FEED_DATA que llega trae
-    // "AAPL{=m}", no "AAPL{=1m}") -- confirmado con logs en vivo: M5/M15 (que
-    // no arrancan en "1") llegaban bien, pero M1 se cacheaba bajo una clave
-    // "UNKNOWN" en vez de "M1" y por eso nunca alcanzaba a los listeners en
-    // vivo del WebSocket, aunque el historico si se actualizaba (por eso al
-    // cambiar de temporalidad y volver aparecian barras nuevas de golpe).
-    // Afecta a cualquier EnumTimeframe cuyo label empiece en "1" (M1/H1/D1/W1/MO1).
-    private EnumTimeframe parseTimeframeFromLabel(String label) {
-        if (label == null) return null;
-        for (EnumTimeframe tf : EnumTimeframe.values()) {
-            String canonical = tf.getLabel();
-            String withoutImplicitPeriod = canonical.startsWith("1") ? canonical.substring(1) : canonical;
-            if (label.equals(canonical) || label.equals(withoutImplicitPeriod)) return tf;
-        }
-        return null;
-    }
-
-    private void cleanupStaleCandles() {
-        long now = System.currentTimeMillis();
-        List<String> toRemove = new ArrayList<>();
-        log.info("Candle cleanup: checking {} cached symbols", candleLastAccess.size());
-        for (var entry : candleLastAccess.entrySet()) {
-            String key = entry.getKey();
-            long lastAccess = entry.getValue();
-            String[] parts = key.split("\\|");
-            if (parts.length != 2) continue;
-            String tfName = parts[1];
-            EnumTimeframe tf;
-            try { tf = EnumTimeframe.valueOf(tfName); }
-            catch (IllegalArgumentException e) { continue; }
-            long maxIdle = tf.getDuration().multipliedBy(2).toMillis();
-            if (maxIdle < 300_000) maxIdle = 300_000;
-            if (now - lastAccess > maxIdle) {
-                toRemove.add(key);
-                log.info("Candle auto-unsubscribe: {} (idle {}s, max {}s, timeframe={})",
-                        key, (now - lastAccess) / 1000, maxIdle / 1000, tfName);
-            }
-        }
-        if (!toRemove.isEmpty()) {
-            log.info("Auto-unsubscribing {} stale candle symbols", toRemove.size());
-            for (String key : toRemove) {
-                candleCache.remove(key);
-                candleLastAccess.remove(key);
-                subscribedCandleSymbols.remove(key);
-            }
-        }
-    }
 
     private void refreshSharesOutstandingFromSecEdgar() {
         // Re-verifica todos los simbolos cacheados cada dia, no solo los que aun
@@ -929,133 +879,27 @@ public class TastyTradeService {
         return result.getOrDefault(symbol, List.of());
     }
 
-    private DxLinkClient.DxLinkChannel candleChannel;
-    private final ConcurrentHashMap<String, List<Candle>> candleCache = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Long> candleLastAccess = new ConcurrentHashMap<>();
-    private final Set<String> subscribedCandleSymbols = ConcurrentHashMap.newKeySet();
-    private final ConcurrentHashMap<String, List<Consumer<Candle>>> candleLiveListeners = new ConcurrentHashMap<>();
-
     /**
      * Registra un listener para velas en vivo (usado por CandleWebSocketHandler).
-     * Se apoya en el mismo canal persistente/cache que getCandlesBatch, así que
-     * comparte el idle-cleanup existente en cleanupStaleCandles().
+     * getCandles() se asegura de que el simbolo quede suscrito en el pool antes
+     * de registrar el listener (idempotente si ya lo estaba).
      */
     public void addCandleLiveListener(String symbol, EnumTimeframe timeframe, Consumer<Candle> listener) {
-        ensureCandleChannel();
-        subscribeToCandles(List.of(symbol), timeframe);
-        String key = symbol.toUpperCase() + "|" + timeframe.name();
-        candleLastAccess.put(key, System.currentTimeMillis());
-        candleLiveListeners.computeIfAbsent(key, k -> new CopyOnWriteArrayList<>()).add(listener);
+        getCandles(symbol, timeframe);
+        candleSubscriptionPool.addLiveListener(symbol, timeframe, listener);
     }
 
     public void removeCandleLiveListener(String symbol, EnumTimeframe timeframe, Consumer<Candle> listener) {
-        String key = symbol.toUpperCase() + "|" + timeframe.name();
-        List<Consumer<Candle>> listeners = candleLiveListeners.get(key);
-        if (listeners == null) return;
-        listeners.remove(listener);
-        if (listeners.isEmpty()) candleLiveListeners.remove(key);
-    }
-
-    public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        Map<String, List<Candle>> result = new ConcurrentHashMap<>();
-        List<String> missing = new ArrayList<>();
-
-        for (String sym : symbols) {
-            String key = sym.toUpperCase() + "|" + timeframe.name();
-            candleLastAccess.put(key, System.currentTimeMillis());
-            List<Candle> cached = candleCache.get(key);
-            if (cached != null) {
-                if (!cached.isEmpty()) {
-                    List<Candle> sorted = cached.stream()
-                            .filter(c -> c.getTimestamp() != null)
-                            .sorted(java.util.Comparator.comparing(Candle::getTimestamp))
-                            .collect(java.util.stream.Collectors.toList());
-                    if (sorted.size() > bars) sorted = sorted.subList(sorted.size() - bars, sorted.size());
-                    result.put(sym.toUpperCase(), sorted);
-                }
-            } else {
-                missing.add(sym);
-            }
-        }
-
-        if (!missing.isEmpty()) {
-            log.info("Candle cache miss for {}/{} symbols, fetching via persistent channel", missing.size(), symbols.size());
-            ensureCandleChannel();
-            if (candleChannel != null) {
-                subscribeToCandles(missing, timeframe);
-                Map<String, List<Candle>> fetched = fetchCandlesFromDxLink(missing, timeframe, 700);
-                for (var entry : fetched.entrySet()) {
-                    String key = entry.getKey() + "|" + timeframe.name();
-                    candleCache.put(key, entry.getValue() != null ? entry.getValue() : List.of());
-                }
-                for (String sym : missing) {
-                    String key = sym.toUpperCase() + "|" + timeframe.name();
-                    candleCache.putIfAbsent(key, List.of());
-                }
-                for (String sym : missing) {
-                    String key = sym.toUpperCase() + "|" + timeframe.name();
-                    List<Candle> fromCache = candleCache.get(key);
-                    if (fromCache != null && !fromCache.isEmpty()) {
-                        List<Candle> sorted = fromCache.stream()
-                                .filter(c -> c.getTimestamp() != null)
-                                .sorted(java.util.Comparator.comparing(Candle::getTimestamp))
-                                .collect(java.util.stream.Collectors.toList());
-                        if (sorted.size() > bars) sorted = sorted.subList(sorted.size() - bars, sorted.size());
-                        result.put(sym.toUpperCase(), sorted);
-                    }
-                }
-            }
-        }
-        return result;
-    }
-
-    private synchronized void ensureCandleChannel() {
-        if (candleChannel != null && candleChannel.isReady()) return;
-        try {
-            candleChannel = dxLinkClient.openNewChannel(Set.of("Candle")).get(10, TimeUnit.SECONDS);
-            candleChannel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
-                String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
-                candle.setSymbol(cleanSymbol);
-                java.util.regex.Matcher tfMatcher = java.util.regex.Pattern.compile("\\{=(.*?)\\}").matcher(symbol);
-                String tfLabel = tfMatcher.find() ? tfMatcher.group(1) : "UNKNOWN";
-                EnumTimeframe tf = parseTimeframeFromLabel(tfLabel);
-                if (tf != null) candle.setTimeframe(tf);
-                String key = cleanSymbol.toUpperCase() + "|" + (tf != null ? tf.name() : "UNKNOWN");
-                List<Candle> list = candleCache.computeIfAbsent(key, k -> new java.util.ArrayList<>());
-                java.util.Optional<Candle> existing = list.stream()
-                        .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
-                Candle merged;
-                if (existing.isPresent()) {
-                    merged = existing.get();
-                    if (candle.getHigh() != null && (merged.getHigh() == null || candle.getHigh() > merged.getHigh())) merged.setHigh(candle.getHigh());
-                    if (candle.getLow() != null && (merged.getLow() == null || candle.getLow() < merged.getLow())) merged.setLow(candle.getLow());
-                    if (candle.getClose() != null) merged.setClose(candle.getClose());
-                    if (candle.getVolume() != null) merged.setVolume(candle.getVolume());
-                } else {
-                    if (list.size() >= 2000) list.remove(0);
-                    list.add(candle);
-                    merged = candle;
-                }
-                candleLastAccess.put(key, System.currentTimeMillis());
-                List<Consumer<Candle>> liveListeners = candleLiveListeners.get(key);
-                if (liveListeners != null) {
-                    for (Consumer<Candle> liveListener : liveListeners) liveListener.accept(merged);
-                }
-                recomputeMarketCapFromLivePrice(cleanSymbol, merged.getClose());
-            });
-            log.info("Persistent candle channel opened");
-        } catch (Exception e) {
-            log.error("Failed to open candle channel", e);
-            candleChannel = null;
-        }
+        candleSubscriptionPool.removeLiveListener(symbol, timeframe, listener);
     }
 
     /**
      * Recalcula marketCap (sharesOutstanding x precio) cada vez que llega una vela
-     * en vivo para un simbolo con suscripcion activa en el canal persistente de
-     * velas -- ya sea por un chart del frontend o porque un escaner la sigue
-     * pidiendo. En cuanto nadie la pide, cleanupStaleCandles() la da de baja y
-     * marketCap vuelve a depender solo del refresco REST de 5 min (refreshOhlcData).
+     * en vivo para un simbolo con suscripcion activa en el pool -- ya sea por un
+     * chart del frontend o porque un escaner lo sigue pidiendo. En cuanto nadie
+     * lo pide, CandleIdleEvictor lo da de baja y marketCap vuelve a depender solo
+     * del refresco REST de 5 min (refreshOhlcData). Enganchado a
+     * candleSubscriptionPool.setOnEveryCandle() en init().
      */
     private void recomputeMarketCapFromLivePrice(String symbol, Double price) {
         if (price == null || price <= 0) return;
@@ -1063,38 +907,6 @@ public class TastyTradeService {
         if (fund == null || fund.getSharesOutstanding() == null || fund.getSharesOutstanding() <= 0) return;
         fund.setMarketCap(fund.getSharesOutstanding() * price);
     }
-
-    private void subscribeToCandles(List<String> symbols, EnumTimeframe timeframe) {
-        String label = timeframe.getLabel();
-        String type = label.substring(label.length() - 1);
-        String period = label.substring(0, label.length() - 1);
-        List<String> newSymbols = new ArrayList<>();
-        for (String s : symbols) {
-            if (subscribedCandleSymbols.add(s.toUpperCase() + "|" + timeframe.name())) {
-                newSymbols.add(s);
-            }
-        }
-        if (newSymbols.isEmpty()) return;
-        log.info("Subscribing {} candle symbols to persistent channel", newSymbols.size());
-        for (int i = 0; i < newSymbols.size(); i += 200) {
-            int end = Math.min(i + 200, newSymbols.size());
-            List<Map<String, Object>> items = new java.util.ArrayList<>();
-            for (String s : newSymbols.subList(i, end)) {
-                Map<String, Object> item = new java.util.HashMap<>();
-                item.put("symbol", String.format("%s{=%s%s}", s, period, type));
-                item.put("type", "Candle");
-                items.add(item);
-            }
-            Instant fromTime = Instant.now().minus(timeframe.getDuration().multipliedBy(1400L));
-            candleChannel.subscribeCandlesHistory(items, fromTime.toEpochMilli());
-        }
-    }
-
-    // Los numeros duros de canales/simbolos-por-canal (techo empirico de DxLink)
-    // viven ahora en CandleWaveFetcher, que corre el protocolo de una oleada
-    // contra cualquier DxLinkClient recibido. CandleBurstOrchestrator decide
-    // cuando repartir un pedido grande entre varias conexiones en paralelo en
-    // vez de una sola conexion con oleadas secuenciales.
 
     private static java.time.Duration minLookbackFor(EnumTimeframe timeframe) {
         return switch (timeframe) {
@@ -1105,10 +917,14 @@ public class TastyTradeService {
         };
     }
 
-    private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        log.info("Fetching candles via DxLink: {} symbols, timeframe={}", symbols.size(), timeframe);
+    public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
+        log.info("Fetching candles via DxLink pool: {} symbols, timeframe={}", symbols.size(), timeframe);
         Instant now = Instant.now();
-        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
+        // El lookback siempre se calcula sobre un piso de 700 barras (no sobre el
+        // "bars" que pidio el caller) para que el pool quede suscrito con
+        // suficiente profundidad de entrada -- el recorte al "bars" real que
+        // pidio el caller pasa aparte, adentro de CandleSubscriptionPool.getCandles.
+        Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long) (700 * 1.5)));
         // Piso minimo de lookback para no venir vacios fuera de horario de mercado
         // (fines de semana/feriados), pero proporcional a la temporalidad en vez de
         // 7 dias fijos para todas: TastyTrade recomienda oficialmente 1 dia para M1,
@@ -1123,17 +939,14 @@ public class TastyTradeService {
         // 270 days was cutting D1's natural ~3-year (bars*1.5) window down to ~9
         // months, and gutting W1/MO1 (whose natural window is decades) to a
         // handful of bars. 5 years is still a sane upper bound — the quiet-period
-        // wait in the loop below is what actually bounds request time, not this.
+        // wait in the pool is what actually bounds request time, not this.
         if (java.time.Duration.between(fromTime, now).toDays() > 1825)
             fromTime = now.minus(1825, java.time.temporal.ChronoUnit.DAYS);
         String label = timeframe.getLabel();
         String type = label.substring(label.length() - 1);
         String period = label.substring(0, label.length() - 1);
         ensureConnected();
-        if (symbols.size() > candleBurstOrchestrator.getThresholdSymbols()) {
-            return candleBurstOrchestrator.fetchBurst(symbols, timeframe, fromTime, period, type);
-        }
-        return candleWaveFetcher.fetchAllWaves(dxLinkClient, symbols, timeframe, fromTime, period, type);
+        return candleSubscriptionPool.getCandles(symbols, timeframe, bars, fromTime, period, type);
     }
 
     public OptionChain getOptionChain(String symbol) {

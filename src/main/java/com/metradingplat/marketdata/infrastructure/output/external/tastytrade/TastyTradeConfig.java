@@ -22,7 +22,7 @@ public class TastyTradeConfig {
     
     private DxlinkConfig dxlink = new DxlinkConfig();
     private TokenRefreshConfig tokenRefresh = new TokenRefreshConfig();
-    private CandleBurstConfig candleBurst = new CandleBurstConfig();
+    private CandlePoolConfig candlePool = new CandlePoolConfig();
     private ConnectionPoolConfig connectionPool = new ConnectionPoolConfig();
 
     @Data
@@ -39,15 +39,15 @@ public class TastyTradeConfig {
     }
 
     @Data
-    public static class CandleBurstConfig {
-        private int thresholdSymbols = 1600;
-        // Techo GLOBAL de conexiones efimeras de velas abiertas a la vez en
-        // todo el servicio (no por peticion -- una sola rafaga puede abrir
-        // tantas como haga falta, este semaforo solo evita que varias
-        // rafagas simultaneas de distintos escaneres sumen demasiadas
-        // conexiones de golpe contra TastyTrade). 40 da margen holgado sobre
-        // los ~17 que necesito una rafaga del universo completo, mas las 5
-        // permanentes del pool de fundamentales.
+    public static class CandlePoolConfig {
+        // Techo GLOBAL de conexiones persistentes de velas que el pool puede
+        // tener abiertas a la vez en todo el servicio. A diferencia de la
+        // vieja rafaga efimera, estas conexiones se quedan abiertas mientras
+        // algun simbolo siga activo -- el limite evita que el pool crezca sin
+        // control si muchos escaneres terminan cubriendo casi todo el
+        // universo en varias temporalidades a la vez. 40 da margen holgado
+        // sobre los ~17 que mide una cobertura de universo completo en una
+        // sola temporalidad, mas las 5 permanentes del pool de fundamentales.
         private int maxConcurrentConnections = 40;
     }
 
