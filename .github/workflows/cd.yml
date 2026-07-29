@@ -58,8 +58,8 @@ jobs:
             --name "marketdata-service" \
             --network "metradingplat-network" \
             --restart "unless-stopped" \
-            --memory "2048m" \
-            --memory-swap "2048m" \
+            --memory "3072m" \
+            --memory-swap "3072m" \
             --label project="metradingplat" \
             --label service="marketdata-service" \
             -v secedgar_cache_v2:/app/secedgar-cache \
