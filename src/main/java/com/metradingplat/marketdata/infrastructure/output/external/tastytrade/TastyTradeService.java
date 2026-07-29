@@ -1011,6 +1011,9 @@ public class TastyTradeService {
         try {
             candleChannel = dxLinkClient.openNewChannel(Set.of("Candle")).get(10, TimeUnit.SECONDS);
             candleChannel.addCandleListener((symbol, candle, isSnapshotComplete) -> {
+                // DIAGNOSTICO TEMPORAL -- se elimina despues de la prueba.
+                log.info("DIAG live candle event: symbol={} close={} liveListenersForKey={}",
+                        symbol, candle.getClose(), candleLiveListeners.keySet());
                 String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
                 candle.setSymbol(cleanSymbol);
                 java.util.regex.Matcher tfMatcher = java.util.regex.Pattern.compile("\\{=(.*?)\\}").matcher(symbol);
