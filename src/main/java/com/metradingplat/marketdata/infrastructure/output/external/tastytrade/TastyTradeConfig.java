@@ -22,6 +22,8 @@ public class TastyTradeConfig {
     
     private DxlinkConfig dxlink = new DxlinkConfig();
     private TokenRefreshConfig tokenRefresh = new TokenRefreshConfig();
+    private CandleBurstConfig candleBurst = new CandleBurstConfig();
+    private ConnectionPoolConfig connectionPool = new ConnectionPoolConfig();
 
     @Data
     public static class DxlinkConfig {
@@ -34,6 +36,18 @@ public class TastyTradeConfig {
     public static class TokenRefreshConfig {
         private boolean enabled = true;
         private int fixedRateHours = 23;
+    }
+
+    @Data
+    public static class CandleBurstConfig {
+        private int thresholdSymbols = 1600;
+        private int maxConnections = 5;
+    }
+
+    @Data
+    public static class ConnectionPoolConfig {
+        private int connectionCount = 5;
+        private int symbolsPerConnection = 2600;
     }
 
     @Bean

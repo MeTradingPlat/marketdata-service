@@ -4,7 +4,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -62,6 +61,10 @@ public class TastyTradeService {
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
     private final FinraClient finraClient;
     private final SecEdgarClient secEdgarClient;
+    private final CandleWaveFetcher candleWaveFetcher;
+    private final CandleBurstOrchestrator candleBurstOrchestrator;
+    private final EquitiesUniverseProvider equitiesUniverseProvider;
+    private final FundamentalsConnectionPool fundamentalsConnectionPool;
     private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
 
     // Trackers para la heuristica de Halt Status (Punto 5)
@@ -148,35 +151,11 @@ public class TastyTradeService {
         }
 
         // Configurar listener de fundamentales en el canal DEFAULT
-        // Usa setOnFundamentalData que se re-aplica en cada reconnect
-        dxLinkClient.setOnFundamentalData((sym, data) -> {
-            String upperSym = sym.toUpperCase();
-            fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
-                if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
-                if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
-                if (v2.getEps() != null) v1.setEps(v2.getEps());
-                if (v2.getDividendAmount() != null) v1.setDividendAmount(v2.getDividendAmount());
-                if (v2.getDividendFrequency() != null) v1.setDividendFrequency(v2.getDividendFrequency());
-                if (v2.getTradingStatus() != null) v1.setTradingStatus(v2.getTradingStatus());
-                if (v2.getStatusReason() != null) v1.setStatusReason(v2.getStatusReason());
-                if (v2.getHaltStartTime() != null) v1.setHaltStartTime(v2.getHaltStartTime());
-                if (v2.getHaltEndTime() != null) v1.setHaltEndTime(v2.getHaltEndTime());
-                if (v2.getBeta() != null) v1.setBeta(v2.getBeta());
-                if (v2.getOpen() != null) v1.setOpen(v2.getOpen());
-                if (v2.getHigh() != null) v1.setHigh(v2.getHigh());
-                if (v2.getLow() != null) v1.setLow(v2.getLow());
-                if (v2.getPrevClose() != null) v1.setPrevClose(v2.getPrevClose());
-                if (v2.getOpenInterest() != null) v1.setOpenInterest(v2.getOpenInterest());
-                if (v2.getPreMarketVolume() != null) v1.setPreMarketVolume(v2.getPreMarketVolume());
-                if (v2.getPostMarketVolume() != null) v1.setPostMarketVolume(v2.getPostMarketVolume());
-                if (v2.getImpliedVolatilityIndex() != null) v1.setImpliedVolatilityIndex(v2.getImpliedVolatilityIndex());
-                if (v2.getImpliedVolatilityRank() != null) v1.setImpliedVolatilityRank(v2.getImpliedVolatilityRank());
-                if (v2.getImpliedVolatilityPercentile() != null) v1.setImpliedVolatilityPercentile(v2.getImpliedVolatilityPercentile());
-                if (v2.getLiquidity() != null) v1.setLiquidity(v2.getLiquidity());
-                if (v2.getLiquidityRating() != null) v1.setLiquidityRating(v2.getLiquidityRating());
-                return v1;
-            });
-        });
+        // Usa setOnFundamentalData que se re-aplica en cada reconnect. La misma
+        // referencia se usa para el pool de conexiones dedicadas a fundamentales
+        // (FundamentalsConnectionPool) -- una sola implementacion de merge, dos
+        // productores de eventos (conexion principal + pool).
+        dxLinkClient.setOnFundamentalData(this::mergeFundamentalData);
 
         // Configurar callbacks AFTER connect() so defaultChannel exists
         dxLinkClient.setOnMarketData((symbol, data) -> {
@@ -247,17 +226,13 @@ public class TastyTradeService {
         CompletableFuture.runAsync(() -> {
             try {
                 Thread.sleep(5000);
+                List<String> universe = equitiesUniverseProvider.getUniverse();
+                log.info("Equities universe: {} symbols across all US markets", universe.size());
+                preloadFundamentalsFromRest(universe);
                 if (dxLinkClient.isConnected()) {
-                    subscribeAllMarkets();
+                    fundamentalsConnectionPool.start(universe, this::mergeFundamentalData);
                 } else {
-                    log.warn("DxLink not connected, running REST-only preload");
-                    List<ActiveEquity> allEquities = tastyTradeClient.getAllActiveEquities();
-                    List<String> symbols = allEquities.stream()
-                            .map(ActiveEquity::getSymbol)
-                            .distinct()
-                            .toList();
-                    log.info("REST-only preload for {} symbols (no DxLink)", symbols.size());
-                    preloadFundamentalsFromRest(symbols);
+                    log.warn("DxLink not connected, skipping fundamentals connection pool startup");
                 }
             } catch (Exception e) {
                 log.error("Auto-subscribe/preload failed: {}", e.getMessage());
@@ -271,23 +246,33 @@ public class TastyTradeService {
         tastyTradeClient.submitOrder(request);
     }
 
-    private static final List<String> ALL_US_MARKETS = List.of("XNAS", "XNYS", "XASE", "ARCX", "BATS", "OTC");
-
-    private void subscribeAllMarkets() {
-        log.info("Preloading fundamentals for all US equity markets: {}", ALL_US_MARKETS);
-        List<ActiveEquity> allEquities = tastyTradeClient.getAllActiveEquities();
-        Set<String> targetMarkets = new HashSet<>(ALL_US_MARKETS);
-        List<String> symbols = new ArrayList<>();
-        for (ActiveEquity eq : allEquities) {
-            if (eq.getListedMarket() != null && targetMarkets.contains(eq.getListedMarket().toUpperCase())) {
-                symbols.add(eq.getSymbol());
-            }
-        }
-        if (!symbols.isEmpty()) {
-            List<String> distinctSymbols = symbols.stream().distinct().toList();
-            log.info("Starting fundamentals preload for {} symbols (streaming quotes on demand)", distinctSymbols.size());
-            CompletableFuture.runAsync(() -> preloadFundamentalsFromRest(distinctSymbols));
-        }
+    private void mergeFundamentalData(String sym, FundamentalData data) {
+        String upperSym = sym.toUpperCase();
+        fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
+            if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
+            if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
+            if (v2.getEps() != null) v1.setEps(v2.getEps());
+            if (v2.getDividendAmount() != null) v1.setDividendAmount(v2.getDividendAmount());
+            if (v2.getDividendFrequency() != null) v1.setDividendFrequency(v2.getDividendFrequency());
+            if (v2.getTradingStatus() != null) v1.setTradingStatus(v2.getTradingStatus());
+            if (v2.getStatusReason() != null) v1.setStatusReason(v2.getStatusReason());
+            if (v2.getHaltStartTime() != null) v1.setHaltStartTime(v2.getHaltStartTime());
+            if (v2.getHaltEndTime() != null) v1.setHaltEndTime(v2.getHaltEndTime());
+            if (v2.getBeta() != null) v1.setBeta(v2.getBeta());
+            if (v2.getOpen() != null) v1.setOpen(v2.getOpen());
+            if (v2.getHigh() != null) v1.setHigh(v2.getHigh());
+            if (v2.getLow() != null) v1.setLow(v2.getLow());
+            if (v2.getPrevClose() != null) v1.setPrevClose(v2.getPrevClose());
+            if (v2.getOpenInterest() != null) v1.setOpenInterest(v2.getOpenInterest());
+            if (v2.getPreMarketVolume() != null) v1.setPreMarketVolume(v2.getPreMarketVolume());
+            if (v2.getPostMarketVolume() != null) v1.setPostMarketVolume(v2.getPostMarketVolume());
+            if (v2.getImpliedVolatilityIndex() != null) v1.setImpliedVolatilityIndex(v2.getImpliedVolatilityIndex());
+            if (v2.getImpliedVolatilityRank() != null) v1.setImpliedVolatilityRank(v2.getImpliedVolatilityRank());
+            if (v2.getImpliedVolatilityPercentile() != null) v1.setImpliedVolatilityPercentile(v2.getImpliedVolatilityPercentile());
+            if (v2.getLiquidity() != null) v1.setLiquidity(v2.getLiquidity());
+            if (v2.getLiquidityRating() != null) v1.setLiquidityRating(v2.getLiquidityRating());
+            return v1;
+        });
     }
 
     private void preloadFundamentalsFromRest(List<String> symbols) {
@@ -1102,64 +1087,11 @@ public class TastyTradeService {
         }
     }
 
-    /**
-     * dxLink has no reliable per-record "batch finished" signal for historical candles
-     * (verified: the wire format doesn't carry one at all with the currently-requested
-     * CANDLE_FIELDS). Completion is instead detected by a quiet period: once candles
-     * start arriving, wait until QUIET_PERIOD_MS pass with no new one, capped by an
-     * overall hard timeout. This is also safer than assuming a single message contains
-     * the whole batch, in case dxLink ever splits a large history across more than one.
-     *
-     * Se probo subir esto a 5000ms ANTES del fix del piso de lookback para descartar
-     * backpressure -- dio identico resultado. Con el piso de lookback ya arreglado,
-     * el analisis de las respuestas (comparando multiples corridas de 1000 simbolos
-     * en frio) mostro que el ~20% que falta siempre es el mismo: los ultimos ~25
-     * simbolos de CADA canal, sin importar si son tickers iliquidos o mega-caps como
-     * AAPL/GOOG/IBIT. Se probo subir esto a 4000ms (con margen de sobra bajo el
-     * timeout de 30s) y NO recupero ni un solo simbolo de ese conjunto -- descarta
-     * que sea un corte prematuro por impaciencia y confirma que es un techo real
-     * de suscripciones aceptadas por canal (ver CANDLE_SYMBOLS_PER_CHANNEL). Se
-     * revierte a 1000ms porque esperar mas no ayuda a nada.
-     */
-    private static final long CANDLE_QUIET_PERIOD_MS = 1000;
-
-    /**
-     * Por encima de este tamano, el histórico se reparte entre varios canales
-     * DxLink en paralelo en vez de uno solo. Confirmado que el techo (~10% de
-     * cobertura en frio con 1 solo canal) es por canal, no por la conexion.
-     * Datos empiricos (1000 simbolos en frio):
-     *  - 10 canales de ~100: 76.6% cobertura, 2/10 fallaron al abrir (el 9 y el 10).
-     *  - 5 canales de ~200: 38.5% cobertura, 0 fallos -- pero cada canal igual se
-     *    corta en ~100-120 simbolos entregados sin importar que le asignamos 200,
-     *    confirmando que el techo por canal ronda ~100-120.
-     *  - 20 canales de ~50: los primeros 8 abrieron bien, y DEL 9 EN ADELANTE
-     *    fallaron los 12 restantes, todos, sin excepcion -- confirma un techo
-     *    duro real de ~8 canales nuevos concurrentes por conexion, no un
-     *    problema de reintentos ni de tamano de canal. Con el codigo viejo (sin
-     *    corte temprano) esto hizo que la peticion tardara mas de 2 minutos,
-     *    reintentando canales que nunca iban a abrir -- de ahi el circuit
-     *    breaker de abajo.
-     * CANDLE_MAX_CHANNELS=8 refleja ese techo real. CANDLE_OPEN_MAX_CONSECUTIVE_FAILS
-     * corta la apertura apenas se detecta el techo, en vez de seguir intentando
-     * canal por canal hasta agotar CANDLE_MAX_CHANNELS.
-     *
-     * CANDLE_SYMBOLS_PER_CHANNEL bajo de 125 a 100: comparando 5 corridas de 1000
-     * simbolos en frio, el ~20% que siempre falta son exactamente los simbolos en
-     * la posicion 100-124 de cada canal de 125 (los ultimos ~2 lotes de 10
-     * enviados) -- nunca los primeros 100, nunca al azar, y ni subir el quiet
-     * period a 4000ms (con margen de sobra bajo los 30s) recupero ninguno. Eso
-     * confirma que dxLink acepta ~100 suscripciones de historico por canal y el
-     * resto las ignora en silencio (no hay NACK), no que sean lentas. Con el techo
-     * de canales en 8, eso pone un limite duro de 800 simbolos por "oleada". Para
-     * pedidos mas grandes, fetchCandlesFromDxLink reparte en varias oleadas
-     * secuenciales (fetchCandleWave), cada una con canales nuevos, en vez de asumir
-     * que una sola pasada de 8 canales estaticos puede cubrir cualquier tamano.
-     */
-    private static final int CANDLE_CHANNEL_SPLIT_THRESHOLD = 150;
-    private static final int CANDLE_SYMBOLS_PER_CHANNEL = 100;
-    private static final int CANDLE_MAX_CHANNELS = 8;
-    private static final int CANDLE_OPEN_MAX_CONSECUTIVE_FAILS = 2;
-    private static final long CANDLE_CHANNEL_OPEN_STAGGER_MS = 150;
+    // Los numeros duros de canales/simbolos-por-canal (techo empirico de DxLink)
+    // viven ahora en CandleWaveFetcher, que corre el protocolo de una oleada
+    // contra cualquier DxLinkClient recibido. CandleBurstOrchestrator decide
+    // cuando repartir un pedido grande entre varias conexiones en paralelo en
+    // vez de una sola conexion con oleadas secuenciales.
 
     private static java.time.Duration minLookbackFor(EnumTimeframe timeframe) {
         return switch (timeframe) {
@@ -1171,10 +1103,7 @@ public class TastyTradeService {
     }
 
     private Map<String, List<Candle>> fetchCandlesFromDxLink(List<String> symbols, EnumTimeframe timeframe, int bars) {
-        int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
-                ? Math.min(CANDLE_MAX_CHANNELS, (symbols.size() + CANDLE_SYMBOLS_PER_CHANNEL - 1) / CANDLE_SYMBOLS_PER_CHANNEL)
-                : 1;
-        log.info("Fetching candles via DxLink: {} symbols, timeframe={}, channels={}", symbols.size(), timeframe, channelCount);
+        log.info("Fetching candles via DxLink: {} symbols, timeframe={}", symbols.size(), timeframe);
         Instant now = Instant.now();
         Instant fromTime = now.minus(timeframe.getDuration().multipliedBy((long)(bars * 1.5)));
         // Piso minimo de lookback para no venir vacios fuera de horario de mercado
@@ -1198,121 +1127,10 @@ public class TastyTradeService {
         String type = label.substring(label.length() - 1);
         String period = label.substring(0, label.length() - 1);
         ensureConnected();
-        Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
-        // El techo real de ~100 suscripciones aceptadas por canal (ver comentario de
-        // CANDLE_SYMBOLS_PER_CHANNEL) pone un limite duro de CANDLE_MAX_CHANNELS*100
-        // simbolos por pasada. Pedidos mas grandes se reparten en oleadas
-        // secuenciales, cada una con canales nuevos (los canales de la oleada
-        // anterior ya se cerraron y no aceptan mas suscripciones).
-        int waveMax = CANDLE_MAX_CHANNELS * CANDLE_SYMBOLS_PER_CHANNEL;
-        List<String> remaining = new ArrayList<>(symbols);
-        int wave = 0;
-        while (!remaining.isEmpty()) {
-            int waveSize = Math.min(remaining.size(), waveMax);
-            List<String> waveSymbols = new ArrayList<>(remaining.subList(0, waveSize));
-            remaining.subList(0, waveSize).clear();
-            wave++;
-            log.info("Candle wave {}: {} symbols ({} remaining)", wave, waveSymbols.size(), remaining.size());
-            fetchCandleWave(waveSymbols, timeframe, period, type, fromTime, resultado);
+        if (symbols.size() > candleBurstOrchestrator.getThresholdSymbols()) {
+            return candleBurstOrchestrator.fetchBurst(symbols, timeframe, fromTime, period, type);
         }
-        return resultado;
-    }
-
-    private void fetchCandleWave(List<String> symbols, EnumTimeframe timeframe, String period, String type,
-            Instant fromTime, Map<String, List<Candle>> resultado) {
-        int channelCount = symbols.size() > CANDLE_CHANNEL_SPLIT_THRESHOLD
-                ? Math.min(CANDLE_MAX_CHANNELS, (symbols.size() + CANDLE_SYMBOLS_PER_CHANNEL - 1) / CANDLE_SYMBOLS_PER_CHANNEL)
-                : 1;
-        java.util.concurrent.atomic.AtomicLong lastEventAt = new java.util.concurrent.atomic.AtomicLong(0);
-        List<DxLinkClient.DxLinkChannel> openedChannels = new ArrayList<>();
-        DxLinkClient.CandleCallback sharedListener = (symbol, candle, isSnapshotComplete) -> {
-            String cleanSymbol = symbol.replaceAll("\\{=.*\\}", "");
-            candle.setSymbol(cleanSymbol);
-            candle.setTimeframe(timeframe);
-            List<Candle> list = resultado.computeIfAbsent(cleanSymbol, k -> new java.util.ArrayList<>());
-            java.util.Optional<Candle> ex = list.stream()
-                    .filter(c -> c.getTimestamp().equals(candle.getTimestamp())).findFirst();
-            if (ex.isPresent()) {
-                Candle c = ex.get();
-                if (candle.getHigh() != null && (c.getHigh() == null || candle.getHigh() > c.getHigh())) c.setHigh(candle.getHigh());
-                if (candle.getLow() != null && (c.getLow() == null || candle.getLow() < c.getLow())) c.setLow(candle.getLow());
-                if (candle.getClose() != null) c.setClose(candle.getClose());
-                if (candle.getVolume() != null) c.setVolume(candle.getVolume());
-            } else {
-                list.add(candle);
-            }
-            lastEventAt.set(System.currentTimeMillis());
-        };
-        try {
-            // Abrir los canales con un pequeno stagger (no todos de golpe): abrir
-            // muchos canales nuevos instantaneamente no es confiable. Cada apertura
-            // es independiente: si una falla, se salta y se sigue con las demas.
-            // Corte temprano: si hay CANDLE_OPEN_MAX_CONSECUTIVE_FAILS fallos
-            // seguidos, se asume que se llego al techo de canales concurrentes y
-            // se deja de intentar -- sin esto, una peticion grande podia quedarse
-            // reintentando canal por canal que nunca iban a abrir por minutos.
-            int consecutiveFails = 0;
-            for (int c = 0; c < channelCount; c++) {
-                try {
-                    DxLinkClient.DxLinkChannel ch = dxLinkClient.openNewChannel(Set.of("Candle")).get(10, TimeUnit.SECONDS);
-                    openedChannels.add(ch);
-                    consecutiveFails = 0;
-                } catch (Exception e) {
-                    log.warn("Candle channel {}/{} failed to open: {}", c + 1, channelCount, e.getMessage());
-                    consecutiveFails++;
-                    if (consecutiveFails >= CANDLE_OPEN_MAX_CONSECUTIVE_FAILS) {
-                        log.warn("Stopping channel opening after {} consecutive failures, using {} opened channels",
-                                consecutiveFails, openedChannels.size());
-                        break;
-                    }
-                }
-                if (c < channelCount - 1) Thread.sleep(CANDLE_CHANNEL_OPEN_STAGGER_MS);
-            }
-            if (openedChannels.isEmpty()) {
-                log.error("Candle wave failed: no channel could be opened");
-                return;
-            }
-            // addCandleListener registra en una lista global del cliente (no por
-            // canal), asi que basta con una sola registracion para recibir eventos
-            // de los N canales -- registrarlo en cada uno duplicaria el trabajo.
-            openedChannels.get(0).addCandleListener(sharedListener);
-
-            int openedCount = openedChannels.size();
-            int perChannel = (int) Math.ceil(symbols.size() / (double) openedCount);
-            for (int c = 0; c < openedCount; c++) {
-                int groupStart = c * perChannel;
-                if (groupStart >= symbols.size()) break;
-                int groupEnd = Math.min(groupStart + perChannel, symbols.size());
-                List<String> group = symbols.subList(groupStart, groupEnd);
-                DxLinkClient.DxLinkChannel ch = openedChannels.get(c);
-                for (int i = 0; i < group.size(); i += 10) {
-                    int end = Math.min(i + 10, group.size());
-                    List<Map<String, Object>> items = new java.util.ArrayList<>();
-                    for (String s : group.subList(i, end)) {
-                        Map<String, Object> item = new java.util.HashMap<>();
-                        item.put("symbol", String.format("%s{=%s%s}", s, period, type));
-                        item.put("type", "Candle");
-                        items.add(item);
-                    }
-                    ch.subscribeCandlesHistory(items, fromTime.toEpochMilli());
-                }
-            }
-            // Con el piso de lookback proporcional a la temporalidad y el reparto en
-            // oleadas de <=100 simbolos/canal, una oleada completa en ~15s -- el tope
-            // de 150s que se probo para descartar backpressure ya no hace falta.
-            int timeoutSec = Math.min(10 + symbols.size() / 10, 30);
-            long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
-            while (System.currentTimeMillis() < deadline) {
-                Thread.sleep(200);
-                long last = lastEventAt.get();
-                if (last > 0 && System.currentTimeMillis() - last > CANDLE_QUIET_PERIOD_MS) break;
-            }
-        } catch (Exception e) {
-            log.error("Candle wave failed: {}", e.getMessage());
-        } finally {
-            for (var ch : openedChannels) ch.close();
-            if (!openedChannels.isEmpty()) openedChannels.get(0).removeCandleListener(sharedListener);
-        }
+        return candleWaveFetcher.fetchAllWaves(dxLinkClient, symbols, timeframe, fromTime, period, type);
     }
 
     public OptionChain getOptionChain(String symbol) {
@@ -1450,7 +1268,13 @@ public class TastyTradeService {
                 String sym = (String) metric.get("symbol");
                 if (sym == null) continue;
                 String finalSym = sym.toUpperCase();
-                
+
+                // TastyTrade trajo metricas reales para este simbolo -- si no
+                // estaba cubierto por el pool de fundamentales en vivo (ej. un
+                // listado nuevo desde que arranco el servicio), se agrega ahora
+                // sin esperar al proximo reinicio.
+                fundamentalsConnectionPool.ensureSubscribed(finalSym);
+
                 FundamentalData fund = fundamentalsCache.computeIfAbsent(finalSym, k -> FundamentalData.builder().symbol(k).build());
 
                 if (metric.get("implied-volatility-index") != null) fund.setImpliedVolatilityIndex(safeConvertToDouble(metric.get("implied-volatility-index")));

@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import org.springframework.stereotype.Component;
@@ -141,6 +142,15 @@ public class DxLinkClient {
     }
     public void setTokenRefresher(Supplier<String> tokenRefresher) { this.tokenRefresher = tokenRefresher; }
 
+    private Consumer<DxLinkChannel> onReconnected;
+    // Hook para que codigo externo (ej. un pool de conexiones dedicadas a
+    // fundamentales) vuelva a mandar sus propias suscripciones despues de una
+    // reconexion -- performReconnect() ya replay-ea subscribedSymbols/defaultChannel
+    // via resubscribeAll(), pero eso es especifico del tipo de evento
+    // Quote/Trade y no sirve para quien suscribio otro tipo (ej. Summary/Profile/
+    // TradeETH via subscribeFundamentalsBatch).
+    public void setOnReconnected(Consumer<DxLinkChannel> callback) { this.onReconnected = callback; }
+
     public CompletableFuture<DxLinkChannel> openNewChannel() { return openNewChannel(null); }
 
     public CompletableFuture<DxLinkChannel> openNewChannel(Set<String> eventTypes) {
@@ -204,6 +214,7 @@ public class DxLinkClient {
                     defaultChannel.setOnMarketData(marketDataCallback);
                 }
                 resubscribeAll();
+                if (onReconnected != null && defaultChannel != null) onReconnected.accept(defaultChannel);
             }
         } catch (Exception e) { scheduleReconnect(); }
     }
