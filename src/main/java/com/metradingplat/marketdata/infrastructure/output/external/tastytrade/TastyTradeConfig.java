@@ -41,7 +41,14 @@ public class TastyTradeConfig {
     @Data
     public static class CandleBurstConfig {
         private int thresholdSymbols = 1600;
-        private int maxConnections = 5;
+        // Techo GLOBAL de conexiones efimeras de velas abiertas a la vez en
+        // todo el servicio (no por peticion -- una sola rafaga puede abrir
+        // tantas como haga falta, este semaforo solo evita que varias
+        // rafagas simultaneas de distintos escaneres sumen demasiadas
+        // conexiones de golpe contra TastyTrade). 40 da margen holgado sobre
+        // los ~17 que necesito una rafaga del universo completo, mas las 5
+        // permanentes del pool de fundamentales.
+        private int maxConcurrentConnections = 40;
     }
 
     @Data

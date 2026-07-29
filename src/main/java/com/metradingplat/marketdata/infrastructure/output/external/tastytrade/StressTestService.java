@@ -18,6 +18,8 @@ public class StressTestService {
     private final TastyTradeService tastyTradeService;
     private final TastyTradeClient tastyTradeClient;
     private final DxLinkClient dxLinkClient;
+    private final CandleBurstOrchestrator candleBurstOrchestrator;
+    private final TastyTradeConfig tastyTradeConfig;
 
     /**
      * Suscribe masivamente a una lista de símbolos para probar el throughput del WebSocket.
@@ -88,6 +90,11 @@ public class StressTestService {
     }
 
     public Map<String, Object> getSystemStats() {
-        return dxLinkClient.getConnectionStats();
+        Map<String, Object> stats = new java.util.HashMap<>(dxLinkClient.getConnectionStats());
+        int maxConcurrent = tastyTradeConfig.getCandleBurst().getMaxConcurrentConnections();
+        int available = candleBurstOrchestrator.getAvailableConnectionPermits();
+        stats.put("candleBurstConnectionsInUse", maxConcurrent - available);
+        stats.put("candleBurstConnectionsMax", maxConcurrent);
+        return stats;
     }
 }
