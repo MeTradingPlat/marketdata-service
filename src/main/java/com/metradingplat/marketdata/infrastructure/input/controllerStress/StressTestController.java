@@ -29,20 +29,4 @@ public class StressTestController {
     public CompletableFuture<Map<String, Object>> validateOrdersBurst(@RequestParam(defaultValue = "10") int count) {
         return stressTestService.validateOrdersBurst(count);
     }
-
-    // DIAGNOSTICO TEMPORAL -- se elimina despues de la prueba.
-    @PostMapping("/candle-live-probe/start")
-    public Map<String, Object> startCandleLiveProbe(@RequestParam(defaultValue = "5") int connections) {
-        return stressTestService.startCandleLiveProbe(connections);
-    }
-
-    @GetMapping("/candle-live-probe/status")
-    public Map<String, Object> getCandleLiveProbeStatus() {
-        return stressTestService.getCandleLiveProbeStatus();
-    }
-
-    @PostMapping("/candle-live-probe/stop")
-    public Map<String, Object> stopCandleLiveProbe() {
-        return stressTestService.stopCandleLiveProbe();
-    }
 }
