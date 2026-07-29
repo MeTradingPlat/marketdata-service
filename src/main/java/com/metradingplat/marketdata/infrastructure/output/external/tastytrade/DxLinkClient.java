@@ -182,6 +182,14 @@ public class DxLinkClient {
                 this.channels.put(defaultChannel.getId(), defaultChannel);
                 defaultChannel.initialize().get(10, TimeUnit.SECONDS);
                 startHealthCheck();
+                // Sin este reset, reconnectAttempts es un contador acumulado de por
+                // vida (nunca se resetea solo) -- despues de MAX_RECONNECT_ATTEMPTS
+                // reconexiones exitosas a lo largo de dias/semanas, la conexion
+                // dejaria de reintentar para siempre ante la siguiente caida, sin
+                // ningun error visible salvo isConnected()==false. connect() es el
+                // unico punto por el que pasa toda autenticacion exitosa (inicial o
+                // via performReconnect), asi que el reset va aca.
+                reconnectAttempts.set(0);
             } else {
                 scheduleReconnect();
             }
