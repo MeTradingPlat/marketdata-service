@@ -1317,7 +1317,13 @@ public class TastyTradeService {
             return Double.isFinite((double) l) ? l : null;
         }
         try {
-            return Long.parseLong(val.toString());
+            // TastyTrade REST manda campos numericos como strings, y varios
+            // (volume, volume-ext) vienen con fraccion decimal (ej.
+            // "8370896.451959") -- Long.parseLong revienta con eso (confirmado
+            // en vivo: volume-ext nunca se aplicaba, silenciosamente, por este
+            // motivo). Parsear como double y truncar cubre enteros y
+            // decimales por igual.
+            return (long) Double.parseDouble(val.toString());
         } catch (Exception e) {
             return null;
         }
