@@ -64,6 +64,9 @@ tastytrade:
     enabled: true
     fixed-rate-hours: 23
 
+historical-data-service:
+  url: ${HISTORICAL_DATA_SERVICE_URL:http://historical-data-service:8086}
+
 # Actuator for health checks
 management:
   endpoints:

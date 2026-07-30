@@ -76,6 +76,7 @@ jobs:
             -e TT_REFRESH_TOKEN="${{ secrets.TT_REFRESH_TOKEN }}" \
             -e TASTYTRADE_ACCOUNT_NUMBER="${{ secrets.TASTYTRADE_ACCOUNT_NUMBER }}" \
             -e DXLINK_URL="${{ secrets.DXLINK_URL }}" \
+            -e HISTORICAL_DATA_SERVICE_URL="http://historical-data-service:8086" \
             virtud142/metradingplat_marketdata_service:latest
 
       - name: Clean Old Images of This Service

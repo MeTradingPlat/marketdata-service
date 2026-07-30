@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalDataCUIntPort {
 
     private final GestionarComunicacionExternalGatewayIntPort objExternalCommunicationGateway;
+    private final HistoricalDataGapFiller gapFiller;
 
     @Override
     public List<Candle> getCandles(String symbol, EnumTimeframe timeframe, OffsetDateTime endDate, Integer bars) {
@@ -45,6 +46,15 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
 
         log.info("Candles para {} {}: {} totales, {} completas (endDate={}, bars={})",
                 symbol, timeframe, allCandles.size(), completed.size(), endDate, bars);
+
+        if (bars != null && bars > completed.size()) {
+            int before = completed.size();
+            completed = gapFiller.fill(completed, symbol, timeframe, bars);
+            if (completed.size() > before) {
+                log.info("Gap-filled {} {} desde historical-data-service: {} -> {} barras",
+                        symbol, timeframe, before, completed.size());
+            }
+        }
 
         // Si se especifica bars, tomar las ultimas N
         if (bars != null && bars > 0 && bars < completed.size()) {

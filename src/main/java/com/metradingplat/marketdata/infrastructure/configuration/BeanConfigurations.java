@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Configuration;
 
 import com.metradingplat.marketdata.application.output.FundamentalsPersistenceGatewayIntPort;
 import com.metradingplat.marketdata.application.output.GestionarComunicacionExternalGatewayIntPort;
+import com.metradingplat.marketdata.application.output.GestionarHistoricalDataServiceGatewayIntPort;
 import com.metradingplat.marketdata.domain.usecases.GestionarFundamentalsCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarHistoricalDataCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarMercadosCUAdapter;
@@ -13,6 +14,7 @@ import com.metradingplat.marketdata.domain.usecases.GestionarQuoteCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarRealTimeCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarEarningsCUAdapter;
 import com.metradingplat.marketdata.domain.usecases.GestionarOptionsCUAdapter;
+import com.metradingplat.marketdata.domain.usecases.HistoricalDataGapFiller;
 import com.metradingplat.marketdata.infrastructure.output.external.finviz.FinvizScraper;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
@@ -20,9 +22,16 @@ import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.Ta
 public class BeanConfigurations {
 
     @Bean
+    public HistoricalDataGapFiller historicalDataGapFiller(
+            GestionarHistoricalDataServiceGatewayIntPort historicalDataGateway) {
+        return new HistoricalDataGapFiller(historicalDataGateway);
+    }
+
+    @Bean
     public GestionarHistoricalDataCUAdapter gestionarHistoricalDataCUIntPort(
-            GestionarComunicacionExternalGatewayIntPort objExternalGateway) {
-        return new GestionarHistoricalDataCUAdapter(objExternalGateway);
+            GestionarComunicacionExternalGatewayIntPort objExternalGateway,
+            HistoricalDataGapFiller gapFiller) {
+        return new GestionarHistoricalDataCUAdapter(objExternalGateway, gapFiller);
     }
 
     @Bean
