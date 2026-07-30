@@ -20,6 +20,13 @@ public class StressTestController {
         return stressTestService.getSystemStats();
     }
 
+    // TEMP diagnostic, revertir despues de confirmar volume-ext fuera de
+    // horario extendido -- ver conversacion.
+    @GetMapping("/raw-market-data")
+    public Map<String, Object> rawMarketData(@RequestParam String symbol) {
+        return stressTestService.rawMarketDataDebug(symbol);
+    }
+
     @PostMapping("/subscribe-massive")
     public Map<String, Object> subscribeMassive(@RequestBody List<String> symbols) {
         return stressTestService.subscribeMassive(symbols);
