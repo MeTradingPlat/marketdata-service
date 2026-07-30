@@ -27,6 +27,17 @@ import java.util.concurrent.Semaphore;
 @RequiredArgsConstructor
 class CandleChannelAllocator {
 
+    // getApiQuoteToken() golpea /api-quote-tokens (REST real de TastyTrade) en
+    // cada apertura de conexion, y es synchronized -- abrir varias conexiones
+    // nuevas de golpe (onboarding grande) las sirve en fila pero sin ninguna
+    // pausa, y eso ya disparo un rechazo de autenticacion en vivo dos veces
+    // esta sesion. Mismo remedio que CandleChannelOpener ya usa para abrir
+    // canales: un stagger chico entre lanzamientos, mas un reintento con
+    // backoff antes de darse por vencido (el rechazo es transitorio, no
+    // permanente -- reintentar casi siempre funciona).
+    private static final long CONNECTION_STAGGER_MS = 200;
+    private static final long CONNECTION_RETRY_BACKOFF_MS = 500;
+
     private final TastyTradeClient tastyTradeClient;
     private final TastyTradeConfig config;
     private final CandleChannelOpener channelOpener;
@@ -66,11 +77,14 @@ class CandleChannelAllocator {
                 break;
             }
             futures.add(CompletableFuture.runAsync(() -> {
-                PooledCandleConnection conn = openConnection();
+                PooledCandleConnection conn = openConnectionWithRetry();
                 if (conn == null) { connectionBudget.release(); return; }
                 if (openChannel(conn, mergeListener).isEmpty()) { conn.client.disconnect(); connectionBudget.release(); return; }
                 connections.add(conn);
             }, onboardExecutor));
+            if (i < newConnectionsNeeded - 1) {
+                try { Thread.sleep(CONNECTION_STAGGER_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            }
         }
         futures.forEach(CompletableFuture::join);
     }
@@ -93,7 +107,7 @@ class CandleChannelAllocator {
             log.warn("Candle pool at its connection ceiling -- cannot place new symbol until something goes idle");
             return null;
         }
-        PooledCandleConnection newConn = openConnection();
+        PooledCandleConnection newConn = openConnectionWithRetry();
         if (newConn == null) {
             connectionBudget.release();
             return null;
@@ -131,6 +145,14 @@ class CandleChannelAllocator {
             Thread.currentThread().interrupt();
             return Optional.empty();
         }
+    }
+
+    private PooledCandleConnection openConnectionWithRetry() {
+        PooledCandleConnection conn = openConnection();
+        if (conn != null) return conn;
+        try { Thread.sleep(CONNECTION_RETRY_BACKOFF_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+        log.info("Retrying candle pool connection after backoff");
+        return openConnection();
     }
 
     private PooledCandleConnection openConnection() {
