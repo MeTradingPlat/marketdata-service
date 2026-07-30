@@ -942,9 +942,10 @@ public class TastyTradeService {
 
     private static java.time.Duration minLookbackFor(EnumTimeframe timeframe) {
         return switch (timeframe) {
-            case M1 -> java.time.Duration.ofDays(3);
-            case M5 -> java.time.Duration.ofDays(7);
-            case M15, M30 -> java.time.Duration.ofDays(10);
+            case M1, M2, M3 -> java.time.Duration.ofDays(3);
+            case M5, M10 -> java.time.Duration.ofDays(7);
+            case M15, M30, M45 -> java.time.Duration.ofDays(10);
+            case H1, H2, H3, H4, H12 -> java.time.Duration.ofDays(14);
             default -> java.time.Duration.ofDays(7);
         };
     }
