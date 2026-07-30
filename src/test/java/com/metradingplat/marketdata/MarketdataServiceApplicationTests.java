@@ -19,7 +19,7 @@ class MarketdataServiceApplicationTests {
 	@MockitoBean
 	private com.metradingplat.marketdata.infrastructure.output.external.tastytrade.DxLinkClient dxLinkClient;
 
-	@MockitoBean
+	@MockitoBean(name = "tastyTradeRestClient")
 	private org.springframework.web.client.RestClient restClient;
 
 	@MockitoBean
