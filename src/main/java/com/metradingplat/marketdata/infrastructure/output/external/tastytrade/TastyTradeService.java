@@ -263,7 +263,17 @@ public class TastyTradeService {
             if (v2.getPrevClose() != null) v1.setPrevClose(v2.getPrevClose());
             if (v2.getOpenInterest() != null) v1.setOpenInterest(v2.getOpenInterest());
             if (v2.getPreMarketVolume() != null) v1.setPreMarketVolume(v2.getPreMarketVolume());
-            if (v2.getPostMarketVolume() != null) v1.setPostMarketVolume(v2.getPostMarketVolume());
+            // dxFeed acumula dayVolume de TradeETH junto para pre+post market,
+            // sin resetear entre uno y otro (confirmado en su documentacion
+            // oficial) -- lo que llega aca en v2.postMarketVolume en realidad
+            // es ese TOTAL combinado en el momento del tick, no post-market
+            // puro. Restar el pre-market ya conocido (capturado antes de que
+            // abriera el mercado regular, cuando el total SOLO podia ser
+            // pre-market) aisla lo que se sumo despues del cierre.
+            if (v2.getPostMarketVolume() != null) {
+                long pre = v1.getPreMarketVolume() != null ? v1.getPreMarketVolume() : 0;
+                v1.setPostMarketVolume(Math.max(0, v2.getPostMarketVolume() - pre));
+            }
             if (v2.getImpliedVolatilityIndex() != null) v1.setImpliedVolatilityIndex(v2.getImpliedVolatilityIndex());
             if (v2.getImpliedVolatilityRank() != null) v1.setImpliedVolatilityRank(v2.getImpliedVolatilityRank());
             if (v2.getImpliedVolatilityPercentile() != null) v1.setImpliedVolatilityPercentile(v2.getImpliedVolatilityPercentile());
@@ -472,6 +482,7 @@ public class TastyTradeService {
                     if (volume != null) fund.setDayVolume(volume);
                     if (open != null) fund.setOpen(open);
                     if (prevClose != null) fund.setPrevClose(prevClose);
+                    applyExtendedHoursVolume(fund, safeConvertToLong(item.get("volume-ext")));
 
                     if (item.get("is-trading-halted") != null) {
                         fund.setTradingStatus(Boolean.TRUE.equals(item.get("is-trading-halted")) ? "HALTED" : "ACTIVE");
@@ -501,6 +512,27 @@ public class TastyTradeService {
             }
         }
         log.info("OHLC refresh: {} symbols updated (live high/low/volume)", updated);
+    }
+
+    /**
+     * volume-ext de TastyTrade REST es el mismo tipo de contador combinado
+     * pre+post-market que dayVolume de TradeETH (ver mergeFundamentalData) --
+     * misma correccion de foto+resta, no un dato distinto. Antes de la
+     * apertura regular (9:30am ET) y durante la sesion regular, ese numero
+     * SOLO puede ser pre-market (nada de post-market ha pasado todavia), asi
+     * que se guarda directo. Despues del cierre (4pm ET), se le resta el
+     * pre-market ya conocido para aislar lo que se sumo en post-market.
+     */
+    private void applyExtendedHoursVolume(FundamentalData fund, Long volumeExt) {
+        if (volumeExt == null) return;
+        java.time.ZonedDateTime ny = java.time.ZonedDateTime.now(java.time.ZoneId.of("America/New_York"));
+        boolean afterRegularClose = ny.getHour() >= 16;
+        if (afterRegularClose) {
+            long pre = fund.getPreMarketVolume() != null ? fund.getPreMarketVolume() : 0;
+            fund.setPostMarketVolume(Math.max(0, volumeExt - pre));
+        } else {
+            fund.setPreMarketVolume(volumeExt);
+        }
     }
 
     private void cleanupStaleRestQuotes() {
