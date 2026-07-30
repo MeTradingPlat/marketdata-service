@@ -89,12 +89,6 @@ public class StressTestService {
             });
     }
 
-    // TEMP diagnostic, revertir despues de confirmar volume-ext fuera de
-    // horario extendido -- ver conversacion.
-    public Map<String, Object> rawMarketDataDebug(String symbol) {
-        return tastyTradeClient.getMarketDataByType(symbol);
-    }
-
     public Map<String, Object> getSystemStats() {
         Map<String, Object> stats = new java.util.HashMap<>(dxLinkClient.getConnectionStats());
         int maxConcurrent = tastyTradeConfig.getCandlePool().getMaxConcurrentConnections();
