@@ -213,6 +213,14 @@ public class TastyTradeService {
                 millisUntilNextHour(3), 4 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::refreshSharesOutstandingFromSecEdgar,
                 millisUntilNextHour(4), 24 * 3600_000, TimeUnit.MILLISECONDS);
+        // Antes de que arranque el pre-market (~4am ET) -- ni el camino en vivo
+        // (TradeETH) ni el REST (volume-ext) resetean estos dos campos por su
+        // cuenta, solo los sobreescriben cuando llega dato nuevo. Sin este
+        // reseteo explicito, un simbolo poco liquido sin trades de pre-market
+        // hoy todavia se queda mostrando el numero de AYER, indistinguible de
+        // un dato fresco.
+        scheduler.scheduleAtFixedRate(this::resetDailyExtendedHoursVolume,
+                millisUntilNextHour(1), 24 * 3600_000, TimeUnit.MILLISECONDS);
         candleSubscriptionPool.setOnEveryCandle(candle -> recomputeMarketCapFromLivePrice(candle.getSymbol(), candle.getClose()));
         scheduler.scheduleAtFixedRate(this::cleanupStaleRestQuotes,
                 5, 5, TimeUnit.MINUTES);
@@ -533,6 +541,28 @@ public class TastyTradeService {
         } else {
             fund.setPreMarketVolume(volumeExt);
         }
+    }
+
+    /**
+     * Ni el camino en vivo (TradeETH) ni el REST (volume-ext, ver
+     * applyExtendedHoursVolume) resetean preMarketVolume/postMarketVolume por
+     * su cuenta -- solo los sobreescriben cuando llega dato nuevo. Sin este
+     * reseteo explicito antes de que arranque el pre-market, un simbolo sin
+     * actividad de extended-hours hoy todavia se queda mostrando el numero de
+     * AYER, indistinguible de un dato fresco (confirmado como patron correcto:
+     * los cambios de sesion deben tratarse como eventos explicitos, no dejarse
+     * a que datos nuevos eventualmente los sobreescriban).
+     */
+    private void resetDailyExtendedHoursVolume() {
+        int reset = 0;
+        for (FundamentalData fund : fundamentalsCache.values()) {
+            if (fund.getPreMarketVolume() != null || fund.getPostMarketVolume() != null) {
+                fund.setPreMarketVolume(null);
+                fund.setPostMarketVolume(null);
+                reset++;
+            }
+        }
+        log.info("Daily reset: cleared pre/post-market volume for {} symbols", reset);
     }
 
     private void cleanupStaleRestQuotes() {
