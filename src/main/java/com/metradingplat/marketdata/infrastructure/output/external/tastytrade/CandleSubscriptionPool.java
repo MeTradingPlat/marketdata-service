@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -112,6 +113,12 @@ public class CandleSubscriptionPool {
         if (newSymbols.isEmpty()) return;
         log.info("Candle pool onboarding {} new symbols, timeframe={}", newSymbols.size(), timeframe);
         allocator.ensureCapacityFor(connections, newSymbols.size(), mergeListener);
+        // Agrupar por canal antes de suscribir: allocate() decide en memoria
+        // donde va cada simbolo, pero el envio real (historySubscriber.subscribe)
+        // se hace UNA vez por canal con todo su grupo, no una vez por simbolo --
+        // para un lote de miles, esto baja de miles de mensajes WS a unas
+        // decenas (uno por canal usado, ya agrupado en lotes de 10 adentro).
+        Map<PooledCandleChannel, List<String>> bySymbolChannel = new LinkedHashMap<>();
         List<String> onboardedKeys = new ArrayList<>();
         for (String sym : newSymbols) {
             PooledCandleChannel ch = allocator.allocate(connections, mergeListener);
@@ -121,8 +128,11 @@ public class CandleSubscriptionPool {
             }
             String key = CandleCacheStore.key(sym, timeframe);
             ch.touch(key);
-            historySubscriber.subscribe(List.of(ch.channel), List.of(sym), period, type, fromTime);
+            bySymbolChannel.computeIfAbsent(ch, k -> new ArrayList<>()).add(sym);
             onboardedKeys.add(key);
+        }
+        for (var entry : bySymbolChannel.entrySet()) {
+            historySubscriber.subscribe(List.of(entry.getKey().channel), entry.getValue(), period, type, fromTime);
         }
         awaitHistory(onboardedKeys);
     }
