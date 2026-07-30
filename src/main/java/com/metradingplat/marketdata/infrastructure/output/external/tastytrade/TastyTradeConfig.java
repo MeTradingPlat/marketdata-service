@@ -1,9 +1,14 @@
 package com.metradingplat.marketdata.infrastructure.output.external.tastytrade;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.web.client.ClientHttpRequestFactories;
+import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+
+import java.time.Duration;
 
 import lombok.Data;
 
@@ -59,8 +64,17 @@ public class TastyTradeConfig {
 
     @Bean
     public RestClient tastyTradeRestClient() {
+        // Sin esto, un GET colgado esperaba hasta que el propio TastyTrade
+        // cortara la conexion (~180s medidos en vivo) -- confirmado que
+        // atascaba el scheduler de jobs REST durante 20+ minutos seguidos.
+        ClientHttpRequestFactorySettings settings = ClientHttpRequestFactorySettings.DEFAULTS
+                .withConnectTimeout(Duration.ofSeconds(15))
+                .withReadTimeout(Duration.ofSeconds(25));
+        ClientHttpRequestFactory requestFactory = ClientHttpRequestFactories.get(settings);
+
         return RestClient.builder()
                 .baseUrl(apiBaseUrl)
+                .requestFactory(requestFactory)
                 .defaultHeader("Content-Type", "application/json")
                 .defaultHeader("Accept", "application/json")
                 .defaultHeader("User-Agent", "QuantMaestro/2.0.0")

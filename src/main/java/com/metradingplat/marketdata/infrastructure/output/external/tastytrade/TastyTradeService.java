@@ -64,7 +64,12 @@ public class TastyTradeService {
     private final CandleSubscriptionPool candleSubscriptionPool;
     private final EquitiesUniverseProvider equitiesUniverseProvider;
     private final FundamentalsConnectionPool fundamentalsConnectionPool;
-    private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+    // Pool, no un solo hilo -- 7 jobs distintos comparten este scheduler y varios
+    // llaman a REST externos (TastyTrade/FINRA/SEC) que pueden colgarse; con un
+    // solo hilo, uno colgado bloqueaba a los otros 6 indefinidamente (confirmado
+    // en vivo: refreshOhlcData atascado en TastyTrade impidio que corriera
+    // resetDailyExtendedHoursVolume por 20+ minutos).
+    private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newScheduledThreadPool(4);
 
     // Trackers para la heuristica de Halt Status (Punto 5)
     private final ConcurrentHashMap<String, Long> lastMarketDataUpdates = new ConcurrentHashMap<>();
