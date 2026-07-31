@@ -8,11 +8,13 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import com.metradingplat.marketdata.application.input.GestionarMercadosCUIntPort;
 import com.metradingplat.marketdata.application.output.GestionarComunicacionExternalGatewayIntPort;
 import com.metradingplat.marketdata.domain.enums.EnumMercado;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
+import com.metradingplat.marketdata.domain.models.PagedActiveEquities;
 
 
 import lombok.RequiredArgsConstructor;
@@ -22,7 +24,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
 
-    private static final Duration CACHE_TTL = Duration.ofHours(1);
+    private static final Duration CACHE_TTL = Duration.ofDays(1);
     private static final int PAGE_SIZE = 5000;
 
     private final GestionarComunicacionExternalGatewayIntPort objExternalGateway;
@@ -49,16 +51,38 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
     @Override
     public List<ActiveEquity> obtenerSimbolosPorMercados(List<String> markets) {
         cargarEquitiesSiNecesario();
+        return filtrarPorMercados(markets).collect(Collectors.toList());
+    }
 
+    @Override
+    public PagedActiveEquities buscarSimbolos(String query, List<String> markets, int page, int size) {
+        cargarEquitiesSiNecesario();
+
+        String needle = query != null ? query.trim().toLowerCase() : "";
+        List<ActiveEquity> matched = filtrarPorMercados(markets)
+                .filter(eq -> needle.isEmpty()
+                        || (eq.getSymbol() != null && eq.getSymbol().toLowerCase().contains(needle))
+                        || (eq.getDescription() != null && eq.getDescription().toLowerCase().contains(needle)))
+                .collect(Collectors.toList());
+
+        List<ActiveEquity> pageItems = matched.stream()
+                .skip((long) page * size)
+                .limit(size)
+                .collect(Collectors.toList());
+
+        return new PagedActiveEquities(pageItems, matched.size());
+    }
+
+    private Stream<ActiveEquity> filtrarPorMercados(List<String> markets) {
         Set<String> userMarkets = markets != null && !markets.isEmpty()
                 ? markets.stream().map(String::toUpperCase).collect(Collectors.toSet())
                 : Set.of();
 
         if (userMarkets.isEmpty()) {
-            return new ArrayList<>(cachedEquities);
+            return cachedEquities.stream();
         }
 
-        // If market exists in EnumMercado, use its MIC codes. 
+        // If market exists in EnumMercado, use its MIC codes.
         // Otherwise, assume the user provided the MIC code directly (dynamic case).
         Set<String> initialMicFilter = EnumMercado.toMicCodes(userMarkets);
         final Set<String> micFilter = initialMicFilter.isEmpty() ? userMarkets : initialMicFilter;
@@ -67,8 +91,7 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
 
         return cachedEquities.stream()
                 .filter(eq -> eq.getListedMarket() != null
-                        && micFilter.contains(eq.getListedMarket().toUpperCase()))
-                .collect(Collectors.toList());
+                        && micFilter.contains(eq.getListedMarket().toUpperCase()));
     }
 
     private synchronized void cargarEquitiesSiNecesario() {

@@ -16,8 +16,10 @@ import com.metradingplat.marketdata.application.input.GestionarMercadosCUIntPort
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
+import com.metradingplat.marketdata.domain.models.PagedActiveEquities;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.ActiveEquityDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.MercadoDTORespuesta;
+import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.PagedSymbolsDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.SymbolDetailsDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.DTOAnswer.TimeframeDTORespuesta;
 import com.metradingplat.marketdata.infrastructure.input.controllerGestionarMetadatos.mapper.MetadataMapper;
@@ -84,6 +86,23 @@ public class MetadataController {
                 List<ActiveEquity> activeEquities = this.objGestionarMercadosCUInt.obtenerSimbolosPorMercados(markets);
                 List<ActiveEquityDTORespuesta> respuesta = this.objMapper.deActiveEquitiesARespuestas(activeEquities);
                 return ResponseEntity.ok(respuesta);
+        }
+
+        @GetMapping("/symbols/search")
+        public ResponseEntity<PagedSymbolsDTORespuesta> buscarSimbolos(
+                        @RequestParam(value = "q", required = false) String q,
+                        @RequestParam(value = "markets", required = false) List<String> markets,
+                        @RequestParam(value = "page", defaultValue = "0") int page,
+                        @RequestParam(value = "size", defaultValue = "50") int size) {
+                PagedActiveEquities resultado = this.objGestionarMercadosCUInt.buscarSimbolos(q, markets, page, size);
+                int totalPages = size > 0 ? (int) Math.ceil(resultado.totalElements() / (double) size) : 0;
+                return ResponseEntity.ok(PagedSymbolsDTORespuesta.builder()
+                                .data(this.objMapper.deActiveEquitiesARespuestas(resultado.items()))
+                                .page(page)
+                                .pageSize(size)
+                                .totalElements(resultado.totalElements())
+                                .totalPages(totalPages)
+                                .build());
         }
 
         @GetMapping("/symbols/{symbol}/details")
