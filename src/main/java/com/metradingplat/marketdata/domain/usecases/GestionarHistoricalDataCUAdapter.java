@@ -49,7 +49,7 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
 
         if (bars != null && bars > completed.size()) {
             int before = completed.size();
-            completed = gapFiller.fill(completed, symbol, timeframe, bars);
+            completed = gapFiller.fill(completed, symbol, timeframe, bars, effectiveEnd);
             if (completed.size() > before) {
                 log.info("Gap-filled {} {} desde historical-data-service: {} -> {} barras",
                         symbol, timeframe, before, completed.size());

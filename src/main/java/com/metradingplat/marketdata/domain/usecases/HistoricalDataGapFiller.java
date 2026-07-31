@@ -24,16 +24,22 @@ public class HistoricalDataGapFiller {
 
     private final GestionarHistoricalDataServiceGatewayIntPort historicalDataGateway;
 
-    public List<Candle> fill(List<Candle> dxLinkCandles, String symbol, EnumTimeframe timeframe, Integer barsWanted) {
+    public List<Candle> fill(List<Candle> dxLinkCandles, String symbol, EnumTimeframe timeframe, Integer barsWanted,
+            Instant anchorEnd) {
         if (barsWanted == null || barsWanted <= 0 || dxLinkCandles.size() >= barsWanted) {
             return dxLinkCandles;
         }
 
         int missing = barsWanted - dxLinkCandles.size();
+        // Si DxLink no tiene NINGUNA barra en el rango pedido (ej. el usuario ya
+        // se desplazo mas atras de lo que DxLink puede servir), no hay que
+        // anclar en "ahora" -- eso traeria barras recientes que no van ahi y
+        // rompe el orden estricto que exige el grafico. Se ancla en el
+        // "endDate" que pidio el llamador.
         Instant oldestKnown = dxLinkCandles.stream()
                 .map(Candle::getTimestamp)
                 .min(Comparator.naturalOrder())
-                .orElse(Instant.now());
+                .orElse(anchorEnd);
 
         List<Candle> older = historicalDataGateway.getCandlesBefore(symbol, timeframe, oldestKnown, missing);
         if (older.isEmpty()) {
