@@ -150,25 +150,45 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
         // Obtener datos (se piden 50 barras para asegurar tener la ultima cerrada)
         Map<String, List<Candle>> rawData = this.objExternalCommunicationGateway.getLastCandleBatch(symbols, timeframe);
 
-        Map<String, Candle> resultado = new HashMap<>();
+        Map<String, Candle> resultado = new ConcurrentHashMap<>();
         Instant now = Instant.now();
         Duration candleDuration = timeframe.getDuration();
 
-        for (Map.Entry<String, List<Candle>> entry : rawData.entrySet()) {
-            List<Candle> allCandles = entry.getValue();
-            if (allCandles == null || allCandles.isEmpty()) {
-                continue; // no data for this symbol
-            }
+        // No hay certeza de que DxLink siempre devuelva al menos una vela YA
+        // CERRADA en la ventana que entrega (depende de cuanto lleva
+        // suscrito el simbolo y su liquidez) -- getLastCandle() (individual)
+        // ya cubria este caso completando con historical-data-service, pero
+        // esta ruta batch nunca lo hacia: un simbolo sin ninguna vela cerrada
+        // todavia simplemente desaparecia del resultado, sin aviso. Mismo
+        // patron de virtual threads que getCandlesBatch.
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<?>> futures = new ArrayList<>();
+            for (Map.Entry<String, List<Candle>> entry : rawData.entrySet()) {
+                futures.add(executor.submit(() -> {
+                    String symbol = entry.getKey();
+                    List<Candle> allCandles = entry.getValue();
 
-            // Filtrar: ultima barra completada
-            Candle lastCompleted = allCandles.stream()
-                    .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
-                    .reduce((first, second) -> second) // la mas reciente
-                    .orElse(null);
+                    List<Candle> completed = allCandles == null ? List.of() : allCandles.stream()
+                            .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
+                            .collect(Collectors.toList());
 
-            if (lastCompleted != null) {
-                resultado.put(entry.getKey(), lastCompleted);
+                    if (completed.isEmpty()) {
+                        completed = gapFiller.fill(completed, symbol, timeframe, 1, now);
+                    }
+
+                    if (!completed.isEmpty()) {
+                        resultado.put(symbol, completed.get(completed.size() - 1));
+                    }
+                }));
             }
+            for (Future<?> future : futures) {
+                future.get();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Batch de last-candle interrumpido", e);
+        } catch (ExecutionException e) {
+            throw new RuntimeException("Fallo procesando batch de last-candle", e.getCause());
         }
 
         return resultado;
