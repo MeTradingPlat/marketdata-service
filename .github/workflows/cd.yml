@@ -15,8 +15,8 @@ jobs:
       - name: Acquire exclusive deploy lock (avoid overwhelming the shared host)
         run: |
           LOCK_DIR="/tmp/metradingplat-deploy.lock"
-          MAX_WAIT=1200
-          MAX_LOCK_AGE=900
+          MAX_WAIT=2400
+          MAX_LOCK_AGE=1800
           waited=0
           while ! mkdir "$LOCK_DIR" 2>/dev/null; do
             lock_age=$(( $(date +%s) - $(stat -c %Y "$LOCK_DIR" 2>/dev/null || date +%s) ))
@@ -131,4 +131,8 @@ jobs:
 
       - name: Release exclusive deploy lock
         if: always()
-        run: rm -rf /tmp/metradingplat-deploy.lock || true
+        run: |
+          LOCK_DIR="/tmp/metradingplat-deploy.lock"
+          if [ -f "$LOCK_DIR/owner" ] && [ "$(cat "$LOCK_DIR/owner")" = "${{ github.repository }}" ]; then
+            rm -rf "$LOCK_DIR"
+          fi
