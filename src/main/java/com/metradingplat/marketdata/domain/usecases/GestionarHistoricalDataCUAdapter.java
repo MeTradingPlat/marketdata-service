@@ -3,9 +3,15 @@ package com.metradingplat.marketdata.domain.usecases;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 import com.metradingplat.marketdata.application.input.GestionarHistoricalDataCUIntPort;
@@ -73,36 +79,56 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
                 bars);
 
         // Filtrar y procesar cada simbolo
-        Map<String, List<Candle>> resultado = new HashMap<>();
+        Map<String, List<Candle>> resultado = new ConcurrentHashMap<>();
         Instant now = Instant.now();
         Duration candleDuration = timeframe.getDuration();
 
-        for (Map.Entry<String, List<Candle>> entry : rawData.entrySet()) {
-            String symbol = entry.getKey();
-            List<Candle> allCandles = entry.getValue();
+        // gapFiller.fill() hace una llamada HTTP bloqueante a
+        // historical-data-service cuando DxLink no alcanza a cubrir "bars" --
+        // con varios simbolos necesitandolo a la vez (comun en escaners con
+        // filtros tecnicos evaluando cientos de simbolos), procesarlos uno
+        // por uno sumaba esas latencias en serie. Virtual threads (mismo
+        // patron ya usado en FundamentalsConnectionPool/CandleChannelAllocator
+        // de este servicio) paralelizan sin necesitar dimensionar un pool.
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<?>> futures = new ArrayList<>();
+            for (Map.Entry<String, List<Candle>> entry : rawData.entrySet()) {
+                futures.add(executor.submit(() -> {
+                    String symbol = entry.getKey();
+                    List<Candle> allCandles = entry.getValue();
 
-            // Filtrar solo barras completas (lista vacia si DxLink no devolvio nada)
-            List<Candle> completed = allCandles == null ? List.of() : allCandles.stream()
-                    .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
-                    .collect(Collectors.toList());
+                    // Filtrar solo barras completas (lista vacia si DxLink no devolvio nada)
+                    List<Candle> completed = allCandles == null ? List.of() : allCandles.stream()
+                            .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
+                            .collect(Collectors.toList());
 
-            // Mismo fallback que getCandles(): si DxLink no alcanza a cubrir
-            // "bars" (su ventana en vivo es corta, sobre todo en timeframes de
-            // minutos), completa con historical-data-service. Antes esta ruta
-            // batch -- la que usa signal-processing-service para evaluar
-            // filtros tecnicos -- solo truncaba hacia abajo si sobraban barras,
-            // nunca rellenaba si faltaban, entregando menos barras de las que
-            // el filtro necesitaba sin ningun aviso.
-            if (bars > completed.size()) {
-                completed = gapFiller.fill(completed, symbol, timeframe, bars, now);
+                    // Mismo fallback que getCandles(): si DxLink no alcanza a cubrir
+                    // "bars" (su ventana en vivo es corta, sobre todo en timeframes de
+                    // minutos), completa con historical-data-service. Antes esta ruta
+                    // batch -- la que usa signal-processing-service para evaluar
+                    // filtros tecnicos -- solo truncaba hacia abajo si sobraban barras,
+                    // nunca rellenaba si faltaban, entregando menos barras de las que
+                    // el filtro necesitaba sin ningun aviso.
+                    if (bars > completed.size()) {
+                        completed = gapFiller.fill(completed, symbol, timeframe, bars, now);
+                    }
+
+                    // Truncar a las ultimas N barras si es necesario
+                    if (bars > 0 && bars < completed.size()) {
+                        completed = completed.subList(completed.size() - bars, completed.size());
+                    }
+
+                    resultado.put(symbol, completed);
+                }));
             }
-
-            // Truncar a las ultimas N barras si es necesario
-            if (bars > 0 && bars < completed.size()) {
-                completed = completed.subList(completed.size() - bars, completed.size());
+            for (Future<?> future : futures) {
+                future.get();
             }
-
-            resultado.put(symbol, completed);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Batch de candles interrumpido", e);
+        } catch (ExecutionException e) {
+            throw new RuntimeException("Fallo procesando batch de candles", e.getCause());
         }
 
         log.info("Batch complete: {} simbolos procesados, {} con datos",
