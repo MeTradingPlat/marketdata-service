@@ -28,6 +28,8 @@ public class FundamentalData {
     private Integer daysUntilEarnings;
     private Long preMarketVolume;
     private Long postMarketVolume;
+    private Double preMarketClose;
+    private Double postMarketClose;
     private LocalDate nextEarningsDate;
     private LocalDate occurredDate;
     private Double eps;

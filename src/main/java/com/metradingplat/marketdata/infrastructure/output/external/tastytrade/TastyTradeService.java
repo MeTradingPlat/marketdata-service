@@ -287,6 +287,11 @@ public class TastyTradeService {
                 long pre = v1.getPreMarketVolume() != null ? v1.getPreMarketVolume() : 0;
                 v1.setPostMarketVolume(Math.max(0, v2.getPostMarketVolume() - pre));
             }
+            // A diferencia de dayVolume, el price de TradeETH es una foto del
+            // ultimo trade (no un contador acumulado) -- no necesita la misma
+            // correccion de resta, un simple ultimo-valor-gana basta.
+            if (v2.getPreMarketClose() != null) v1.setPreMarketClose(v2.getPreMarketClose());
+            if (v2.getPostMarketClose() != null) v1.setPostMarketClose(v2.getPostMarketClose());
             if (v2.getImpliedVolatilityIndex() != null) v1.setImpliedVolatilityIndex(v2.getImpliedVolatilityIndex());
             if (v2.getImpliedVolatilityRank() != null) v1.setImpliedVolatilityRank(v2.getImpliedVolatilityRank());
             if (v2.getImpliedVolatilityPercentile() != null) v1.setImpliedVolatilityPercentile(v2.getImpliedVolatilityPercentile());
@@ -550,20 +555,24 @@ public class TastyTradeService {
 
     /**
      * Ni el camino en vivo (TradeETH) ni el REST (volume-ext, ver
-     * applyExtendedHoursVolume) resetean preMarketVolume/postMarketVolume por
-     * su cuenta -- solo los sobreescriben cuando llega dato nuevo. Sin este
-     * reseteo explicito antes de que arranque el pre-market, un simbolo sin
-     * actividad de extended-hours hoy todavia se queda mostrando el numero de
-     * AYER, indistinguible de un dato fresco (confirmado como patron correcto:
-     * los cambios de sesion deben tratarse como eventos explicitos, no dejarse
-     * a que datos nuevos eventualmente los sobreescriban).
+     * applyExtendedHoursVolume) resetean preMarketVolume/postMarketVolume/
+     * preMarketClose/postMarketClose por su cuenta -- solo los sobreescriben
+     * cuando llega dato nuevo. Sin este reseteo explicito antes de que
+     * arranque el pre-market, un simbolo sin actividad de extended-hours hoy
+     * todavia se queda mostrando el numero (o precio) de AYER, indistinguible
+     * de un dato fresco (confirmado como patron correcto: los cambios de
+     * sesion deben tratarse como eventos explicitos, no dejarse a que datos
+     * nuevos eventualmente los sobreescriban).
      */
     private void resetDailyExtendedHoursVolume() {
         int reset = 0;
         for (FundamentalData fund : fundamentalsCache.values()) {
-            if (fund.getPreMarketVolume() != null || fund.getPostMarketVolume() != null) {
+            if (fund.getPreMarketVolume() != null || fund.getPostMarketVolume() != null
+                    || fund.getPreMarketClose() != null || fund.getPostMarketClose() != null) {
                 fund.setPreMarketVolume(null);
                 fund.setPostMarketVolume(null);
+                fund.setPreMarketClose(null);
+                fund.setPostMarketClose(null);
                 reset++;
             }
         }

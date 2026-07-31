@@ -85,7 +85,7 @@ public class DxLinkClient {
     private static final List<String> TRADE_FIELDS = List.of("eventSymbol", "price", "dayVolume", "time");
     private static final List<String> SUMMARY_FIELDS = List.of("eventSymbol", "dayOpenPrice", "dayHighPrice", "dayLowPrice", "prevDayClosePrice", "openInterest");
     private static final List<String> PROFILE_FIELDS = List.of("eventSymbol", "shares", "earningsPerShare", "exDividendAmount", "dividendFrequency", "tradingStatus", "statusReason", "haltStartTime", "haltEndTime", "beta", "freeFloat");
-    private static final List<String> TRADE_ETH_FIELDS = List.of("eventSymbol", "dayVolume", "extendedTradingHours", "time");
+    private static final List<String> TRADE_ETH_FIELDS = List.of("eventSymbol", "dayVolume", "extendedTradingHours", "time", "price");
     private static final List<String> GREEKS_FIELDS = List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice");
     private static final List<String> CANDLE_FIELDS = List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility");
     private static final Map<String, Object> ALL_EVENT_FIELDS = Map.of(
@@ -113,6 +113,7 @@ public class DxLinkClient {
     private static final int IDX_PROF_FLOAT = 10;
     private static final int IDX_ETH_VOL = 1;
     private static final int IDX_ETH_TIME = 3;
+    private static final int IDX_ETH_PRICE = 4;
     private static final int IDX_GRK_IV = 1;
     private static final int IDX_GRK_DELTA = 2;
     private static final int IDX_GRK_GAMMA = 3;
@@ -538,8 +539,15 @@ public class DxLinkClient {
                         case "TradeETH" -> {
                             long v = field(data, recordStart, IDX_ETH_VOL, recordEnd).asLong();
                             long t = field(data, recordStart, IDX_ETH_TIME, recordEnd).asLong();
+                            Double p = extractNullableDouble(field(data, recordStart, IDX_ETH_PRICE, recordEnd));
                             FundamentalData f = FundamentalData.builder().symbol(symbol).build();
-                            if (isPreMarket(t)) f.setPreMarketVolume(v); else f.setPostMarketVolume(v);
+                            if (isPreMarket(t)) {
+                                f.setPreMarketVolume(v);
+                                if (p != null) f.setPreMarketClose(p);
+                            } else {
+                                f.setPostMarketVolume(v);
+                                if (p != null) f.setPostMarketClose(p);
+                            }
                             notifyFundamentals(symbol, f);
                         }
                         case "Profile" -> {

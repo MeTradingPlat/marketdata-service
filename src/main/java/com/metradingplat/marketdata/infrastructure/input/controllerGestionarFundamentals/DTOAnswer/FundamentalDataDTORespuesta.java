@@ -20,6 +20,8 @@ public class FundamentalDataDTORespuesta {
     private Integer daysUntilEarnings;
     private Long preMarketVolume;
     private Long postMarketVolume;
+    private Double preMarketClose;
+    private Double postMarketClose;
     private Long openInterest;
     private Double eps;
     private Double dividendAmount;
