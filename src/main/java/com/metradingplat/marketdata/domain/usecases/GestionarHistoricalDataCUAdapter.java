@@ -81,15 +81,21 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
             String symbol = entry.getKey();
             List<Candle> allCandles = entry.getValue();
 
-            if (allCandles == null || allCandles.isEmpty()) {
-                resultado.put(symbol, List.of());
-                continue;
-            }
-
-            // Filtrar solo barras completas
-            List<Candle> completed = allCandles.stream()
+            // Filtrar solo barras completas (lista vacia si DxLink no devolvio nada)
+            List<Candle> completed = allCandles == null ? List.of() : allCandles.stream()
                     .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
                     .collect(Collectors.toList());
+
+            // Mismo fallback que getCandles(): si DxLink no alcanza a cubrir
+            // "bars" (su ventana en vivo es corta, sobre todo en timeframes de
+            // minutos), completa con historical-data-service. Antes esta ruta
+            // batch -- la que usa signal-processing-service para evaluar
+            // filtros tecnicos -- solo truncaba hacia abajo si sobraban barras,
+            // nunca rellenaba si faltaban, entregando menos barras de las que
+            // el filtro necesitaba sin ningun aviso.
+            if (bars > completed.size()) {
+                completed = gapFiller.fill(completed, symbol, timeframe, bars, now);
+            }
 
             // Truncar a las ultimas N barras si es necesario
             if (bars > 0 && bars < completed.size()) {
