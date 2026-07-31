@@ -64,9 +64,13 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
                         || (eq.getSymbol() != null && eq.getSymbol().toLowerCase().contains(needle))
                         || (eq.getDescription() != null && eq.getDescription().toLowerCase().contains(needle)))
                 // Sin esto el orden es el de llegada de TastyTrade (arbitrario) --
-                // una busqueda vacia mostraba simbolos oscuros al azar en vez de
-                // algo predecible y facil de recorrer.
-                .sorted((a, b) -> a.getSymbol().compareToIgnoreCase(b.getSymbol()))
+                // buscar "aapl" mostraba a AAPL en la mitad de la lista en vez
+                // de primero. Ahora prioriza: simbolo exacto > simbolo empieza
+                // con lo escrito > simbolo lo contiene > solo la descripcion
+                // coincide, alfabetico como desempate dentro de cada nivel.
+                .sorted(java.util.Comparator
+                        .<ActiveEquity>comparingInt(eq -> relevanceRank(eq, needle))
+                        .thenComparing(eq -> eq.getSymbol(), String.CASE_INSENSITIVE_ORDER))
                 .collect(Collectors.toList());
 
         List<ActiveEquity> pageItems = matched.stream()
@@ -75,6 +79,15 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
                 .collect(Collectors.toList());
 
         return new PagedActiveEquities(pageItems, matched.size());
+    }
+
+    private static int relevanceRank(ActiveEquity eq, String needle) {
+        if (needle.isEmpty()) return 0;
+        String symbol = eq.getSymbol() != null ? eq.getSymbol().toLowerCase() : "";
+        if (symbol.equals(needle)) return 0;
+        if (symbol.startsWith(needle)) return 1;
+        if (symbol.contains(needle)) return 2;
+        return 3; // solo coincide la descripcion
     }
 
     private Stream<ActiveEquity> filtrarPorMercados(List<String> markets) {
