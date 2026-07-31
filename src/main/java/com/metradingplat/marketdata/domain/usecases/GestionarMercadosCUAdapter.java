@@ -63,6 +63,10 @@ public class GestionarMercadosCUAdapter implements GestionarMercadosCUIntPort {
                 .filter(eq -> needle.isEmpty()
                         || (eq.getSymbol() != null && eq.getSymbol().toLowerCase().contains(needle))
                         || (eq.getDescription() != null && eq.getDescription().toLowerCase().contains(needle)))
+                // Sin esto el orden es el de llegada de TastyTrade (arbitrario) --
+                // una busqueda vacia mostraba simbolos oscuros al azar en vez de
+                // algo predecible y facil de recorrer.
+                .sorted((a, b) -> a.getSymbol().compareToIgnoreCase(b.getSymbol()))
                 .collect(Collectors.toList());
 
         List<ActiveEquity> pageItems = matched.stream()
