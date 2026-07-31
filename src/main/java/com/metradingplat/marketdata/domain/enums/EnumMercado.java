@@ -1,9 +1,9 @@
 package com.metradingplat.marketdata.domain.enums;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import lombok.Getter;
 
@@ -26,13 +26,28 @@ public enum EnumMercado {
     }
 
     /**
-     * Given user-facing market codes (e.g. NYSE, NASDAQ), returns the set of
-     * TastyTrade MIC codes (e.g. XNYS, XNAS) to filter by.
+     * Acepta una mezcla de codigos "de usuario" (NYSE, NASDAQ, ETF...) y
+     * codigos MIC reales (XNYS, XNAS, ARCX, BATS...) -- el frontend manda MIC
+     * codes directamente (vienen de obtenerMercadosDisponibles(), que
+     * descubre los MIC reales de TastyTrade), pero algun otro caller podria
+     * seguir mandando los nombres cortos del enum. Antes se resolvia
+     * "todo o nada": si NINGUN codigo coincidia con el enum, se asumian todos
+     * MIC crudos; si UNO coincidia (ej. "OTC", que es igual en ambos
+     * sistemas), el resto se descartaba en silencio -- con 6 MIC codes reales
+     * donde solo "OTC" coincide por casualidad con el enum, el filtro
+     * terminaba usando solo {"OTC"} y perdiendo los otros 5 mercados
+     * completos.
      */
     public static Set<String> toMicCodes(Set<String> marketCodes) {
-        return Arrays.stream(values())
-                .filter(m -> marketCodes.contains(m.code))
-                .flatMap(m -> m.micCodes.stream())
-                .collect(Collectors.toSet());
+        Set<String> result = new HashSet<>();
+        for (String code : marketCodes) {
+            EnumMercado match = Arrays.stream(values()).filter(m -> m.code.equals(code)).findFirst().orElse(null);
+            if (match != null) {
+                result.addAll(match.micCodes);
+            } else {
+                result.add(code);
+            }
+        }
+        return result;
     }
 }
