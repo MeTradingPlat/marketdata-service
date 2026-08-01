@@ -67,7 +67,7 @@ public class DxLinkClient {
     private volatile boolean authenticated = false;
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
     private final AtomicInteger reconnectAttempts = new AtomicInteger(0);
-    private static final int MAX_RECONNECT_ATTEMPTS = 10;
+    private static final int BACKOFF_GROWTH_ATTEMPTS_CEILING = 10;
     private static final int INITIAL_RECONNECT_DELAY_SECONDS = 5;
     private static final int MAX_RECONNECT_DELAY_SECONDS = 300;
     private static final int HEALTH_CHECK_INTERVAL_SECONDS = 60;
@@ -184,12 +184,10 @@ public class DxLinkClient {
                 defaultChannel.initialize().get(10, TimeUnit.SECONDS);
                 startHealthCheck();
                 // Sin este reset, reconnectAttempts es un contador acumulado de por
-                // vida (nunca se resetea solo) -- despues de MAX_RECONNECT_ATTEMPTS
-                // reconexiones exitosas a lo largo de dias/semanas, la conexion
-                // dejaria de reintentar para siempre ante la siguiente caida, sin
-                // ningun error visible salvo isConnected()==false. connect() es el
-                // unico punto por el que pasa toda autenticacion exitosa (inicial o
-                // via performReconnect), asi que el reset va aca.
+                // vida (nunca se resetea solo) -- el backoff de la siguiente caida
+                // arrancaria directo en el delay maximo en vez de escalar desde cero.
+                // connect() es el unico punto por el que pasa toda autenticacion
+                // exitosa (inicial o via performReconnect), asi que el reset va aca.
                 reconnectAttempts.set(0);
             } else {
                 scheduleReconnect();
@@ -204,8 +202,16 @@ public class DxLinkClient {
         if (!reconnecting.compareAndSet(false, true)) return;
         if (isConnected()) { reconnecting.set(false); return; }
         int attempts = reconnectAttempts.incrementAndGet();
-        if (attempts > MAX_RECONNECT_ATTEMPTS) { reconnecting.set(false); return; }
-        int delay = Math.min(INITIAL_RECONNECT_DELAY_SECONDS * (int) Math.pow(2, attempts - 1), MAX_RECONNECT_DELAY_SECONDS);
+        // Confirmado en vivo: dar-por-vencido permanente aqui (el comportamiento
+        // original de esta constante) deja la conexion principal de DxLink
+        // muerta para siempre (sin logs, sin alerta) si la racha de fallos supera
+        // los ~25min que tardan los primeros intentos en agotarse -- algo que si
+        // pasa cuando el host esta con I/O lento (disco HDD bajo carga retrasa el
+        // handshake AUTH mas alla del timeout de 30s de DxLink). Sin este cambio,
+        // la unica recuperacion posible era un restart manual del servicio.
+        int delay = attempts > BACKOFF_GROWTH_ATTEMPTS_CEILING
+                ? MAX_RECONNECT_DELAY_SECONDS
+                : Math.min(INITIAL_RECONNECT_DELAY_SECONDS * (int) Math.pow(2, attempts - 1), MAX_RECONNECT_DELAY_SECONDS);
         scheduler.schedule(() -> { try { performReconnect(); } finally { reconnecting.set(false); } }, delay, TimeUnit.SECONDS);
     }
 
