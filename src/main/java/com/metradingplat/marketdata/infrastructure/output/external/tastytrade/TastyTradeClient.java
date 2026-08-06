@@ -380,13 +380,13 @@ public class TastyTradeClient {
                     Map<String, Object> data = (Map<String, Object>) response.get("data");
                     List<Map<String, Object>> items = (List<Map<String, Object>>) data.get("items");
                     if (items != null && !items.isEmpty()) {
-                        log.info("TastyTrade item[0] keys: {} sample: {}", items.get(0).keySet(), items.get(0));
+                        log.debug("TastyTrade item[0] keys: {} sample: {}", items.get(0).keySet(), items.get(0));
                     } else {
-                        log.info("TastyTrade items: {} (empty or null)", items != null ? items.size() : null);
+                        log.debug("TastyTrade items: {} (empty or null)", items != null ? items.size() : null);
                     }
                     if (items != null) allItems.addAll(items);
                 } else {
-                    log.info("TastyTrade unexpected response: {}", response);
+                    log.warn("TastyTrade unexpected response: {}", response);
                 }
             } catch (Exception e) {
                 log.error("Failed to get market data batch chunk at index {}: {}", i, e.getMessage());

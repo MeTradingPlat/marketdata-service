@@ -78,10 +78,17 @@ jobs:
 
       - name: Run Application Container
         run: |
+          # El host tiene 4 nucleos compartidos con historical-data-service +
+          # postgres-historical (1.0 + 1.5 nucleos ya topados) -- el refresco
+          # OHLC periodico de este servicio (~12.7k simbolos cada 5min, ver
+          # TastyTradeService.refreshOhlcData) llegaba a 1 nucleo completo el
+          # solo. 1.5 nucleos de techo le deja margen para picos sin poder
+          # copar los 4 nucleos completos junto con los otros dos.
           docker run -d \
             --name "marketdata-service" \
             --network "metradingplat-network" \
             --restart "unless-stopped" \
+            --cpus "1.5" \
             --memory "3072m" \
             --memory-swap "3072m" \
             --label project="metradingplat" \
