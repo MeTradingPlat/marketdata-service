@@ -44,6 +44,7 @@ jobs:
               --name "postgres-marketdata" \
               --network "metradingplat-network" \
               --restart "always" \
+              --cpus "0.5" \
               --memory "256m" \
               --memory-swap "256m" \
               -e POSTGRES_DB="marketdata_db" \
