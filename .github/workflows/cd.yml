@@ -75,7 +75,15 @@ jobs:
           exit 1
 
       - name: Delete Old Application Container
-        run: docker rm -f marketdata-service || true
+        run: |
+          # docker stop (SIGTERM) antes de rm -f (SIGKILL directo) -- le da
+          # tiempo al shutdown hook de Eureka a desregistrarse limpiamente.
+          # Sin esto, el gateway seguia enrutando a la IP vieja del
+          # contenedor muerto hasta que la lease expirara (confirmado en
+          # vivo: 500 "Connection refused" en /marketdata/** por varios
+          # minutos tras cada deploy de este servicio).
+          docker stop marketdata-service 2>/dev/null || true
+          docker rm -f marketdata-service || true
 
       - name: Run Application Container
         run: |
