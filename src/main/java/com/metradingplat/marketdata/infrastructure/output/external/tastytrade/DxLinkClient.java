@@ -350,6 +350,17 @@ public class DxLinkClient {
                     String errorType = msg.path("error").asText("");
                     if ("BAD_ACTION".equals(errorType)) {
                         log.debug("DxLink BAD_ACTION (informational): {}", msg.path("message").asText());
+                    } else if ("UNAUTHORIZED".equals(errorType)) {
+                        // El servidor puede invalidar la sesion de AUTH sin cerrar el
+                        // socket (confirmado en vivo: WebSocket seguia "open" segun el
+                        // cliente, pero cada pedido real era rechazado durante mas de
+                        // 24h) -- sin esto, "authenticated" se quedaba en true para
+                        // siempre porque nada mas lo pone en false, y
+                        // checkConnectionHealth() nunca detectaba el problema. Solo un
+                        // restart manual del servicio lo arreglaba.
+                        log.error("DxLink UNAUTHORIZED, forzando reconexion: {}", msg.path("message").asText());
+                        authenticated = false;
+                        scheduleReconnect();
                     } else {
                         log.error("DxLink error: {}", msg);
                     }
