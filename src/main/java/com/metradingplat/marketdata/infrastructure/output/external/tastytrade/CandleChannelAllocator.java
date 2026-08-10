@@ -63,7 +63,14 @@ class CandleChannelAllocator {
         }
     }
 
-    void ensureCapacityFor(List<PooledCandleConnection> connections, int neededSlots,
+    // Sin synchronized, dos lotes onboardeando casi a la vez (dos escaneres, o
+    // un escaner + un chart) leen spareCapacity() ANTES de que ninguno haya
+    // agregado su conexion nueva a la lista compartida -- los dos deciden
+    // "me falta una conexion" por separado en vez de que el segundo reuse la
+    // que acaba de abrir el primero, abriendo mas conexiones de las que en
+    // realidad hacian falta. Mismo candado que ya usa allocate() para el
+    // mismo problema a nivel de un solo simbolo.
+    synchronized void ensureCapacityFor(List<PooledCandleConnection> connections, int neededSlots,
             DxLinkClient.CandleCallback mergeListener) {
         ensureBudgetInitialized();
         int spare = spareCapacity(connections);

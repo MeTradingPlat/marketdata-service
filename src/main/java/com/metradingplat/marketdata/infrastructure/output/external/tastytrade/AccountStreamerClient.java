@@ -11,7 +11,9 @@ import java.net.http.WebSocket;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Cliente para el Account Streamer de TastyTrade.
@@ -28,6 +30,8 @@ public class AccountStreamerClient implements WebSocket.Listener {
     private String currentUrl;
     private volatile boolean authenticated = false;
     private final java.util.concurrent.atomic.AtomicInteger reconnectAttempts = new java.util.concurrent.atomic.AtomicInteger(0);
+    private final AtomicBoolean connecting = new AtomicBoolean(false);
+    private volatile ScheduledFuture<?> heartbeatTask;
     private OrderEventListener orderListener;
 
     public interface OrderEventListener {
@@ -38,11 +42,20 @@ public class AccountStreamerClient implements WebSocket.Listener {
         this.orderListener = listener;
     }
 
+    // ensureConnected() (TastyTradeService) llama a connect() en CADA peticion
+    // de velas, no solo cuando hace falta reconectar -- sin guarda, cada
+    // llamada abria un WebSocket nuevo sin cerrar el anterior (quedaba
+    // huerfano, nunca desconectado) y registraba otro heartbeat mas encima
+    // del que ya corria, acumulando ambos sin limite mientras el proceso
+    // siguiera vivo (confirmado en vivo: docenas de "Connecting to Account
+    // Streamer" en minutos, uno por cada request de velas).
     public void connect(String url, String token) {
         this.sessionToken = token;
         this.currentUrl = url;
+        if (webSocket != null && !webSocket.isOutputClosed()) return;
+        if (!connecting.compareAndSet(false, true)) return;
         log.info("Connecting to Account Streamer: {}", url);
-        
+
         try {
             HttpClient.newHttpClient().newWebSocketBuilder()
                     .buildAsync(URI.create(url), this)
@@ -51,6 +64,8 @@ public class AccountStreamerClient implements WebSocket.Listener {
         } catch (Exception e) {
             log.error("Failed to connect to Account Streamer: {}", e.getMessage());
             scheduleReconnect();
+        } finally {
+            connecting.set(false);
         }
     }
 
@@ -58,18 +73,21 @@ public class AccountStreamerClient implements WebSocket.Listener {
     public void onOpen(WebSocket webSocket) {
         this.webSocket = webSocket;
         log.info("Account Streamer connection opened.");
-        
+
         // 1. Autenticación inmediata
         String authPayload = String.format("{\"action\": \"connect\", \"token\": \"%s\"}", sessionToken);
         webSocket.sendText(authPayload, true);
-        
+
         // 2. Suscripción a eventos de cuenta
         // Nota: En una implementación real, se pueden pedir "watchwords" específicos
         String subPayload = "{\"action\": \"public-watchwords-subscribe\"}";
         webSocket.sendText(subPayload, true);
 
-        // 3. Heartbeats cada 10 segundos
-        scheduler.scheduleAtFixedRate(() -> {
+        // 3. Heartbeats cada 10 segundos -- cancelar el anterior antes de
+        // programar uno nuevo, si no cada reconexion deja el viejo corriendo
+        // para siempre junto al nuevo.
+        if (heartbeatTask != null) heartbeatTask.cancel(false);
+        heartbeatTask = scheduler.scheduleAtFixedRate(() -> {
             if (webSocket != null && !webSocket.isOutputClosed()) {
                 webSocket.sendText("{\"action\": \"heartbeat\"}", true);
             }
