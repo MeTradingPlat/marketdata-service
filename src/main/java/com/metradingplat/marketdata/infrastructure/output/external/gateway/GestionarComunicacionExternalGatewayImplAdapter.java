@@ -14,7 +14,6 @@ import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
-import com.metradingplat.marketdata.domain.models.OptionChain;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 
 import lombok.RequiredArgsConstructor;
@@ -43,18 +42,6 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
     public void cancelOrder(String orderId) {
         log.info("Gateway: Cancelling order: {}", orderId);
         tastyTradeService.cancelOrder(orderId);
-    }
-
-    @Override
-    public void subscribe(String symbol) {
-        log.info("Gateway: Subscribing to real-time data for symbol: {}", symbol);
-        tastyTradeService.subscribe(symbol);
-    }
-
-    @Override
-    public void unsubscribe(String symbol) {
-        log.info("Gateway: Unsubscribing from real-time data for symbol: {}", symbol);
-        tastyTradeService.unsubscribe(symbol);
     }
 
     @Override
@@ -122,11 +109,5 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
     public List<Map<String, Object>> getMarketMetricsBatch(List<String> symbols) {
         log.info("Gateway: Batch fetching market metrics for {} symbols", symbols.size());
         return tastyTradeService.getMarketMetricsBatch(symbols);
-    }
-
-    @Override
-    public OptionChain getOptionChain(String symbol) {
-        log.info("Gateway: Fetching option chain for symbol: {}", symbol);
-        return tastyTradeService.getOptionChain(symbol);
     }
 }

@@ -26,8 +26,6 @@ import com.metradingplat.marketdata.domain.models.ActiveEquity;
 import com.metradingplat.marketdata.domain.models.BracketOrder;
 import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
-import com.metradingplat.marketdata.domain.models.OptionChain;
-import com.metradingplat.marketdata.domain.models.OptionContract;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
 import com.metradingplat.marketdata.infrastructure.output.external.finra.FinraClient;
@@ -56,7 +54,6 @@ public class TastyTradeService {
      */
 
     private final TastyTradeClient tastyTradeClient;
-    private final DxLinkClient dxLinkClient;
     private final AccountStreamerClient accountStreamerClient;
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
     private final FinraClient finraClient;
@@ -70,10 +67,6 @@ public class TastyTradeService {
     // en vivo: refreshOhlcData atascado en TastyTrade impidio que corriera
     // resetDailyExtendedHoursVolume por 20+ minutos).
     private final java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newScheduledThreadPool(4);
-
-    // Trackers para la heuristica de Halt Status (Punto 5)
-    private final ConcurrentHashMap<String, Long> lastMarketDataUpdates = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, OptionContract> greeksCache = new ConcurrentHashMap<>();
 
     // Cachés Globales L1 (Arquitectura de Resiliencia)
     private final ConcurrentHashMap<String, FundamentalData> fundamentalsCache = new ConcurrentHashMap<>();
@@ -126,87 +119,24 @@ public class TastyTradeService {
     @PostConstruct
     public void init() {
         log.info("Initializing TastyTrade service and Synchronizing State...");
-        
+
         // 1. Sincronización de Estado (Truth from Broker)
         reconcileAccountState();
 
-        // 2. Configurar streams
-
-        // Configurar token refresher para auto-reconexión (before connect, does not need defaultChannel)
-        dxLinkClient.setTokenRefresher(() -> {
-            log.info("Token refresher called - obtaining fresh API quote token");
-            return tastyTradeClient.getApiQuoteToken();
-        });
-
-        // Conectar a DxLink (this creates defaultChannel)
-        try {
-            log.debug("Obtaining API quote token from TastyTrade...");
-            String token = tastyTradeClient.getApiQuoteToken();
-            String url = tastyTradeClient.getDxlinkUrl();
-            
-            if (token != null && url != null) {
-                log.debug("Got token and URL. Connecting to DxLink at: {}", url);
-                dxLinkClient.connect(url, token);
-            } else {
-                log.warn("TastyTrade token or URL is null. Skipping DxLink connection (likely in test environment).");
-            }
-        } catch (Exception e) {
-            log.error("Failed to initialize TastyTrade service: {}", e.getMessage(), e);
+        // 2. Account Streamer -- eventos de ordenes/posiciones/balances en tiempo
+        // real (necesario para saber cuando se llena una orden, incluidas las
+        // brackets con stop-loss/take-profit). Independiente de DxLink: el pool de
+        // velas y el pool de fundamentales ya abren sus propias conexiones DxLink
+        // bajo demanda, no hace falta un canal DxLink de servicio aparte.
+        String accessToken = tastyTradeClient.getAccessToken();
+        String streamerUrl = tastyTradeClient.getAccountStreamerUrl();
+        if (accessToken != null && streamerUrl != null) {
+            accountStreamerClient.connect(streamerUrl, accessToken);
+        } else {
+            log.warn("TastyTrade access token or streamer URL is null. Skipping Account Streamer connection (likely in test environment).");
         }
 
-        // Configurar listener de fundamentales en el canal DEFAULT
-        // Usa setOnFundamentalData que se re-aplica en cada reconnect. La misma
-        // referencia se usa para el pool de conexiones dedicadas a fundamentales
-        // (FundamentalsConnectionPool) -- una sola implementacion de merge, dos
-        // productores de eventos (conexion principal + pool).
-        dxLinkClient.setOnFundamentalData(this::mergeFundamentalData);
-
-        // Configurar callbacks AFTER connect() so defaultChannel exists
-        dxLinkClient.setOnMarketData((symbol, data) -> {
-            log.debug("Market data received for {}: bid={}, ask={}, last={}",
-                    symbol, data.getBid(), data.getAsk(), data.getLastPrice());
-
-            // Heuristica de Spread Anómalo (Punto 5): Evaluar spreads de error como señal adicional
-            if (data.getBid() != null && data.getAsk() != null) {
-                double spread = data.getAsk() - data.getBid();
-                if (data.getBid() == 0 || data.getAsk() == 0 || spread < 0) {
-                    log.warn("HALT HEURISTIC: Probable Suspensión para {} debido a spread anómalo (Bid={}, Ask={})", symbol, data.getBid(), data.getAsk());
-                }
-            }
-
-            if (data.getLastPrice() != null && data.getLastPrice() > 0) {
-                lastPricesCache.put(symbol.toUpperCase(), data.getLastPrice());
-            }
-            lastMarketDataUpdates.put(symbol, System.currentTimeMillis());
-            kafkaProducer.publishMarketData(data);
-        });
-
-        // Evento determinista de Suspensión mediante canal Message (Punto 5, Refinamiento)
-        dxLinkClient.setOnMessage((symbol, messageData) -> {
-            // data array: [eventSymbol, eventTime, messageType, message]
-            if (messageData.isArray() && messageData.size() >= 4) {
-                String type = messageData.get(2).asText("");
-                String text = messageData.get(3).asText("");
-                log.warn("ADMIN MESSAGE [{}]: {} - {}", symbol, type, text);
-                
-                if (text.toLowerCase().contains("halt") || text.toLowerCase().contains("suspend")) {
-                    log.error("DETERMINISTIC HALT DETECTED para {}: {}", symbol, text);
-                    // Aqui se podria disparar un evento de Kafka especifico para detener la operativa
-                }
-            }
-        });
-
-        dxLinkClient.setOnGreeks((symbol, greeks) -> {
-            Double iv = greeks.getImpliedVolatility();
-            if (iv != null && iv > 1.0) { // Señal de alta volatilidad (>100% IV)
-                log.warn("🔥 [ALPHA SIGNAL] Volatilidad Extrema en {}: IV={}% | Delta={}", 
-                        symbol, Math.round(iv * 100), greeks.getDelta());
-            }
-            
-            greeksCache.put(symbol, greeks);
-        });
-
-        log.info("DxLink initialized. Auto-subscribe and REST preload will start in 5s...");
+        log.info("Auto-subscribe and REST preload will start in 5s...");
 
         // Ancladas antes de la apertura regular (9:30am ET) -- antes eran 8/9/10am,
         // lo que dejaba el refresco diario a medio terminar (o sin empezar) cuando
@@ -240,11 +170,7 @@ public class TastyTradeService {
                 List<String> universe = equitiesUniverseProvider.getUniverse();
                 log.info("Equities universe: {} symbols across all US markets", universe.size());
                 preloadFundamentalsFromRest(universe);
-                if (dxLinkClient.isConnected()) {
-                    fundamentalsConnectionPool.start(universe, this::mergeFundamentalData);
-                } else {
-                    log.warn("DxLink not connected, skipping fundamentals connection pool startup");
-                }
+                fundamentalsConnectionPool.start(universe, this::mergeFundamentalData);
             } catch (Exception e) {
                 log.error("Auto-subscribe/preload failed: {}", e.getMessage());
             }
@@ -465,7 +391,6 @@ public class TastyTradeService {
         });
     }
 
-    private static final int SUBSCRIBE_CHUNK_SIZE = 100;
     private static long millisUntilNextHour(int targetHour) {
         java.time.ZonedDateTime now = java.time.ZonedDateTime.now(java.time.ZoneId.of("America/New_York"));
         java.time.ZonedDateTime next = now.withMinute(5).withSecond(0).withNano(0);
@@ -812,38 +737,6 @@ public class TastyTradeService {
         }
     }
 
-    private static final long SUBSCRIBE_CHUNK_DELAY_MS = 50;
-
-    public void subscribeBatch(List<String> symbols) {
-        log.info("Batch subscribing {} symbols (chunks of {}, {}ms delay)", symbols.size(), SUBSCRIBE_CHUNK_SIZE, SUBSCRIBE_CHUNK_DELAY_MS);
-        ensureConnected();
-        if (!dxLinkClient.isConnected()) {
-            log.error("Cannot subscribe: DxLink not connected");
-            return;
-        }
-        for (int i = 0; i < symbols.size(); i += SUBSCRIBE_CHUNK_SIZE) {
-            int end = Math.min(i + SUBSCRIBE_CHUNK_SIZE, symbols.size());
-            dxLinkClient.subscribeBatch(symbols.subList(i, end));
-            if (end < symbols.size()) {
-                try { Thread.sleep(SUBSCRIBE_CHUNK_DELAY_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
-            }
-        }
-        int active = dxLinkClient.getActiveSubscriptionCount();
-        log.info("Batch subscribe done: requested {} symbols, {} now active", symbols.size(), active);
-    }
-
-    public void unsubscribeBatch(List<String> symbols) {
-        log.info("Batch unsubscribing {} symbols from DxLink", symbols.size());
-        for (String sym : symbols) {
-            dxLinkClient.unsubscribe(sym);
-        }
-        log.info("Batch unsubscribe complete: {} symbols removed", symbols.size());
-    }
-
-    public int getActiveSubscriptionCount() {
-        return dxLinkClient.getActiveSubscriptionCount();
-    }
-
     public Map<String, Double> getCachedPrices(List<String> symbols) {
         Map<String, Double> result = new ConcurrentHashMap<>();
         for (String sym : symbols) {
@@ -908,42 +801,6 @@ public class TastyTradeService {
             }
         }
         return List.of();
-    }
-
-    public void subscribe(String symbol) {
-        log.info("Subscribing to real-time data and Alpha Metrics: {}", symbol);
-        ensureConnected();
-
-        // 1. Ingesta de Datos (dxLink)
-        dxLinkClient.subscribe(symbol);
-        
-        // 2. Enriquecimiento Alpha (REST Market Metrics)
-        CompletableFuture.runAsync(() -> {
-            try {
-                List<Map<String, Object>> metrics = tastyTradeClient.getMarketMetricsBatch(List.of(symbol));
-                if (!metrics.isEmpty()) {
-                    Map<String, Object> m = metrics.get(0);
-                    log.info("📊 Alpha Metrics hídricas para {}: IV Rank={}", symbol, m.get("implied-volatility-index-rank"));
-                    
-                    String upperSym = symbol.toUpperCase();
-                    FundamentalData fund = fundamentalsCache.computeIfAbsent(upperSym, k -> FundamentalData.builder().symbol(k).build());
-                    fund.setImpliedVolatilityIndex(safeConvertToDouble(m.get("implied-volatility-index")));
-                    fund.setImpliedVolatilityRank(safeConvertToDouble(m.get("implied-volatility-index-rank")));
-                    fund.setImpliedVolatilityPercentile(safeConvertToDouble(m.get("implied-volatility-percentile")));
-                    fund.setLiquidity(safeConvertToDouble(m.get("liquidity-value")));
-                    fund.setLiquidityRating(safeConvertToInt(m.get("liquidity-rating")));
-                    Double subShortRatio = safeConvertToDouble(m.get("short-ratio"));
-                    if (subShortRatio != null) fund.setShortRatio(subShortRatio);
-                }
-            } catch (Exception e) {
-                log.warn("Falla silenciosa en Alpha Enrichment para {}", symbol);
-            }
-        });
-    }
-
-    public void unsubscribe(String symbol) {
-        log.info("Unsubscribing from: {}", symbol);
-        dxLinkClient.unsubscribe(symbol);
     }
 
     /**
@@ -1022,90 +879,11 @@ public class TastyTradeService {
         String label = timeframe.getLabel();
         String type = label.substring(label.length() - 1);
         String period = label.substring(0, label.length() - 1);
-        ensureConnected();
         return candleSubscriptionPool.getCandles(symbols, timeframe, bars, fromTime, period, type);
-    }
-
-    public OptionChain getOptionChain(String symbol) {
-        log.info("Fetching option chain for {}", symbol);
-        Map<String, Object> nested = tastyTradeClient.getOptionChainNested(symbol);
-        if (nested == null || nested.isEmpty()) return null;
-
-        OptionChain chain = OptionChain.builder()
-                .symbol(symbol)
-                .expirations(new java.util.HashMap<>())
-                .build();
-
-        List<String> allOptionSymbols = new java.util.ArrayList<>();
-
-        try {
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> expirations = (List<Map<String, Object>>) nested.get("expirations");
-            if (expirations != null) {
-                for (Map<String, Object> exp : expirations) {
-                    String date = (String) exp.get("expiration-date");
-                    @SuppressWarnings("unchecked")
-                    List<Map<String, Object>> strikes = (List<Map<String, Object>>) exp.get("strikes");
-                    
-                    List<OptionContract> contracts = new java.util.ArrayList<>();
-                    if (strikes != null) {
-                        for (Map<String, Object> strike : strikes) {
-                            addContract(contracts, allOptionSymbols, symbol, date, strike, "call");
-                            addContract(contracts, allOptionSymbols, symbol, date, strike, "put");
-                        }
-                    }
-                    chain.getExpirations().put(date, contracts);
-                }
-            }
-        } catch (Exception e) {
-            log.error("Error parsing option chain for {}: {}", symbol, e.getMessage());
-        }
-
-        // Suscripción masiva por lotes (Batch)
-        if (!allOptionSymbols.isEmpty()) {
-            log.info("Subscribing to Greeks for {} options of {}", allOptionSymbols.size(), symbol);
-            ensureConnected();
-            // Dividir en lotes de 100 para no exceder los 8KB del frame dxLink
-            for (int i = 0; i < allOptionSymbols.size(); i += 100) {
-                List<String> chunk = allOptionSymbols.subList(i, Math.min(i + 100, allOptionSymbols.size()));
-                dxLinkClient.subscribe(chunk);
-                try { Thread.sleep(50); } catch (InterruptedException ignored) {} // Throttle
-            }
-        }
-
-        return chain;
-    }
-
-    private void addContract(List<OptionContract> list, List<String> allSymbols, String root, String date, Map<String, Object> strike, String side) {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> data = (Map<String, Object>) strike.get(side);
-        if (data != null) {
-            String osiSymbol = (String) data.get("streamer-symbol");
-            if (osiSymbol != null) {
-                OptionContract cached = greeksCache.get(osiSymbol);
-                OptionContract contract = OptionContract.builder()
-                        .symbol(osiSymbol)
-                        .rootSymbol(root)
-                        .expirationDate(LocalDate.parse(date))
-                        .strikePrice(((Number) strike.get("strike-price")).doubleValue())
-                        .optionType(side.toUpperCase())
-                        .delta(cached != null ? cached.getDelta() : null)
-                        .gamma(cached != null ? cached.getGamma() : null)
-                        .theta(cached != null ? cached.getTheta() : null)
-                        .vega(cached != null ? cached.getVega() : null)
-                        .rho(cached != null ? cached.getRho() : null)
-                        .impliedVolatility(cached != null ? cached.getImpliedVolatility() : null)
-                        .theoreticalPrice(cached != null ? cached.getTheoreticalPrice() : null)
-                        .build();
-                list.add(contract);
-                allSymbols.add(osiSymbol);
-            }
-        }
     }
 
     public void shutdown() {
         log.info("Shutting down TastyTradeService...");
-        dxLinkClient.disconnect();
         scheduler.shutdown();
     }
 
@@ -1300,46 +1078,6 @@ public class TastyTradeService {
         }
     }
 
-    private void ensureConnected() {
-        boolean reconnected = false;
-
-        if (!dxLinkClient.isConnected()) {
-            log.warn("DxLink disconnected: {} — reconnecting", dxLinkClient.connectionDiagnostics());
-            String token = tastyTradeClient.getApiQuoteToken();
-            String url = tastyTradeClient.getDxlinkUrl();
-            dxLinkClient.connect(url, token);
-            reconnected = true;
-        }
-        if (reconnected && dxLinkClient.getDefaultChannel() != null) {
-            dxLinkClient.getDefaultChannel().addFundamentalListener((sym, data) -> {
-                String upperSym = sym.toUpperCase();
-                fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
-                    if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
-                    if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
-                    if (v2.getEps() != null) v1.setEps(v2.getEps());
-                    if (v2.getBeta() != null) v1.setBeta(v2.getBeta());
-                    if (v2.getTradingStatus() != null) v1.setTradingStatus(v2.getTradingStatus());
-                    return v1;
-                });
-            });
-            dxLinkClient.getDefaultChannel().setOnMarketData((symbol, data) -> {
-                if (data.getLastPrice() != null && data.getLastPrice() > 0) {
-                    lastPricesCache.put(symbol.toUpperCase(), data.getLastPrice());
-                }
-            });
-            dxLinkClient.resubscribeAllSymbols();
-        }
-
-        // Conexión al Account Streamer
-        String accessToken = tastyTradeClient.getAccessToken();
-        String streamerUrl = tastyTradeClient.getAccountStreamerUrl();
-        accountStreamerClient.connect(streamerUrl, accessToken);
-
-        if (reconnected) {
-            log.info("📡 Reconexión detectada. Ejecutando reconciliación de seguridad...");
-            reconcileAccountState();
-        }
-    }
 
     private Double safeConvertToDouble(Object val) {
         if (val == null) return null;

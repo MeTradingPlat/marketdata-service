@@ -26,31 +26,6 @@ public class StreamingController {
 
     private final TastyTradeService tastyTradeService;
 
-    @PostMapping("/subscribe")
-    public ResponseEntity<Map<String, String>> subscribeBatch(@RequestBody List<String> symbols) {
-        log.info("Subscribe request: {} symbols", symbols.size());
-        tastyTradeService.subscribeBatch(symbols);
-        return ResponseEntity.ok(Map.of(
-            "status", "subscribed",
-            "count", String.valueOf(symbols.size())
-        ));
-    }
-
-    @PostMapping("/unsubscribe")
-    public ResponseEntity<Map<String, String>> unsubscribeBatch(@RequestBody List<String> symbols) {
-        return ResponseEntity.status(403).body(Map.of(
-            "status", "blocked",
-            "message", "Fundamentals auto-subscribe is permanent. Unsubscribe not allowed."
-        ));
-    }
-
-    @GetMapping("/subscriptions/count")
-    public ResponseEntity<Map<String, Object>> subscriptionCount() {
-        return ResponseEntity.ok(Map.of(
-            "activeSubscriptions", tastyTradeService.getActiveSubscriptionCount()
-        ));
-    }
-
     @PostMapping("/quotes/cached")
     public ResponseEntity<Map<String, Double>> getCachedQuotes(@RequestBody List<String> symbols) {
         Map<String, Double> prices = tastyTradeService.getCachedPrices(symbols);

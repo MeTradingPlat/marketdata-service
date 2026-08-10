@@ -879,41 +879,6 @@ public class TastyTradeClient {
             return List.of();
         }
     }
-    /**
-     * Obtiene la cadena de opciones anidada (expiraciones y strikes).
-     * GET /option-chains/{symbol}/nested
-     */
-    public Map<String, Object> getOptionChainNested(String symbol) {
-        return getOptionChainNestedInternal(symbol, false);
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> getOptionChainNestedInternal(String symbol, boolean isRetry) {
-        if (accessToken == null) refreshAccessToken();
-
-        try {
-            Map<String, Object> response = tastyTradeRestClient
-                    .get()
-                    .uri("/option-chains/{symbol}/nested", symbol)
-                    .header("Authorization", "Bearer " + accessToken)
-                    .retrieve()
-                    .body(Map.class);
-
-            if (response == null || !response.containsKey("data")) {
-                return Map.of();
-            }
-
-            return (Map<String, Object>) response.get("data");
-        } catch (Exception e) {
-            log.error("Failed to get option chain for {}: {}", symbol, e.getMessage());
-            if (!isRetry && e.getMessage() != null && e.getMessage().contains("401")) {
-                refreshAccessToken();
-                return getOptionChainNestedInternal(symbol, true);
-            }
-            return Map.of();
-        }
-    }
-
     private <T> T executeWithBackoff(java.util.function.Supplier<T> action, int retryCount) {
         if (retryCount > MAX_RETRIES) {
             log.error("Max retries reached for 429 error.");

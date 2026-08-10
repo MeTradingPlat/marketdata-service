@@ -32,7 +32,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.metradingplat.marketdata.domain.models.Candle;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
-import com.metradingplat.marketdata.domain.models.OptionContract;
 import com.metradingplat.marketdata.infrastructure.output.kafka.DTO.MarketDataStreamDTO;
 
 import jakarta.annotation.PreDestroy;
@@ -76,7 +75,6 @@ public class DxLinkClient {
     private ScheduledFuture<?> healthCheckTask;
     private final List<CandleCallback> candleListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<BiConsumer<String, FundamentalData>> fundamentalListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
-    private final List<BiConsumer<String, OptionContract>> greeksListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<BiConsumer<String, JsonNode>> messageListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private Supplier<String> tokenRefresher;
 
@@ -114,13 +112,6 @@ public class DxLinkClient {
     private static final int IDX_ETH_VOL = 1;
     private static final int IDX_ETH_TIME = 3;
     private static final int IDX_ETH_PRICE = 4;
-    private static final int IDX_GRK_IV = 1;
-    private static final int IDX_GRK_DELTA = 2;
-    private static final int IDX_GRK_GAMMA = 3;
-    private static final int IDX_GRK_THETA = 4;
-    private static final int IDX_GRK_VEGA = 5;
-    private static final int IDX_GRK_RHO = 6;
-    private static final int IDX_GRK_THEO = 7;
 
     public interface CandleCallback {
         void onCandle(String symbol, Candle candle, boolean isSnapshotComplete);
@@ -133,7 +124,6 @@ public class DxLinkClient {
         if (defaultChannel != null) defaultChannel.setOnMarketData(callback);
     }
     public void setOnMessage(BiConsumer<String, JsonNode> callback) { if (defaultChannel != null) defaultChannel.addMessageListener(callback); }
-    public void setOnGreeks(BiConsumer<String, OptionContract> callback) { if (defaultChannel != null) defaultChannel.addGreeksListener(callback); }
     private BiConsumer<String, FundamentalData> fundamentalCallback;
     private BiConsumer<String, MarketDataStreamDTO> marketDataCallback;
 
@@ -394,7 +384,6 @@ public class DxLinkClient {
         public void addCandleListener(CandleCallback listener) { candleListeners.add(listener); }
         public void removeCandleListener(CandleCallback listener) { candleListeners.remove(listener); }
         public void addFundamentalListener(BiConsumer<String, FundamentalData> listener) { fundamentalListeners.add(listener); }
-        public void addGreeksListener(BiConsumer<String, OptionContract> listener) { greeksListeners.add(listener); }
         public void addMessageListener(BiConsumer<String, JsonNode> listener) { messageListeners.add(listener); }
         public void addMarketDataListener(BiConsumer<String, MarketDataStreamDTO> listener) { marketDataListeners.add(listener); }
         public void setOnMarketData(BiConsumer<String, MarketDataStreamDTO> cb) { marketDataListeners.clear(); marketDataListeners.add(cb); }
@@ -582,15 +571,6 @@ public class DxLinkClient {
                                     .floatShares(asNullableLong(field(data, recordStart, IDX_PROF_FLOAT, recordEnd)))
                                     .build());
                         }
-                        case "Greeks" -> notifyGreeks(symbol, OptionContract.builder().symbol(symbol)
-                                .impliedVolatility(extractNullableDouble(field(data, recordStart, IDX_GRK_IV, recordEnd)))
-                                .delta(extractNullableDouble(field(data, recordStart, IDX_GRK_DELTA, recordEnd)))
-                                .gamma(extractNullableDouble(field(data, recordStart, IDX_GRK_GAMMA, recordEnd)))
-                                .theta(extractNullableDouble(field(data, recordStart, IDX_GRK_THETA, recordEnd)))
-                                .vega(extractNullableDouble(field(data, recordStart, IDX_GRK_VEGA, recordEnd)))
-                                .rho(extractNullableDouble(field(data, recordStart, IDX_GRK_RHO, recordEnd)))
-                                .theoreticalPrice(extractNullableDouble(field(data, recordStart, IDX_GRK_THEO, recordEnd)))
-                                .build());
                     }
                 });
             } catch (Exception e) { log.error("Compact error processing event type: " + type, e); }
@@ -669,7 +649,6 @@ public class DxLinkClient {
 
         private void notifyMarketData(String s, MarketDataStreamDTO d) { marketDataListeners.forEach(l -> { try { l.accept(s, d); } catch (Exception e) {} }); }
         private void notifyFundamentals(String s, FundamentalData d) { fundamentalListeners.forEach(l -> { try { l.accept(s, d); } catch (Exception e) {} }); }
-        private void notifyGreeks(String s, OptionContract d) { greeksListeners.forEach(l -> { try { l.accept(s, d); } catch (Exception e) {} }); }
         private void notifyCandle(String s, Candle c, boolean complete) { candleListeners.forEach(l -> { try { l.onCandle(s, c, complete); } catch (Exception e) {} }); }
         private boolean isPreMarket(long t) { java.time.ZonedDateTime ny = Instant.ofEpochMilli(t).atZone(java.time.ZoneId.of("America/New_York")); int h = ny.getHour(); int m = ny.getMinute(); return (h < 9) || (h == 9 && m < 30); }
         void failInitialization(String r) { initFuture.completeExceptionally(new RuntimeException(r)); channels.remove(id); }
