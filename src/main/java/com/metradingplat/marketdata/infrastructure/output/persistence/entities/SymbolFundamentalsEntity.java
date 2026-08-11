@@ -35,6 +35,8 @@ public class SymbolFundamentalsEntity {
     private Integer daysUntilEarnings;
     private Long preMarketVolume;
     private Long postMarketVolume;
+    private Double preMarketClose;
+    private Double postMarketClose;
     
     private Double impliedVolatilityIndex;
     private Double impliedVolatilityRank;

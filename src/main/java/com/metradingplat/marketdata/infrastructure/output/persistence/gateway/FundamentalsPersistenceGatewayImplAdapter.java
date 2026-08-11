@@ -6,13 +6,17 @@ import com.metradingplat.marketdata.infrastructure.output.persistence.entities.S
 import com.metradingplat.marketdata.infrastructure.output.persistence.mappers.SymbolFundamentalsMapper;
 import com.metradingplat.marketdata.infrastructure.output.persistence.repositories.SpringSymbolFundamentalsRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class FundamentalsPersistenceGatewayImplAdapter implements FundamentalsPersistenceGatewayIntPort {
 
     private final SpringSymbolFundamentalsRepository repository;
@@ -29,5 +33,17 @@ public class FundamentalsPersistenceGatewayImplAdapter implements FundamentalsPe
         entity.setLastUpdated(Instant.now());
         SymbolFundamentalsEntity savedEntity = repository.save(entity);
         return mapper.toDomain(savedEntity);
+    }
+
+    @Override
+    public List<FundamentalData> findAllWithExtendedHoursData() {
+        return repository.findAllWithExtendedHoursData().stream().map(mapper::toDomain).toList();
+    }
+
+    @Override
+    @Transactional
+    public void clearExtendedHoursData() {
+        int cleared = repository.clearExtendedHoursData();
+        log.info("DB reset: cleared pre/post-market volume+close for {} symbols", cleared);
     }
 }

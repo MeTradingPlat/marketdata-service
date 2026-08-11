@@ -211,6 +211,13 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
                     if (rt.getDayVolume() != null && rt.getDayVolume() > 0) existing.setDayVolume(rt.getDayVolume());
                     if (rt.getPreMarketVolume() != null && rt.getPreMarketVolume() > 0) existing.setPreMarketVolume(rt.getPreMarketVolume());
                     if (rt.getPostMarketVolume() != null && rt.getPostMarketVolume() > 0) existing.setPostMarketVolume(rt.getPostMarketVolume());
+                    // Antes nunca se copiaban -- /marketdata/fundamentals/realtime (usado
+                    // tanto por el popup de simbolo del frontend como por ChangeStrategy con
+                    // PUNTO_REFERENCIA_CHANGE=CLOSE_PRE_MARKET/CLOSE_POST_MARKET en
+                    // signal-processing-service) siempre devolvia null aca, aunque el dato
+                    // ya estuviera bien poblado en TastyTradeService.fundamentalsCache.
+                    if (rt.getPreMarketClose() != null) existing.setPreMarketClose(rt.getPreMarketClose());
+                    if (rt.getPostMarketClose() != null) existing.setPostMarketClose(rt.getPostMarketClose());
                     
                     // New fields from dxLink
                     if (rt.getEps() != null) existing.setEps(rt.getEps());

@@ -20,6 +20,7 @@ import java.util.function.Consumer;
 
 import org.springframework.stereotype.Service;
 
+import com.metradingplat.marketdata.application.output.FundamentalsPersistenceGatewayIntPort;
 import com.metradingplat.marketdata.application.output.GestionarChangeNotificationsProducerIntPort;
 import com.metradingplat.marketdata.domain.enums.EnumTimeframe;
 import com.metradingplat.marketdata.domain.models.ActiveEquity;
@@ -61,6 +62,7 @@ public class TastyTradeService {
     private final CandleSubscriptionPool candleSubscriptionPool;
     private final EquitiesUniverseProvider equitiesUniverseProvider;
     private final FundamentalsConnectionPool fundamentalsConnectionPool;
+    private final FundamentalsPersistenceGatewayIntPort fundamentalsPersistenceGateway;
     // Pool, no un solo hilo -- 7 jobs distintos comparten este scheduler y varios
     // llaman a REST externos (TastyTrade/FINRA/SEC) que pueden colgarse; con un
     // solo hilo, uno colgado bloqueaba a los otros 6 indefinidamente (confirmado
@@ -70,6 +72,11 @@ public class TastyTradeService {
 
     // Cachés Globales L1 (Arquitectura de Resiliencia)
     private final ConcurrentHashMap<String, FundamentalData> fundamentalsCache = new ConcurrentHashMap<>();
+    // Simbolos cuyo pre/post-market volume o close cambio en memoria desde el
+    // ultimo flush a BD -- se drena cada 30s (flushExtendedHoursToDb) en vez
+    // de escribir en cada tick de TradeETH, que con miles de simbolos activos
+    // en pre/post-market seria una escritura por trade.
+    private final Set<String> dirtyExtendedHoursSymbols = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, Double> lastPricesCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Map<String, Object>> positionsCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Map<String, Object>> liveOrdersCache = new ConcurrentHashMap<>();
@@ -163,6 +170,8 @@ public class TastyTradeService {
                 5, 5, TimeUnit.MINUTES);
         scheduler.scheduleAtFixedRate(this::fillMissingSharesOutstandingFromSecEdgar,
                 5, 5, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(this::flushExtendedHoursToDb,
+                30, 30, TimeUnit.SECONDS);
 
         CompletableFuture.runAsync(() -> {
             try {
@@ -170,6 +179,7 @@ public class TastyTradeService {
                 List<String> universe = equitiesUniverseProvider.getUniverse();
                 log.info("Equities universe: {} symbols across all US markets", universe.size());
                 preloadFundamentalsFromRest(universe);
+                loadExtendedHoursFromDb();
                 fundamentalsConnectionPool.start(universe, this::mergeFundamentalData);
             } catch (Exception e) {
                 log.error("Auto-subscribe/preload failed: {}", e.getMessage());
@@ -218,6 +228,10 @@ public class TastyTradeService {
             // correccion de resta, un simple ultimo-valor-gana basta.
             if (v2.getPreMarketClose() != null) v1.setPreMarketClose(v2.getPreMarketClose());
             if (v2.getPostMarketClose() != null) v1.setPostMarketClose(v2.getPostMarketClose());
+            if (v2.getPreMarketVolume() != null || v2.getPostMarketVolume() != null
+                    || v2.getPreMarketClose() != null || v2.getPostMarketClose() != null) {
+                dirtyExtendedHoursSymbols.add(upperSym);
+            }
             if (v2.getImpliedVolatilityIndex() != null) v1.setImpliedVolatilityIndex(v2.getImpliedVolatilityIndex());
             if (v2.getImpliedVolatilityRank() != null) v1.setImpliedVolatilityRank(v2.getImpliedVolatilityRank());
             if (v2.getImpliedVolatilityPercentile() != null) v1.setImpliedVolatilityPercentile(v2.getImpliedVolatilityPercentile());
@@ -476,6 +490,7 @@ public class TastyTradeService {
         } else {
             fund.setPreMarketVolume(volumeExt);
         }
+        if (fund.getSymbol() != null) dirtyExtendedHoursSymbols.add(fund.getSymbol().toUpperCase());
     }
 
     /**
@@ -502,6 +517,70 @@ public class TastyTradeService {
             }
         }
         log.info("Daily reset: cleared pre/post-market volume for {} symbols", reset);
+        // El reset en memoria de arriba no toca la BD -- sin esto, un reinicio
+        // justo despues del reset diario (antes de que llegue el primer tick
+        // fresco de hoy) volveria a cargar el numero de AYER desde la BD.
+        dirtyExtendedHoursSymbols.clear();
+        try {
+            fundamentalsPersistenceGateway.clearExtendedHoursData();
+        } catch (Exception e) {
+            log.warn("Daily reset: failed to clear extended-hours data in DB: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Escribe a BD (write-through) solo los simbolos marcados dirty desde el
+     * ultimo flush, cada 30s en vez de una escritura por tick de TradeETH --
+     * con miles de simbolos activos en pre/post-market eso serian miles de
+     * UPDATEs por minuto. La memoria (fundamentalsCache) sigue siendo la
+     * fuente que todos los consumidores leen; la BD es solo el respaldo para
+     * sobrevivir un reinicio (ver loadExtendedHoursFromDb, llamado al
+     * arrancar).
+     */
+    private void flushExtendedHoursToDb() {
+        if (dirtyExtendedHoursSymbols.isEmpty()) return;
+        List<String> pending = new ArrayList<>(dirtyExtendedHoursSymbols);
+        dirtyExtendedHoursSymbols.removeAll(pending);
+        int saved = 0;
+        for (String sym : pending) {
+            FundamentalData fund = fundamentalsCache.get(sym);
+            if (fund == null) continue;
+            try {
+                fundamentalsPersistenceGateway.save(fund);
+                saved++;
+            } catch (Exception e) {
+                log.warn("Failed to persist extended-hours data for {}: {}", sym, e.getMessage());
+                dirtyExtendedHoursSymbols.add(sym);
+            }
+        }
+        log.info("Extended-hours flush: {} symbols persisted to DB", saved);
+    }
+
+    /**
+     * Rehidrata la cache en memoria con lo ultimo guardado en BD -- se llama
+     * al arrancar, antes de que fundamentalsConnectionPool empiece a recibir
+     * ticks en vivo, para que un reinicio a mitad de sesion no arranque en
+     * null (ver conversacion: se pierde el pedazo de sesion que paso
+     * mientras el servicio estuvo caido, pero no todo lo de antes).
+     */
+    private void loadExtendedHoursFromDb() {
+        try {
+            List<FundamentalData> saved = fundamentalsPersistenceGateway.findAllWithExtendedHoursData();
+            int loaded = 0;
+            for (FundamentalData row : saved) {
+                if (row.getSymbol() == null) continue;
+                String upperSym = row.getSymbol().toUpperCase();
+                FundamentalData fund = fundamentalsCache.computeIfAbsent(upperSym, k -> FundamentalData.builder().symbol(k).build());
+                if (row.getPreMarketVolume() != null) fund.setPreMarketVolume(row.getPreMarketVolume());
+                if (row.getPostMarketVolume() != null) fund.setPostMarketVolume(row.getPostMarketVolume());
+                if (row.getPreMarketClose() != null) fund.setPreMarketClose(row.getPreMarketClose());
+                if (row.getPostMarketClose() != null) fund.setPostMarketClose(row.getPostMarketClose());
+                loaded++;
+            }
+            log.info("Extended-hours load from DB: {} symbols rehydrated", loaded);
+        } catch (Exception e) {
+            log.warn("Failed to load extended-hours data from DB on startup: {}", e.getMessage());
+        }
     }
 
     private void cleanupStaleRestQuotes() {
