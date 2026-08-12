@@ -149,9 +149,19 @@ public class CandleSubscriptionPool {
         return false;
     }
 
+    // El tope viejo (30s) se pensaba para el caso normal -- pocos simbolos
+    // nuevos por ciclo de escaner -- pero un onboarding grande (cientos de
+    // simbolos nuevos de una) genuinamente puede tardar mas en terminar de
+    // conectar/suscribir, y con el tope corto el caller se quedaba con datos
+    // a medio llegar. cacheStore ya filtra veelas incompletas (isComplete),
+    // asi que esperar de mas acá no arriesga entregar datos falsos -- en el
+    // peor caso, el caller espera más para tener menos velas de las pedidas
+    // (legitimo, ej. un simbolo recien listado), nunca velas con OHLC en null.
+    private static final int AWAIT_HISTORY_MAX_SECONDS = 180;
+
     private void awaitHistory(List<String> keys) {
         if (keys.isEmpty()) return;
-        int timeoutSec = Math.min(10 + keys.size() / 10, 30);
+        int timeoutSec = Math.min(15 + keys.size() / 5, AWAIT_HISTORY_MAX_SECONDS);
         long deadline = System.currentTimeMillis() + timeoutSec * 1000L;
         while (System.currentTimeMillis() < deadline) {
             if (keys.stream().allMatch(cacheStore::hasData)) return;
