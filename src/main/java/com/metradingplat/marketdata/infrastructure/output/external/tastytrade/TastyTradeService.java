@@ -797,6 +797,16 @@ public class TastyTradeService {
     // solo la mitad de las tenencias bloqueadas.
     private static final int BENEFICIAL_OWNERS_BATCH_SIZE = 60;
 
+    // Cada simbolo dispara varios requests a la SEC (1 por submissions.json +
+    // uno por cada filing 13D/13G candidato, ~4-6 en promedio) -- sin pausa
+    // entre ellos, un batch de 60 simbolos disparaba ~250-350 requests
+    // seguidos cada 5 minutos. Confirmado en vivo: eso coincidio con
+    // marketdata-service dejando de responder por HTTP (aunque los jobs de
+    // fondo seguian corriendo), consistente con la SEC empezando a
+    // degradar/colgar respuestas bajo esa raiz de requests. Esta pausa
+    // reparte el mismo batch a lo largo de mucho mas del tick de 5 min.
+    private static final long BENEFICIAL_OWNERS_PACING_MS = 400;
+
     private void refreshBeneficialOwnersFromSecEdgar() {
         List<String> candidates = selectSymbolsDueForFloatRefresh();
         if (candidates.isEmpty()) return;
@@ -810,6 +820,10 @@ public class TastyTradeService {
                 long beneficialOwnerShares = secBeneficialOwnersClient.fetchBeneficialOwnerShares(symbol, excludeCiks);
                 computeRealFloat(fund, insiderShares, beneficialOwnerShares);
                 updated++;
+                Thread.sleep(BENEFICIAL_OWNERS_PACING_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
             } catch (Exception e) {
                 log.debug("SEC beneficial owners refresh failed for {}: {}", symbol, e.getMessage());
             }
