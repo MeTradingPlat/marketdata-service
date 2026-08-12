@@ -6,6 +6,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -23,12 +24,24 @@ public class SecTickerCikLookup {
     static final String USER_AGENT = "MeTradingPlat contrerasdaniel142@gmail.com";
     private static final String TICKERS_URL = "https://www.sec.gov/files/company_tickers.json";
 
+    // Este lookup se llama por-simbolo desde SecBeneficialOwnersClient -- sin
+    // enfriamiento, un solo rate-limit/429 de la SEC (que responde HTML en
+    // vez de JSON, forzando la excepcion) hacia que CADA simbolo del batch
+    // reintentara la misma llamada fallida de inmediato, multiplicando el
+    // trafico contra la SEC justo cuando ya esta limitandonos -- confirmado
+    // en vivo via threaddump: 7 fallos identicos en ~200ms.
+    private static final Duration FAILURE_COOLDOWN = Duration.ofMinutes(5);
+
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ObjectMapper objectMapper = new ObjectMapper();
     private Map<String, Integer> tickerToCik;
+    private Instant lastFailureAt;
 
     public synchronized Map<String, Integer> tickerToCikMap() {
         if (tickerToCik != null) return tickerToCik;
+        if (lastFailureAt != null && Instant.now().isBefore(lastFailureAt.plus(FAILURE_COOLDOWN))) {
+            return Map.of();
+        }
         try {
             Map<String, Integer> map = new HashMap<>();
             HttpRequest request = HttpRequest.newBuilder()
@@ -48,7 +61,9 @@ public class SecTickerCikLookup {
             tickerToCik = map;
             return map;
         } catch (Exception e) {
-            log.warn("SEC EDGAR: failed to load ticker->CIK mapping, will retry next run: {}", e.getMessage());
+            log.warn("SEC EDGAR: failed to load ticker->CIK mapping, backing off {} min: {}",
+                    FAILURE_COOLDOWN.toMinutes(), e.getMessage());
+            lastFailureAt = Instant.now();
             return Map.of();
         }
     }
