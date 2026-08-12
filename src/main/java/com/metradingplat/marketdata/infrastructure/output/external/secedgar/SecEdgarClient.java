@@ -46,15 +46,23 @@ public class SecEdgarClient {
 
     public Map<String, Long> fetchSharesOutstanding(List<String> symbols) {
         Map<String, List<String>> cikToSymbols = new HashMap<>();
-        int totalTargets = 0;
         for (String symbol : symbols) {
             Integer cik = tickerCikLookup.tickerToCikMap().get(symbol.toUpperCase());
             if (cik != null) {
                 cikToSymbols.computeIfAbsent(String.format("%010d", cik), k -> new ArrayList<>()).add(symbol.toUpperCase());
-                totalTargets++;
             }
         }
         if (cikToSymbols.isEmpty()) return Map.of();
+
+        // sharesOutstanding es una cifra por-entidad (la accion comun), no
+        // por-ticker. Cuando varios tickers distintos comparten un CIK --
+        // series de preferentes, warrants, ETNs emitidos por un banco --
+        // no hay forma de saber a cual de ellos le pertenece ese numero.
+        // Confirmado en vivo: 394 CIKs con 1014 tickers afectados, incluido
+        // un caso donde 26 ETFs apalancados sin relacion entre si terminaban
+        // con el sharesOutstanding del banco emisor de sus notas. Mejor no
+        // aplicar el dato en esos casos que aplicarlo a ciegas y estar mal.
+        long totalTargets = cikToSymbols.values().stream().filter(list -> list.size() == 1).count();
 
         Map<String, Long> result = new HashMap<>();
         try {
@@ -64,10 +72,10 @@ public class SecEdgarClient {
                 while (result.size() < totalTargets && (entry = zip.getNextEntry()) != null) {
                     String cik = extractCik(entry.getName());
                     List<String> matchedSymbols = cik != null ? cikToSymbols.get(cik) : null;
-                    if (matchedSymbols != null) {
+                    if (matchedSymbols != null && matchedSymbols.size() == 1) {
                         Long shares = parseSharesOutstanding(zip.readAllBytes());
                         if (shares != null) {
-                            for (String symbol : matchedSymbols) result.put(symbol, shares);
+                            result.put(matchedSymbols.get(0), shares);
                         }
                     }
                     zip.closeEntry();
