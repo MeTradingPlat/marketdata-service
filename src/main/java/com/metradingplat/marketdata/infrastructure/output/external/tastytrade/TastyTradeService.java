@@ -410,6 +410,7 @@ public class TastyTradeService {
 
         CompletableFuture.runAsync(this::updateShortInterestFromFinra);
         CompletableFuture.runAsync(this::refreshSharesOutstandingFromSecEdgar);
+        CompletableFuture.runAsync(this::refreshInsiderOwnershipFromSecEdgar);
         CompletableFuture.runAsync(() -> {
             List<String> stillMissing = new ArrayList<>();
             for (String sym : symbols) {
