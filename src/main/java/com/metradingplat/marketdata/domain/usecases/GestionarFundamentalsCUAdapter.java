@@ -3,7 +3,6 @@ package com.metradingplat.marketdata.domain.usecases;
 import com.metradingplat.marketdata.application.input.GestionarFundamentalsCUIntPort;
 import com.metradingplat.marketdata.application.output.FundamentalsPersistenceGatewayIntPort;
 import com.metradingplat.marketdata.domain.models.FundamentalData;
-import com.metradingplat.marketdata.infrastructure.output.external.finviz.FinvizScraper;
 import com.metradingplat.marketdata.infrastructure.output.external.tastytrade.TastyTradeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,10 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIntPort {
 
     private final FundamentalsPersistenceGatewayIntPort persistenceGateway;
-    private final FinvizScraper finvizScraper;
     private final TastyTradeService tastyTradeService;
 
-    // Control synchronization per symbol to avoid concurrent scrapes
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
 
     @Override
@@ -38,49 +35,16 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
             Optional<FundamentalData> cachedDataOpt = persistenceGateway.findBySymbol(symbol);
             FundamentalData data = cachedDataOpt.orElseGet(() -> FundamentalData.builder().symbol(symbol).build());
 
-            boolean earningsStale = isEarningsStale(data);
-            boolean shortInterestStale = isShortInterestStale(data);
-
-            if (earningsStale || shortInterestStale) {
-                log.info("Refreshing fundamentals for {}: earningsStale={}, shortInterestStale={}", 
-                        symbol, earningsStale, shortInterestStale);
-                
+            if (isEarningsStale(data)) {
+                refreshEarningsFromTastyTrade(data);
                 Instant now = Instant.now();
-
-                // 1. Refresh Earnings from TastyTrade if stale
-                if (earningsStale) {
-                    refreshEarningsFromTastyTrade(data);
-                    data.setLastEarningsUpdated(now);
-                }
-
-                // 2. Refresh Short Interest from Finviz Scraper if stale
-                if (shortInterestStale) {
-                    FundamentalData scrapedData = finvizScraper.scrapeFundamentals(symbol);
-                    if (scrapedData != null) {
-                        data.setShortInterest(scrapedData.getShortInterest());
-                        data.setShortRatio(scrapedData.getShortRatio());
-                        // Fallback nextEarningsDate if TastyTrade failed
-                        if (data.getNextEarningsDate() == null) {
-                            data.setNextEarningsDate(scrapedData.getNextEarningsDate());
-                        }
-                    }
-                    data.setLastShortInterestUpdated(now);
-                }
-
+                data.setLastEarningsUpdated(now);
                 data.setLastUpdated(now);
                 persistenceGateway.save(data);
-
-                // Rate limiting delay for Finviz (only if we scraped)
-                if (shortInterestStale) {
-                    try {
-                        Thread.sleep(1500);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
             }
 
-            // Merge with real-time data from Tastytrade/dxLink
+            // Merge with real-time data from Tastytrade/dxLink (shortInterest/shortRatio
+            // ya vienen de aca, poblados por FinraClient -- unico origen ahora)
             mergeRealTimeData(List.of(symbol), Map.of(symbol, data));
 
             return data;
@@ -90,20 +54,20 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
     @Override
     public Map<String, FundamentalData> obtenerFundamentalsBatch(List<String> symbols) {
         Map<String, FundamentalData> resultMap = new ConcurrentHashMap<>();
-        List<String> symbolsToScrape = new ArrayList<>();
+        List<String> symbolsToRefresh = new ArrayList<>();
 
         // 1. Initial check against DB
         for (String symbol : symbols) {
             Optional<FundamentalData> cached = persistenceGateway.findBySymbol(symbol);
-            if (cached.isEmpty() || isEarningsStale(cached.get()) || isShortInterestStale(cached.get())) {
-                symbolsToScrape.add(symbol);
+            if (cached.isEmpty() || isEarningsStale(cached.get())) {
+                symbolsToRefresh.add(symbol);
             } else {
                 resultMap.put(symbol, cached.get());
             }
         }
 
         // 2. Sequential/Batch refresh for missing/stale data
-        for (String symbol : symbolsToScrape) {
+        for (String symbol : symbolsToRefresh) {
             FundamentalData data = obtenerFundamentals(symbol);
             resultMap.put(symbol, data);
         }
@@ -125,13 +89,6 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
         }
 
         return data.getLastEarningsUpdated().isBefore(Instant.now().minus(24, ChronoUnit.HOURS));
-    }
-
-    private boolean isShortInterestStale(FundamentalData data) {
-        if (data.getShortInterest() == null || data.getLastShortInterestUpdated() == null) {
-            return true;
-        }
-        return data.getLastShortInterestUpdated().isBefore(Instant.now().minus(15, ChronoUnit.DAYS));
     }
 
     private void refreshEarningsFromTastyTrade(FundamentalData data) {
@@ -208,6 +165,8 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
                     existing.setMarketCap(rt.getMarketCap());
                     if (rt.getSharesOutstanding() != null && rt.getSharesOutstanding() > 0) existing.setSharesOutstanding(rt.getSharesOutstanding());
                     if (rt.getFloatShares() != null && rt.getFloatShares() > 0) existing.setFloatShares(rt.getFloatShares());
+                    if (rt.getShortInterest() != null) existing.setShortInterest(rt.getShortInterest());
+                    if (rt.getShortRatio() != null) existing.setShortRatio(rt.getShortRatio());
                     if (rt.getDayVolume() != null && rt.getDayVolume() > 0) existing.setDayVolume(rt.getDayVolume());
                     if (rt.getPreMarketVolume() != null && rt.getPreMarketVolume() > 0) existing.setPreMarketVolume(rt.getPreMarketVolume());
                     if (rt.getPostMarketVolume() != null && rt.getPostMarketVolume() > 0) existing.setPostMarketVolume(rt.getPostMarketVolume());
