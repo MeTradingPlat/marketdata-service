@@ -151,8 +151,11 @@ public class TastyTradeService {
         // TastyTrade/FINRA/SEC al mismo tiempo.
         scheduler.scheduleAtFixedRate(this::refreshMarketMetrics,
                 millisUntilNextHour(2), 4 * 3600_000, TimeUnit.MILLISECONDS);
+        // FINRA solo publica dos veces al mes (settlement quincenal) -- revisar
+        // cada 4h como los demas jobs de la manana era puro trafico de mas,
+        // el archivo no cambia entre una revision y la siguiente el mismo dia.
         scheduler.scheduleAtFixedRate(this::checkFinraForUpdate,
-                millisUntilNextHour(3), 4 * 3600_000, TimeUnit.MILLISECONDS);
+                millisUntilNextHour(3), 24 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::refreshSharesOutstandingFromSecEdgar,
                 millisUntilNextHour(4), 24 * 3600_000, TimeUnit.MILLISECONDS);
         // Antes de que arranque el pre-market (~4am ET) -- ni el camino en vivo
