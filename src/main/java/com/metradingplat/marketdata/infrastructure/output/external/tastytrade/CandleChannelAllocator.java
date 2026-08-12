@@ -11,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Decide donde colocar un simbolo+timeframe nuevo en el pool de velas:
@@ -44,6 +45,17 @@ class CandleChannelAllocator {
     private final ExecutorService onboardExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Semaphore connectionBudget = new Semaphore(0);
     private volatile boolean budgetInitialized;
+    // ReentrantLock en vez de synchronized: ensureCapacityFor/allocate hacen
+    // Thread.sleep() y CompletableFuture.join() (conexion de red real) por
+    // dentro -- un hilo virtual bloqueado en eso desde un synchronized NO se
+    // puede desmontar de su carrier, y lo mismo le pasa a cualquier otro hilo
+    // virtual que se quede esperando entrar al mismo synchronized. Con el pool
+    // de carriers chico (uno por CPU), dos requests grandes concurrentes
+    // alcanzaban para dejarlos todos pegados y el servicio entero sordo --
+    // confirmado en vivo con un thread dump real. ReentrantLock no tiene ese
+    // problema: bloquearse esperandolo, o hacer Thread.sleep/join mientras se
+    // tiene, desmonta el hilo virtual del carrier con normalidad.
+    private final ReentrantLock lock = new ReentrantLock();
 
     int availablePermits() {
         ensureBudgetInitialized();
@@ -56,10 +68,13 @@ class CandleChannelAllocator {
 
     private void ensureBudgetInitialized() {
         if (budgetInitialized) return;
-        synchronized (this) {
+        lock.lock();
+        try {
             if (budgetInitialized) return;
             connectionBudget.release(config.getCandlePool().getMaxConcurrentConnections());
             budgetInitialized = true;
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -70,63 +85,73 @@ class CandleChannelAllocator {
     // que acaba de abrir el primero, abriendo mas conexiones de las que en
     // realidad hacian falta. Mismo candado que ya usa allocate() para el
     // mismo problema a nivel de un solo simbolo.
-    synchronized void ensureCapacityFor(List<PooledCandleConnection> connections, int neededSlots,
+    void ensureCapacityFor(List<PooledCandleConnection> connections, int neededSlots,
             DxLinkClient.CandleCallback mergeListener) {
-        ensureBudgetInitialized();
-        int spare = spareCapacity(connections);
-        if (spare >= neededSlots) return;
-        int perConnection = PooledCandleConnection.MAX_CHANNELS * PooledCandleChannel.CAPACITY;
-        int newConnectionsNeeded = Math.max(1, (int) Math.ceil((neededSlots - spare) / (double) perConnection));
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-        for (int i = 0; i < newConnectionsNeeded; i++) {
-            if (!connectionBudget.tryAcquire()) {
-                log.warn("Candle pool at its connection ceiling while onboarding a large batch -- proceeding with reduced capacity");
-                break;
+        lock.lock();
+        try {
+            ensureBudgetInitialized();
+            int spare = spareCapacity(connections);
+            if (spare >= neededSlots) return;
+            int perConnection = PooledCandleConnection.MAX_CHANNELS * PooledCandleChannel.CAPACITY;
+            int newConnectionsNeeded = Math.max(1, (int) Math.ceil((neededSlots - spare) / (double) perConnection));
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (int i = 0; i < newConnectionsNeeded; i++) {
+                if (!connectionBudget.tryAcquire()) {
+                    log.warn("Candle pool at its connection ceiling while onboarding a large batch -- proceeding with reduced capacity");
+                    break;
+                }
+                futures.add(CompletableFuture.runAsync(() -> {
+                    PooledCandleConnection conn = openConnectionWithRetry();
+                    if (conn == null) { connectionBudget.release(); return; }
+                    if (openChannel(conn, mergeListener).isEmpty()) { conn.client.disconnect(); connectionBudget.release(); return; }
+                    connections.add(conn);
+                }, onboardExecutor));
+                if (i < newConnectionsNeeded - 1) {
+                    try { Thread.sleep(CONNECTION_STAGGER_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                }
             }
-            futures.add(CompletableFuture.runAsync(() -> {
-                PooledCandleConnection conn = openConnectionWithRetry();
-                if (conn == null) { connectionBudget.release(); return; }
-                if (openChannel(conn, mergeListener).isEmpty()) { conn.client.disconnect(); connectionBudget.release(); return; }
-                connections.add(conn);
-            }, onboardExecutor));
-            if (i < newConnectionsNeeded - 1) {
-                try { Thread.sleep(CONNECTION_STAGGER_MS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
-            }
+            futures.forEach(CompletableFuture::join);
+        } finally {
+            lock.unlock();
         }
-        futures.forEach(CompletableFuture::join);
     }
 
-    synchronized PooledCandleChannel allocate(List<PooledCandleConnection> connections,
+    PooledCandleChannel allocate(List<PooledCandleConnection> connections,
             DxLinkClient.CandleCallback mergeListener) {
-        ensureBudgetInitialized();
-        for (PooledCandleConnection conn : connections) {
-            for (PooledCandleChannel ch : conn.channels) {
-                if (ch.hasRoom()) return ch;
+        lock.lock();
+        try {
+            ensureBudgetInitialized();
+            for (PooledCandleConnection conn : connections) {
+                for (PooledCandleChannel ch : conn.channels) {
+                    if (ch.hasRoom()) return ch;
+                }
             }
-        }
-        for (PooledCandleConnection conn : connections) {
-            if (conn.hasRoomForNewChannel()) {
-                Optional<PooledCandleChannel> opened = openChannel(conn, mergeListener);
-                if (opened.isPresent()) return opened.get();
+            for (PooledCandleConnection conn : connections) {
+                if (conn.hasRoomForNewChannel()) {
+                    Optional<PooledCandleChannel> opened = openChannel(conn, mergeListener);
+                    if (opened.isPresent()) return opened.get();
+                }
             }
+            if (!connectionBudget.tryAcquire()) {
+                log.warn("Candle pool at its connection ceiling -- cannot place new symbol until something goes idle");
+                return null;
+            }
+            PooledCandleConnection newConn = openConnectionWithRetry();
+            if (newConn == null) {
+                connectionBudget.release();
+                return null;
+            }
+            connections.add(newConn);
+            Optional<PooledCandleChannel> opened = openChannel(newConn, mergeListener);
+            if (opened.isEmpty()) {
+                connections.remove(newConn);
+                connectionBudget.release();
+                return null;
+            }
+            return opened.get();
+        } finally {
+            lock.unlock();
         }
-        if (!connectionBudget.tryAcquire()) {
-            log.warn("Candle pool at its connection ceiling -- cannot place new symbol until something goes idle");
-            return null;
-        }
-        PooledCandleConnection newConn = openConnectionWithRetry();
-        if (newConn == null) {
-            connectionBudget.release();
-            return null;
-        }
-        connections.add(newConn);
-        Optional<PooledCandleChannel> opened = openChannel(newConn, mergeListener);
-        if (opened.isEmpty()) {
-            connections.remove(newConn);
-            connectionBudget.release();
-            return null;
-        }
-        return opened.get();
     }
 
     private int spareCapacity(List<PooledCandleConnection> connections) {

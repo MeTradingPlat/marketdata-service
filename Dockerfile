@@ -15,4 +15,12 @@ RUN mkdir -p /app/secedgar-cache && chown spring:spring /app/secedgar-cache
 USER spring:spring
 COPY --from=build /app/target/*.jar app.jar
 EXPOSE 8082
-ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-Xms256m", "-Xmx1536m", "-XX:+UseG1GC", "-XX:ParallelGCThreads=1", "-XX:ConcGCThreads=1", "-jar", "app.jar"]
+# jdk.virtualThreadScheduler.parallelism por defecto es solo availableProcessors()
+# (3-4 carriers en este contenedor) -- con un servicio que hace tantas
+# llamadas bloqueantes de red (TastyTrade, DxLink, SEC EDGAR, Kafka), muy
+# pocos hilos virtuales concurrentes bastan para dejar sin carriers libres a
+# TODO el servicio, incluido /actuator/health (confirmado en vivo con un
+# thread dump real). Mas margen aqui es la red de seguridad; el arreglo de
+# fondo es no fijar el carrier con Thread.sleep/blocking dentro de un
+# synchronized (ver CandleChannelAllocator).
+ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-Xms256m", "-Xmx1536m", "-XX:+UseG1GC", "-XX:ParallelGCThreads=1", "-XX:ConcGCThreads=1", "-Djdk.virtualThreadScheduler.parallelism=32", "-jar", "app.jar"]
