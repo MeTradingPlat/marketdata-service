@@ -771,7 +771,10 @@ public class TastyTradeService {
     private static final int BENEFICIAL_OWNERS_BATCH_SIZE = 60;
 
     private void refreshBeneficialOwnersFromSecEdgar() {
-        for (String symbol : selectSymbolsDueForFloatRefresh()) {
+        List<String> candidates = selectSymbolsDueForFloatRefresh();
+        if (candidates.isEmpty()) return;
+        int updated = 0;
+        for (String symbol : candidates) {
             try {
                 FundamentalData fund = fundamentalsCache.get(symbol);
                 Long insiderShares = insiderSharesCache.get(symbol);
@@ -779,10 +782,12 @@ public class TastyTradeService {
                 Set<String> excludeCiks = insiderCiksCache.getOrDefault(symbol, Set.of());
                 long beneficialOwnerShares = secBeneficialOwnersClient.fetchBeneficialOwnerShares(symbol, excludeCiks);
                 computeRealFloat(fund, insiderShares, beneficialOwnerShares);
+                updated++;
             } catch (Exception e) {
                 log.debug("SEC beneficial owners refresh failed for {}: {}", symbol, e.getMessage());
             }
         }
+        log.info("SEC beneficial owners refresh: computed real floatShares for {}/{} candidate symbols", updated, candidates.size());
     }
 
     private List<String> selectSymbolsDueForFloatRefresh() {
