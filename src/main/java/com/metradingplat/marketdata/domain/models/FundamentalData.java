@@ -17,6 +17,8 @@ public class FundamentalData {
     private Double marketCap;
     private Long sharesOutstanding;
     private Long floatShares;
+    private String floatSource;
+    private Instant lastFloatUpdated;
     private Double shortInterest;
     private Double shortRatio;
     private Long dayVolume;

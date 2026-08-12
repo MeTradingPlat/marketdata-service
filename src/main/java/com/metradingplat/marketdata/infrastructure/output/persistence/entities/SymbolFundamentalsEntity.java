@@ -31,6 +31,7 @@ public class SymbolFundamentalsEntity {
     private Double marketCap;
     private Long sharesOutstanding;
     private Long floatShares;
+    private String floatSource;
     private Long dayVolume;
     private Integer daysUntilEarnings;
     private Long preMarketVolume;
@@ -46,5 +47,6 @@ public class SymbolFundamentalsEntity {
     
     private Instant lastEarningsUpdated;
     private Instant lastShortInterestUpdated;
+    private Instant lastFloatUpdated;
     private Instant lastUpdated;
 }

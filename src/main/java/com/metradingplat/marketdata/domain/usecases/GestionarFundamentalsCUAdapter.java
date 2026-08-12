@@ -165,6 +165,7 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
                     existing.setMarketCap(rt.getMarketCap());
                     if (rt.getSharesOutstanding() != null && rt.getSharesOutstanding() > 0) existing.setSharesOutstanding(rt.getSharesOutstanding());
                     if (rt.getFloatShares() != null && rt.getFloatShares() > 0) existing.setFloatShares(rt.getFloatShares());
+                    if (rt.getFloatSource() != null) existing.setFloatSource(rt.getFloatSource());
                     if (rt.getShortInterest() != null) existing.setShortInterest(rt.getShortInterest());
                     if (rt.getShortRatio() != null) existing.setShortRatio(rt.getShortRatio());
                     if (rt.getDayVolume() != null && rt.getDayVolume() > 0) existing.setDayVolume(rt.getDayVolume());

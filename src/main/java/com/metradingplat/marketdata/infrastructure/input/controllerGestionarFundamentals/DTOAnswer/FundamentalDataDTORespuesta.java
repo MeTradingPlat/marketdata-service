@@ -14,6 +14,7 @@ public class FundamentalDataDTORespuesta {
     private Double marketCap;
     private Long sharesOutstanding;
     private Long floatShares;
+    private String floatSource;
     private Double shortInterest;
     private Double shortRatio;
     private Long dayVolume;

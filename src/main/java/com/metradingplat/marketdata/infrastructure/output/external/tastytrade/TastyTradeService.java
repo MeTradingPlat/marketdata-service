@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,7 +31,9 @@ import com.metradingplat.marketdata.domain.models.FundamentalData;
 import com.metradingplat.marketdata.domain.models.OrderRequest;
 import com.metradingplat.marketdata.domain.models.OrderResponse;
 import com.metradingplat.marketdata.infrastructure.output.external.finra.FinraClient;
+import com.metradingplat.marketdata.infrastructure.output.external.secedgar.SecBeneficialOwnersClient;
 import com.metradingplat.marketdata.infrastructure.output.external.secedgar.SecEdgarClient;
+import com.metradingplat.marketdata.infrastructure.output.external.secedgar.SecInsiderOwnershipClient;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -59,6 +62,8 @@ public class TastyTradeService {
     private final GestionarChangeNotificationsProducerIntPort kafkaProducer;
     private final FinraClient finraClient;
     private final SecEdgarClient secEdgarClient;
+    private final SecInsiderOwnershipClient secInsiderOwnershipClient;
+    private final SecBeneficialOwnersClient secBeneficialOwnersClient;
     private final CandleSubscriptionPool candleSubscriptionPool;
     private final EquitiesUniverseProvider equitiesUniverseProvider;
     private final FundamentalsConnectionPool fundamentalsConnectionPool;
@@ -72,6 +77,11 @@ public class TastyTradeService {
 
     // Cachés Globales L1 (Arquitectura de Resiliencia)
     private final ConcurrentHashMap<String, FundamentalData> fundamentalsCache = new ConcurrentHashMap<>();
+    // Insiders (bulk semanal) y sus CIKs, para que el gap-filler de holders
+    // 5%+ (por simbolo) sepa a quien excluir y no restar la misma posicion
+    // dos veces de sharesOutstanding (ver computeRealFloat).
+    private final ConcurrentHashMap<String, Long> insiderSharesCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Set<String>> insiderCiksCache = new ConcurrentHashMap<>();
     // Simbolos cuyo pre/post-market volume o close cambio en memoria desde el
     // ultimo flush a BD -- se drena cada 30s (flushExtendedHoursToDb) en vez
     // de escribir en cada tick de TradeETH, que con miles de simbolos activos
@@ -158,6 +168,11 @@ public class TastyTradeService {
                 millisUntilNextHour(3), 24 * 3600_000, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::refreshSharesOutstandingFromSecEdgar,
                 millisUntilNextHour(4), 24 * 3600_000, TimeUnit.MILLISECONDS);
+        // Insiders (Form 3/4/5) vienen en un ZIP trimestral bulk -- no tiene
+        // sentido revisarlo mas seguido que semanal, la fuente no cambia mas
+        // rapido que eso.
+        scheduler.scheduleAtFixedRate(this::refreshInsiderOwnershipFromSecEdgar,
+                millisUntilNextHour(5), 7 * 24 * 3600_000, TimeUnit.MILLISECONDS);
         // Antes de que arranque el pre-market (~4am ET) -- ni el camino en vivo
         // (TradeETH) ni el REST (volume-ext) resetean estos dos campos por su
         // cuenta, solo los sobreescriben cuando llega dato nuevo. Sin este
@@ -172,6 +187,12 @@ public class TastyTradeService {
         scheduler.scheduleAtFixedRate(this::refreshOhlcData,
                 5, 5, TimeUnit.MINUTES);
         scheduler.scheduleAtFixedRate(this::fillMissingSharesOutstandingFromSecEdgar,
+                5, 5, TimeUnit.MINUTES);
+        // Holders 5%+ (Schedule 13D/13G) no tienen archivo bulk, se piden por
+        // simbolo -- este gap-filler throttled cubre todo el universo a lo
+        // largo del dia (un batch acotado cada 5 min) sin violar el limite
+        // de requests de la SEC.
+        scheduler.scheduleAtFixedRate(this::refreshBeneficialOwnersFromSecEdgar,
                 5, 5, TimeUnit.MINUTES);
         scheduler.scheduleAtFixedRate(this::flushExtendedHoursToDb,
                 30, 30, TimeUnit.SECONDS);
@@ -373,6 +394,7 @@ public class TastyTradeService {
                     && fund.getSharesOutstanding() > 0) {
                 long estimatedFloat = Math.round(fund.getSharesOutstanding() * 0.90);
                 fund.setFloatShares(estimatedFloat);
+                fund.setFloatSource("ESTIMATED");
                 calculatedFloat++;
             }
         }
@@ -681,7 +703,7 @@ public class TastyTradeService {
                 FundamentalData fund = fundamentalsCache.get(entry.getKey());
                 if (fund == null) continue;
                 fund.setSharesOutstanding(entry.getValue());
-                fund.setFloatShares(Math.round(entry.getValue() * 0.90));
+                applyHeuristicFloatIfNoRealSource(fund, entry.getValue());
             }
             log.info("SEC EDGAR gap-fill: filled sharesOutstanding for {} symbols", shares.size());
         } catch (Exception e) {
@@ -707,10 +729,7 @@ public class TastyTradeService {
                     FundamentalData fund = fundamentalsCache.get(entry.getKey());
                     if (fund == null) continue;
                     fund.setSharesOutstanding(entry.getValue());
-                    // floatShares no tiene fuente propia -- siempre es 90% de
-                    // sharesOutstanding, asi que se recalcula junto con el,
-                    // sin importar si ya tenia un valor de un dia anterior.
-                    fund.setFloatShares(Math.round(entry.getValue() * 0.90));
+                    applyHeuristicFloatIfNoRealSource(fund, entry.getValue());
                 }
                 log.info("SEC EDGAR refresh: updated sharesOutstanding for {} symbols", shares.size());
             } catch (Exception e) {
@@ -718,6 +737,70 @@ public class TastyTradeService {
             }
         }
         logSharesOutstandingCoverage();
+    }
+
+    private void applyHeuristicFloatIfNoRealSource(FundamentalData fund, long sharesOutstanding) {
+        if ("SEC_EDGAR".equals(fund.getFloatSource())) return;
+        fund.setFloatShares(Math.round(sharesOutstanding * 0.90));
+        fund.setFloatSource("ESTIMATED");
+    }
+
+    private void refreshInsiderOwnershipFromSecEdgar() {
+        List<String> allCached = new ArrayList<>(fundamentalsCache.keySet());
+        if (allCached.isEmpty()) return;
+        log.info("SEC insider ownership refresh: checking {} symbols", allCached.size());
+        try {
+            Map<String, SecInsiderOwnershipClient.InsiderOwnership> insiders = secInsiderOwnershipClient.fetchInsiderShares(allCached);
+            for (String symbol : allCached) {
+                SecInsiderOwnershipClient.InsiderOwnership ownership = insiders.get(symbol);
+                insiderSharesCache.put(symbol, ownership != null ? ownership.shares() : 0L);
+                insiderCiksCache.put(symbol, ownership != null ? ownership.ownerCiks() : Set.of());
+            }
+            log.info("SEC insider ownership refresh: got insider filings for {} of {} symbols", insiders.size(), allCached.size());
+        } catch (Exception e) {
+            log.warn("SEC insider ownership refresh failed: {}", e.getMessage());
+        }
+    }
+
+    // Holders 5%+ se piden por simbolo (sin archivo bulk) -- un batch acotado
+    // por tick reparte todo el universo a lo largo del dia sin violar el
+    // limite de requests de la SEC. Solo entran los simbolos que ya tienen
+    // datos de insiders (refreshInsiderOwnershipFromSecEdgar) para no restar
+    // solo la mitad de las tenencias bloqueadas.
+    private static final int BENEFICIAL_OWNERS_BATCH_SIZE = 60;
+
+    private void refreshBeneficialOwnersFromSecEdgar() {
+        for (String symbol : selectSymbolsDueForFloatRefresh()) {
+            try {
+                FundamentalData fund = fundamentalsCache.get(symbol);
+                Long insiderShares = insiderSharesCache.get(symbol);
+                if (fund == null || fund.getSharesOutstanding() == null || insiderShares == null) continue;
+                Set<String> excludeCiks = insiderCiksCache.getOrDefault(symbol, Set.of());
+                long beneficialOwnerShares = secBeneficialOwnersClient.fetchBeneficialOwnerShares(symbol, excludeCiks);
+                computeRealFloat(fund, insiderShares, beneficialOwnerShares);
+            } catch (Exception e) {
+                log.debug("SEC beneficial owners refresh failed for {}: {}", symbol, e.getMessage());
+            }
+        }
+    }
+
+    private List<String> selectSymbolsDueForFloatRefresh() {
+        return fundamentalsCache.entrySet().stream()
+                .filter(entry -> insiderSharesCache.containsKey(entry.getKey()))
+                .sorted(Comparator.comparing(entry -> {
+                    Instant lastUpdate = entry.getValue().getLastFloatUpdated();
+                    return lastUpdate != null ? lastUpdate : Instant.EPOCH;
+                }))
+                .limit(BENEFICIAL_OWNERS_BATCH_SIZE)
+                .map(Map.Entry::getKey)
+                .toList();
+    }
+
+    private void computeRealFloat(FundamentalData fund, long insiderShares, long beneficialOwnerShares) {
+        long realFloat = fund.getSharesOutstanding() - insiderShares - beneficialOwnerShares;
+        fund.setFloatShares(Math.max(0, realFloat));
+        fund.setFloatSource("SEC_EDGAR");
+        fund.setLastFloatUpdated(Instant.now());
     }
 
     private String classifySecurityType(String symbol, boolean isEtf, String description) {
