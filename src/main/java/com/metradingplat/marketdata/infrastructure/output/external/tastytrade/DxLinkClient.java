@@ -557,8 +557,7 @@ public class DxLinkClient {
                             notifyFundamentals(symbol, f);
                         }
                         case "Profile" -> {
-                            log.info("DxLink Profile received for {}: recordLen={} raw={}",
-                                    symbol, recordEnd - recordStart, subRecord(data, recordStart, recordEnd));
+                            log.info("DxLink Profile received for {}", symbol);
                             notifyFundamentals(symbol, FundamentalData.builder().symbol(symbol)
                                     .sharesOutstanding(asNullableLong(field(data, recordStart, IDX_PROF_SHARES, recordEnd)))
                                     .eps(extractNullableDouble(field(data, recordStart, IDX_PROF_EPS, recordEnd)))
@@ -604,17 +603,6 @@ public class DxLinkClient {
                 perRecord.accept(recordStart, recordEnd);
                 recordStart = recordEnd;
             }
-        }
-
-        // Temporal: confirmar por que sharesOutstanding sigue null para
-        // simbolos que si reciben el evento Profile (preferentes/warrants/units).
-        private String subRecord(JsonNode data, int recordStart, int recordEnd) {
-            StringBuilder sb = new StringBuilder("[");
-            for (int i = recordStart; i < recordEnd; i++) {
-                if (i > recordStart) sb.append(", ");
-                sb.append(data.get(i));
-            }
-            return sb.append("]").toString();
         }
 
         private JsonNode field(JsonNode data, int recordStart, int offset, int recordEnd) {
