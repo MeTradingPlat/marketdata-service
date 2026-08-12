@@ -164,6 +164,15 @@ class CandleChannelAllocator {
 
     private PooledCandleConnection openConnection() {
         DxLinkClient client = new DxLinkClient();
+        // Sin esto, cuando el token con el que se conecto queda obsoleto (la
+        // sesion de TastyTrade rota cada ~14min) y el servidor manda
+        // UNAUTHORIZED, performReconnect() no tiene forma de pedir uno fresco
+        // y reintenta para siempre con el mismo token vencido -- confirmado en
+        // vivo: el pool de velas quedo fallando UNAUTHORIZED cada ~6min sin
+        // recuperarse nunca, devolviendo 0 simbolos en cada /historical/batch
+        // mientras tanto (mismo patron que FundamentalsConnectionPool ya
+        // resolvia correctamente).
+        client.setTokenRefresher(tastyTradeClient::getApiQuoteToken);
         client.connect(tastyTradeClient.getDxlinkUrl(), tastyTradeClient.getApiQuoteToken());
         if (!client.isConnected()) {
             log.warn("Candle pool connection failed to authenticate, skipping");
