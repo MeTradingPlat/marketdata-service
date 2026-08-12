@@ -126,17 +126,40 @@ public class SecEdgarClient {
         }
     }
 
+    // Piso de plausibilidad: menos de 10k acciones es practicamente siempre
+    // un desglose por clase de accion (ej. la clase B del fundador) filtrado
+    // por error, no el total de la empresa -- confirmado en vivo con FNKO,
+    // cuyo unico dato en us-gaap:CommonStockSharesOutstanding eran 100
+    // acciones de 2017 (Class B), mientras el total real es ~34M.
+    private static final long MIN_PLAUSIBLE_SHARES = 10_000L;
+    // Si el dato mas reciente disponible tiene mas de esto, se prefiere no
+    // tener dato (null, cae al heuristico/DxLink) antes que mostrar una
+    // cifra que la empresa dejo de reportar bajo ese tag hace años.
+    private static final java.time.Period MAX_STALENESS = java.time.Period.ofYears(2);
+
     private Long latestShareCount(JsonNode concept) {
         long latestVal = 0;
         String latestFiled = "";
+        String latestEnd = "";
         for (JsonNode entry : concept.path("units").path("shares")) {
             String filed = entry.path("filed").asText("");
             if (filed.compareTo(latestFiled) > 0) {
                 latestFiled = filed;
                 latestVal = entry.path("val").asLong(0);
+                latestEnd = entry.path("end").asText("");
             }
         }
-        return latestVal > 0 ? latestVal : null;
+        if (latestVal < MIN_PLAUSIBLE_SHARES) return null;
+        if (isStale(latestEnd)) return null;
+        return latestVal;
+    }
+
+    private boolean isStale(String endDate) {
+        try {
+            return LocalDate.parse(endDate).isBefore(LocalDate.now().minus(MAX_STALENESS));
+        } catch (Exception e) {
+            return true;
+        }
     }
 
 }

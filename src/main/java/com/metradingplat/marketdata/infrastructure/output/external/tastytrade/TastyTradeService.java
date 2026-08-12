@@ -220,8 +220,7 @@ public class TastyTradeService {
     private void mergeFundamentalData(String sym, FundamentalData data) {
         String upperSym = sym.toUpperCase();
         fundamentalsCache.merge(upperSym, data, (v1, v2) -> {
-            if (v2.getSharesOutstanding() != null) v1.setSharesOutstanding(v2.getSharesOutstanding());
-            if (v2.getFloatShares() != null) v1.setFloatShares(v2.getFloatShares());
+            applyDxLinkSharesAndFloat(v1, v2);
             if (v2.getEps() != null) v1.setEps(v2.getEps());
             if (v2.getDividendAmount() != null) v1.setDividendAmount(v2.getDividendAmount());
             if (v2.getDividendFrequency() != null) v1.setDividendFrequency(v2.getDividendFrequency());
@@ -263,6 +262,28 @@ public class TastyTradeService {
             if (v2.getLiquidityRating() != null) v1.setLiquidityRating(v2.getLiquidityRating());
             return v1;
         });
+    }
+
+    // dxFeed manda sharesOutstanding ("shares") y floatShares ("freeFloat")
+    // como campos independientes del mismo evento Profile -- un tick puede
+    // traer uno sin el otro. Si sharesOutstanding cambia sin un freeFloat
+    // fresco en el mismo tick, el floatShares viejo (heuristico o SEC_EDGAR)
+    // queda calculado sobre un sharesOutstanding que ya no es el actual,
+    // pudiendo terminar mayor que el propio sharesOutstanding -- confirmado
+    // en vivo en una auditoria completa del universo (29 simbolos con
+    // floatShares > sharesOutstanding, todos con este mismo patron). Por
+    // eso floatShares SIEMPRE se recalcula junto con sharesOutstanding.
+    private void applyDxLinkSharesAndFloat(FundamentalData v1, FundamentalData v2) {
+        boolean sharesChanged = v2.getSharesOutstanding() != null;
+        if (sharesChanged) v1.setSharesOutstanding(v2.getSharesOutstanding());
+
+        if (v2.getFloatShares() != null) {
+            v1.setFloatShares(v2.getFloatShares());
+            v1.setFloatSource("DXLINK");
+            v1.setLastFloatUpdated(Instant.now());
+        } else if (sharesChanged && v1.getSharesOutstanding() != null) {
+            recomputeHeuristicFloat(v1, v1.getSharesOutstanding());
+        }
     }
 
     private void preloadFundamentalsFromRest(List<String> symbols) {
@@ -704,7 +725,7 @@ public class TastyTradeService {
                 FundamentalData fund = fundamentalsCache.get(entry.getKey());
                 if (fund == null) continue;
                 fund.setSharesOutstanding(entry.getValue());
-                applyHeuristicFloatIfNoRealSource(fund, entry.getValue());
+                recomputeHeuristicFloat(fund, entry.getValue());
             }
             log.info("SEC EDGAR gap-fill: filled sharesOutstanding for {} symbols", shares.size());
         } catch (Exception e) {
@@ -730,7 +751,7 @@ public class TastyTradeService {
                     FundamentalData fund = fundamentalsCache.get(entry.getKey());
                     if (fund == null) continue;
                     fund.setSharesOutstanding(entry.getValue());
-                    applyHeuristicFloatIfNoRealSource(fund, entry.getValue());
+                    recomputeHeuristicFloat(fund, entry.getValue());
                 }
                 log.info("SEC EDGAR refresh: updated sharesOutstanding for {} symbols", shares.size());
             } catch (Exception e) {
@@ -740,8 +761,14 @@ public class TastyTradeService {
         logSharesOutstandingCoverage();
     }
 
-    private void applyHeuristicFloatIfNoRealSource(FundamentalData fund, long sharesOutstanding) {
-        if ("SEC_EDGAR".equals(fund.getFloatSource())) return;
+    // Se llama siempre que sharesOutstanding cambia (sin importar la fuente:
+    // DxLink, SEC EDGAR bulk, o el gap-filler) -- un floatShares calculado
+    // sobre un sharesOutstanding viejo ya no es valido, sea cual sea su
+    // floatSource anterior. El gap-filler de holders 5%+ vuelve a marcarlo
+    // SEC_EDGAR la proxima vez que le toque turno (cubre todo el universo
+    // en un dia), asi que degradar a ESTIMATED aca es autocorrectivo, no
+    // una perdida permanente de precision.
+    private void recomputeHeuristicFloat(FundamentalData fund, long sharesOutstanding) {
         fund.setFloatShares(Math.round(sharesOutstanding * 0.90));
         fund.setFloatSource("ESTIMATED");
     }
@@ -862,10 +889,8 @@ public class TastyTradeService {
                 if (fund == null) continue;
                 fund.setShortRatio(rec.daysToCover > 0 && rec.daysToCover < 999 ? rec.daysToCover : null);
                 fund.setDayVolume(rec.avgDailyVolume > 0 ? rec.avgDailyVolume : null);
-                if (fund.getFloatShares() != null && fund.getFloatShares() > 0 && rec.sharesShorted > 0) {
-                    double shortPct = (double) rec.sharesShorted / fund.getFloatShares() * 100.0;
-                    fund.setShortInterest(Math.round(shortPct * 100.0) / 100.0);
-                }
+                Double shortPct = computeShortInterestPercent(sym, rec.sharesShorted, fund.getFloatShares());
+                if (shortPct != null) fund.setShortInterest(shortPct);
                 updated++;
             }
             lastFinraSettlement = newSettlement;
@@ -896,16 +921,34 @@ public class TastyTradeService {
                             sym, rec.sharesShorted, rec.avgDailyVolume, rec.daysToCover, fund.getFloatShares());
                 }
 
-                if (fund.getFloatShares() != null && fund.getFloatShares() > 0 && rec.sharesShorted > 0) {
-                    double shortPct = (double) rec.sharesShorted / fund.getFloatShares() * 100.0;
-                    fund.setShortInterest(Math.round(shortPct * 100.0) / 100.0);
-                }
+                Double shortPct = computeShortInterestPercent(sym, rec.sharesShorted, fund.getFloatShares());
+                if (shortPct != null) fund.setShortInterest(shortPct);
                 updated++;
             }
             log.info("FINRA short interest updated for {} symbols", updated);
         } catch (Exception e) {
             log.warn("FINRA short interest update failed: {}", e.getMessage());
         }
+    }
+
+    // Un shortInterest de miles por ciento no es un short squeeze real, es
+    // floatShares desactualizado contra un split/reverse-split reciente o
+    // un settlement de FINRA que todavia no absorbio un evento corporativo
+    // -- confirmado en vivo (FFAI llego a 2319%). El naked-shorting real
+    // puede superar 100% en casos extremos, pero no ordenes de magnitud
+    // como estos, asi que un techo generoso filtra el artefacto sin
+    // rechazar short squeezes genuinos.
+    private static final double MAX_PLAUSIBLE_SHORT_INTEREST_PCT = 300.0;
+
+    private Double computeShortInterestPercent(String symbol, long sharesShorted, Long floatShares) {
+        if (floatShares == null || floatShares <= 0 || sharesShorted <= 0) return null;
+        double pct = Math.round((double) sharesShorted / floatShares * 100.0 * 100.0) / 100.0;
+        if (pct > MAX_PLAUSIBLE_SHORT_INTEREST_PCT) {
+            log.debug("FINRA shortInterest implausible for {}: {}% (sharesShorted={}, floatShares={}), discarding",
+                    symbol, pct, sharesShorted, floatShares);
+            return null;
+        }
+        return pct;
     }
 
     public Map<String, Double> getCachedPrices(List<String> symbols) {
