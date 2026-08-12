@@ -55,6 +55,16 @@ public class FundamentalsConnectionPool {
         client.setOnReconnected(ch -> ch.subscribeFundamentalsBatch(new ArrayList<>(shard)));
         if (client.isConnected() && client.getDefaultChannel() != null) {
             client.getDefaultChannel().subscribeFundamentalsBatch(shard);
+            // Temporal: solo en la primera conexion del pool, un canal aislado
+            // que declara UNICAMENTE Profile (vs el canal por defecto, que
+            // declara los 8 tipos de evento a la vez) -- para confirmar si eso
+            // afecta cuantos campos manda TastyTrade por record.
+            if (pool.isEmpty()) {
+                client.openNewChannel(java.util.Set.of("Profile")).thenAccept(ch -> {
+                    log.info("Canal de prueba Profile-only abierto: id={}", ch.getId());
+                    ch.subscribeFundamentalsBatch(List.of("AAPL"));
+                });
+            }
         } else {
             log.warn("Fundamentals pool connection failed to authenticate on startup -- will subscribe once its own reconnect logic succeeds");
         }
