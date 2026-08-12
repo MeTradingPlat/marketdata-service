@@ -82,7 +82,7 @@ public class DxLinkClient {
     private static final List<String> QUOTE_FIELDS = List.of("eventSymbol", "bidPrice", "askPrice");
     private static final List<String> TRADE_FIELDS = List.of("eventSymbol", "price", "dayVolume", "time");
     private static final List<String> SUMMARY_FIELDS = List.of("eventSymbol", "dayOpenPrice", "dayHighPrice", "dayLowPrice", "prevDayClosePrice", "openInterest");
-    private static final List<String> PROFILE_FIELDS = List.of("eventSymbol", "shares", "earningsPerShare", "exDividendAmount", "dividendFrequency", "tradingStatus", "statusReason", "haltStartTime", "haltEndTime", "beta", "freeFloat");
+    private static final List<String> PROFILE_FIELDS = List.of("eventSymbol", "shares", "earningsPerShare", "exDividendAmount", "dividendFrequency", "tradingStatus", "statusReason", "haltStartTime", "haltEndTime", "beta", "freeFloat", "high52WeekPrice", "low52WeekPrice", "exDividendDayId");
     private static final List<String> TRADE_ETH_FIELDS = List.of("eventSymbol", "dayVolume", "extendedTradingHours", "time", "price");
     private static final List<String> GREEKS_FIELDS = List.of("eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "rho", "theoreticalPrice");
     private static final List<String> CANDLE_FIELDS = List.of("eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility");
@@ -109,6 +109,9 @@ public class DxLinkClient {
     private static final int IDX_PROF_HALT_END = 8;
     private static final int IDX_PROF_BETA = 9;
     private static final int IDX_PROF_FLOAT = 10;
+    private static final int IDX_PROF_HIGH_52W = 11;
+    private static final int IDX_PROF_LOW_52W = 12;
+    private static final int IDX_PROF_EX_DIV_DAY = 13;
     private static final int IDX_ETH_VOL = 1;
     private static final int IDX_ETH_TIME = 3;
     private static final int IDX_ETH_PRICE = 4;
@@ -569,6 +572,9 @@ public class DxLinkClient {
                                     .haltEndTime(field(data, recordStart, IDX_PROF_HALT_END, recordEnd).asLong())
                                     .beta(extractNullableDouble(field(data, recordStart, IDX_PROF_BETA, recordEnd)))
                                     .floatShares(asNullableLong(field(data, recordStart, IDX_PROF_FLOAT, recordEnd)))
+                                    .high52Week(extractNullableDouble(field(data, recordStart, IDX_PROF_HIGH_52W, recordEnd)))
+                                    .low52Week(extractNullableDouble(field(data, recordStart, IDX_PROF_LOW_52W, recordEnd)))
+                                    .nextExDividendDate(asNullableEpochDay(field(data, recordStart, IDX_PROF_EX_DIV_DAY, recordEnd)))
                                     .build());
                         }
                     }
@@ -639,6 +645,12 @@ public class DxLinkClient {
             if (node == null || node.isMissingNode() || node.isNull()) return null;
             long v = node.asLong();
             return v > 0 ? v : null;
+        }
+
+        // exDividendDayId es dias desde 1970-01-01, mismo epoch que LocalDate.ofEpochDay.
+        private java.time.LocalDate asNullableEpochDay(JsonNode node) {
+            Long dayId = asNullableLong(node);
+            return dayId != null ? java.time.LocalDate.ofEpochDay(dayId) : null;
         }
 
         private String asNullableString(JsonNode node) {

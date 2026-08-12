@@ -26,6 +26,8 @@ public class FundamentalData {
     private Double high;
     private Double low;
     private Double prevClose;
+    private Double high52Week;
+    private Double low52Week;
     private Long openInterest;
     private Integer daysUntilEarnings;
     private Long preMarketVolume;
@@ -33,6 +35,7 @@ public class FundamentalData {
     private Double preMarketClose;
     private Double postMarketClose;
     private LocalDate nextEarningsDate;
+    private LocalDate nextExDividendDate;
     private LocalDate occurredDate;
     private Double eps;
     private Double dividendAmount;

@@ -233,6 +233,9 @@ public class TastyTradeService {
             if (v2.getHigh() != null) v1.setHigh(v2.getHigh());
             if (v2.getLow() != null) v1.setLow(v2.getLow());
             if (v2.getPrevClose() != null) v1.setPrevClose(v2.getPrevClose());
+            if (v2.getHigh52Week() != null) v1.setHigh52Week(v2.getHigh52Week());
+            if (v2.getLow52Week() != null) v1.setLow52Week(v2.getLow52Week());
+            if (v2.getNextExDividendDate() != null) v1.setNextExDividendDate(v2.getNextExDividendDate());
             if (v2.getOpenInterest() != null) v1.setOpenInterest(v2.getOpenInterest());
             if (v2.getPreMarketVolume() != null) v1.setPreMarketVolume(v2.getPreMarketVolume());
             // dxFeed acumula dayVolume de TradeETH junto para pre+post market,

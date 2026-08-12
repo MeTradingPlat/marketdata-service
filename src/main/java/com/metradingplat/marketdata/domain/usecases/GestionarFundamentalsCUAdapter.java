@@ -192,6 +192,9 @@ public class GestionarFundamentalsCUAdapter implements GestionarFundamentalsCUIn
                     if (rt.getHigh() != null) existing.setHigh(rt.getHigh());
                     if (rt.getLow() != null) existing.setLow(rt.getLow());
                     if (rt.getPrevClose() != null) existing.setPrevClose(rt.getPrevClose());
+                    if (rt.getHigh52Week() != null) existing.setHigh52Week(rt.getHigh52Week());
+                    if (rt.getLow52Week() != null) existing.setLow52Week(rt.getLow52Week());
+                    if (rt.getNextExDividendDate() != null) existing.setNextExDividendDate(rt.getNextExDividendDate());
                     if (rt.getOpenInterest() != null) existing.setOpenInterest(rt.getOpenInterest());
 
                     // IV and Liquidity fields from Market Metrics

@@ -31,6 +31,9 @@ public class FundamentalDataDTORespuesta {
     private Double high;
     private Double low;
     private Double prevClose;
+    private Double high52Week;
+    private Double low52Week;
+    private java.time.LocalDate nextExDividendDate;
     private String tradingStatus;
     private String statusReason;
     private Long haltStartTime;
