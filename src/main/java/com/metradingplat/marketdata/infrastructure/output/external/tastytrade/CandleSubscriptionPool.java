@@ -134,34 +134,43 @@ public class CandleSubscriptionPool {
     private void ensureSubscribedBatch(List<String> symbols, EnumTimeframe timeframe, Instant fromTime,
             String period, String type) {
         List<String> newSymbols = new ArrayList<>();
+        List<String> allKeys = new ArrayList<>();
         for (String sym : symbols) {
-            if (!touchIfSubscribed(CandleCacheStore.key(sym, timeframe))) newSymbols.add(sym);
-        }
-        if (newSymbols.isEmpty()) return;
-        log.info("Candle pool onboarding {} new symbols, timeframe={}", newSymbols.size(), timeframe);
-        allocator.ensureCapacityFor(connections, newSymbols.size(), mergeListener);
-        // Agrupar por canal antes de suscribir: allocate() decide en memoria
-        // donde va cada simbolo, pero el envio real (historySubscriber.subscribe)
-        // se hace UNA vez por canal con todo su grupo, no una vez por simbolo --
-        // para un lote de miles, esto baja de miles de mensajes WS a unas
-        // decenas (uno por canal usado, ya agrupado en lotes de 10 adentro).
-        Map<PooledCandleChannel, List<String>> bySymbolChannel = new LinkedHashMap<>();
-        List<String> onboardedKeys = new ArrayList<>();
-        for (String sym : newSymbols) {
-            PooledCandleChannel ch = allocator.allocate(connections, mergeListener);
-            if (ch == null) {
-                log.warn("Could not place {} in the candle pool -- skipping, will retry on a future request", sym);
-                continue;
-            }
             String key = CandleCacheStore.key(sym, timeframe);
-            ch.touch(key);
-            bySymbolChannel.computeIfAbsent(ch, k -> new ArrayList<>()).add(sym);
-            onboardedKeys.add(key);
+            allKeys.add(key);
+            if (!touchIfSubscribed(key)) newSymbols.add(sym);
         }
-        for (var entry : bySymbolChannel.entrySet()) {
-            historySubscriber.subscribe(List.of(entry.getKey().channel), entry.getValue(), period, type, fromTime);
+        if (!newSymbols.isEmpty()) {
+            log.info("Candle pool onboarding {} new symbols, timeframe={}", newSymbols.size(), timeframe);
+            allocator.ensureCapacityFor(connections, newSymbols.size(), mergeListener);
+            // Agrupar por canal antes de suscribir: allocate() decide en memoria
+            // donde va cada simbolo, pero el envio real (historySubscriber.subscribe)
+            // se hace UNA vez por canal con todo su grupo, no una vez por simbolo --
+            // para un lote de miles, esto baja de miles de mensajes WS a unas
+            // decenas (uno por canal usado, ya agrupado en lotes de 10 adentro).
+            Map<PooledCandleChannel, List<String>> bySymbolChannel = new LinkedHashMap<>();
+            for (String sym : newSymbols) {
+                PooledCandleChannel ch = allocator.allocate(connections, mergeListener);
+                if (ch == null) {
+                    log.warn("Could not place {} in the candle pool -- skipping, will retry on a future request", sym);
+                    continue;
+                }
+                ch.touch(CandleCacheStore.key(sym, timeframe));
+                bySymbolChannel.computeIfAbsent(ch, k -> new ArrayList<>()).add(sym);
+            }
+            for (var entry : bySymbolChannel.entrySet()) {
+                historySubscriber.subscribe(List.of(entry.getKey().channel), entry.getValue(), period, type, fromTime);
+            }
         }
-        awaitHistory(onboardedKeys);
+        // Esperar por CUALQUIER key pedida que todavia no tenga datos reales,
+        // no solo las recien onboardeadas -- un simbolo ya "tocado" (en un
+        // canal) cuya conexion fallo justo al suscribirse (ej. limite de
+        // sesiones de TastyTrade) se quedaba marcado como resuelto para
+        // siempre y ningun request futuro volvia a esperar por el, devolviendo
+        // vacio en silencio de por vida (confirmado en vivo con una prueba de
+        // 8000 simbolos). Ahora cada request le da otra oportunidad real.
+        List<String> pending = allKeys.stream().filter(k -> !cacheStore.hasData(k)).toList();
+        awaitHistory(pending);
     }
 
     // Unica fuente del reloj de inactividad: se llama solo desde una peticion
