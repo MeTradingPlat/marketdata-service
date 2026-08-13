@@ -69,6 +69,29 @@ public class CandleSubscriptionPool {
             if (onEveryCandle != null) onEveryCandle.accept(merged);
         };
         scheduler.scheduleAtFixedRate(() -> idleEvictor.evict(connections), 5, 5, TimeUnit.MINUTES);
+        warmUp();
+    }
+
+    // El pool arranca en cero conexiones -- sin esto, el primer batch real de
+    // simbolos nuevos paga en vivo, dentro de esa misma peticion, el costo de
+    // abrir una conexion desde cero (token OAuth + handshake WebSocket). Una
+    // sola conexion ya cubre MAX_CHANNELS*CAPACITY = 800 simbolos de
+    // capacidad -- de sobra para casi cualquier onboarding inicial. Corre en
+    // un hilo virtual aparte para no atrasar el arranque del servicio ni sus
+    // health checks; si falla, el pool sigue funcionando igual, solo abre la
+    // conexion mas tarde, on-demand, como ya hacia antes.
+    private static final int WARMUP_CONNECTIONS = 1;
+
+    private void warmUp() {
+        Thread.ofVirtual().name("candle-pool-warmup").start(() -> {
+            try {
+                int slots = WARMUP_CONNECTIONS * PooledCandleConnection.MAX_CHANNELS * PooledCandleChannel.CAPACITY;
+                allocator.ensureCapacityFor(connections, slots, mergeListener);
+                log.info("Candle pool warm-up: {} connection(s) ready before first request", connections.size());
+            } catch (Exception e) {
+                log.warn("Candle pool warm-up failed (falls back to on-demand): {}", e.getMessage());
+            }
+        });
     }
 
     /**
