@@ -1,0 +1,108 @@
+package tastytrade
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/rs/zerolog/log"
+)
+
+func (c *DxLinkConn) readLoop(ctx context.Context) {
+	for {
+		c.mu.RLock()
+		conn := c.conn
+		c.mu.RUnlock()
+		if conn == nil {
+			return
+		}
+
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			c.notifyHandshakeFailure(err)
+			c.handleDisconnect(ctx)
+			return
+		}
+		c.handleMessage(ctx, msg)
+	}
+}
+
+func (c *DxLinkConn) notifyHandshakeFailure(err error) {
+	c.mu.Lock()
+	done := c.handshakeDone
+	c.handshakeDone = nil
+	c.mu.Unlock()
+	if done != nil {
+		done <- fmt.Errorf("dxlink connection closed during handshake: %w", err)
+	}
+}
+
+func (c *DxLinkConn) markAuthenticated() {
+	c.mu.Lock()
+	c.authenticated = true
+	done := c.handshakeDone
+	c.handshakeDone = nil
+	c.mu.Unlock()
+	if done != nil {
+		done <- nil
+	}
+}
+
+func (c *DxLinkConn) handleMessage(ctx context.Context, raw []byte) {
+	var env inboundEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		log.Error().Err(err).Msg("dxlink: failed to decode message")
+		return
+	}
+
+	switch env.Type {
+	case "SETUP":
+		if err := c.send(authMessage{Type: "AUTH", Channel: 0, Token: c.tokenFunc()}); err != nil {
+			log.Error().Err(err).Msg("dxlink: failed to send AUTH")
+		}
+	case "AUTH_STATE":
+		if env.State == "AUTHORIZED" {
+			c.markAuthenticated()
+		}
+	case "CHANNEL_OPENED":
+		if env.Service == "FEED" {
+			if ch := c.channel(env.Channel); ch != nil {
+				if err := ch.handleOpened(); err != nil {
+					log.Error().Err(err).Int("channel", env.Channel).Msg("dxlink: failed to send FEED_SETUP")
+				}
+			}
+		}
+	case "FEED_CONFIG":
+		if ch := c.channel(env.Channel); ch != nil {
+			ch.handleConfigured()
+		}
+	case "FEED_DATA":
+		if ch := c.channel(env.Channel); ch != nil {
+			ch.handleData(env.Data)
+		}
+	case "KEEPALIVE":
+		if err := c.send(keepaliveMessage{Type: "KEEPALIVE", Channel: 0}); err != nil {
+			log.Error().Err(err).Msg("dxlink: failed to reply KEEPALIVE")
+		}
+	case "ERROR":
+		c.handleError(ctx, env)
+	}
+}
+
+func (c *DxLinkConn) handleError(ctx context.Context, env inboundEnvelope) {
+	switch env.Error {
+	case "BAD_ACTION":
+		log.Debug().Str("message", env.Message).Msg("dxlink BAD_ACTION")
+	case "UNAUTHORIZED":
+		// El servidor puede invalidar la sesion sin cerrar el socket -- sin
+		// forzar authenticated=false aca, checkConnectionHealth nunca lo
+		// detecta y el servicio queda mudo hasta un restart manual.
+		log.Error().Str("message", env.Message).Msg("dxlink UNAUTHORIZED, forcing reconnect")
+		c.mu.Lock()
+		c.authenticated = false
+		c.mu.Unlock()
+		c.scheduleReconnect(ctx)
+	default:
+		log.Error().Str("error", env.Error).Str("message", env.Message).Msg("dxlink error")
+	}
+}

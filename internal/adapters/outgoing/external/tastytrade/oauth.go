@@ -1,0 +1,96 @@
+package tastytrade
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+)
+
+type OAuthConfig struct {
+	BaseURL      string
+	ClientID     string
+	ClientSecret string
+	RefreshToken string
+}
+
+type OAuth struct {
+	cfg        OAuthConfig
+	httpClient *http.Client
+
+	mu          sync.RWMutex
+	accessToken string
+}
+
+func NewOAuth(cfg OAuthConfig) *OAuth {
+	return &OAuth{cfg: cfg, httpClient: &http.Client{Timeout: 15 * time.Second}}
+}
+
+func (o *OAuth) AccessToken() string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.accessToken
+}
+
+type refreshRequest struct {
+	GrantType    string `json:"grant_type"`
+	RefreshToken string `json:"refresh_token"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+type tokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+// RefreshAccessToken usa el refresh_token grant -- el refresh_token rotado
+// que devuelve TastyTrade se guarda en memoria para la proxima llamada, o
+// el original (el de la variable de entorno) deja de servir.
+func (o *OAuth) RefreshAccessToken(ctx context.Context) (string, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	body, err := json.Marshal(refreshRequest{
+		GrantType:    "refresh_token",
+		RefreshToken: o.cfg.RefreshToken,
+		ClientID:     o.cfg.ClientID,
+		ClientSecret: o.cfg.ClientSecret,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encoding oauth refresh request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.cfg.BaseURL+"/oauth/token", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("building oauth refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("calling oauth refresh: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("oauth refresh returned status %d", resp.StatusCode)
+	}
+
+	var tr tokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+		return "", fmt.Errorf("decoding oauth refresh response: %w", err)
+	}
+	if tr.AccessToken == "" {
+		return "", fmt.Errorf("oauth refresh response missing access_token")
+	}
+
+	o.accessToken = tr.AccessToken
+	if tr.RefreshToken != "" {
+		o.cfg.RefreshToken = tr.RefreshToken
+	}
+	return o.accessToken, nil
+}
