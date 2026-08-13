@@ -51,6 +51,12 @@ public class GestionarComunicacionExternalGatewayImplAdapter implements Gestiona
     }
 
     @Override
+    public List<Candle> probeMaxDepth(String symbol, EnumTimeframe timeframe) {
+        log.debug("Gateway: Probing max depth for symbol: {} timeframe: {}", symbol, timeframe);
+        return tastyTradeService.probeMaxDepth(symbol, timeframe);
+    }
+
+    @Override
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
         log.debug("Gateway: Batch fetching candles for {} symbols, timeframe: {}, bars: {}", symbols.size(), timeframe,
                 bars);

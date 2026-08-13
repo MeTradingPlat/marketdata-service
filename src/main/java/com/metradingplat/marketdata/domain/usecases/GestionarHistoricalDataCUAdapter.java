@@ -70,6 +70,24 @@ public class GestionarHistoricalDataCUAdapter implements GestionarHistoricalData
         return completed;
     }
 
+    // Diagnostico: cuanta profundidad real entrega TastyTrade/DxLink para una
+    // temporalidad, sin la formula conservadora que getCandles/getCandlesBatch
+    // aplican para no saturar el pool en uso normal (ver TastyTradeService.
+    // probeMaxDepth) y sin gap-fill de historical-data-service, para que el
+    // numero refleje solo lo que la fuente en vivo realmente entrega.
+    @Override
+    public List<Candle> probeMaxDepth(String symbol, EnumTimeframe timeframe) {
+        List<Candle> allCandles = this.objExternalCommunicationGateway.probeMaxDepth(symbol, timeframe);
+        if (allCandles == null || allCandles.isEmpty()) {
+            return List.of();
+        }
+        Instant now = Instant.now();
+        Duration candleDuration = timeframe.getDuration();
+        return allCandles.stream()
+                .filter(c -> !c.getTimestamp().plus(candleDuration).isAfter(now))
+                .collect(Collectors.toList());
+    }
+
     @Override
     public Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars) {
         log.info("Batch fetching {} symbols, timeframe={}, bars={}", symbols.size(), timeframe, bars);

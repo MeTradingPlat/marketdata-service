@@ -55,6 +55,21 @@ public class HistoricalDataRestController {
         return ResponseEntity.ok(this.objMapper.deDominioARespuestas(candles));
     }
 
+    // Diagnostico -- pide la maxima profundidad real que TastyTrade/DxLink
+    // entrega para una temporalidad (sin la formula conservadora de fromTime
+    // que usa el endpoint normal, sin gap-fill de historical-data-service).
+    // Uso manual/investigacion, no lo llama ningun consumidor real.
+    @GetMapping("/{symbol}/profundidad")
+    public ResponseEntity<List<CandleDTORespuesta>> probeMaxDepth(
+            @PathVariable("symbol") @NotNull String symbol,
+            @RequestParam("timeframe") @NotNull EnumTimeframe timeframe) {
+
+        log.info("GET /historical/{}/profundidad timeframe={}", symbol, timeframe);
+        List<Candle> candles = this.objGestionarHistoricalDataCUInt.probeMaxDepth(symbol, timeframe);
+        log.info("GET /historical/{}/profundidad -> {} candles", symbol, candles.size());
+        return ResponseEntity.ok(this.objMapper.deDominioARespuestas(candles));
+    }
+
     @GetMapping("/{symbol}/current")
     public ResponseEntity<CandleDTORespuesta> getCurrentCandle(
             @PathVariable("symbol") @NotNull String symbol,

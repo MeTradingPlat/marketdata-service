@@ -21,6 +21,9 @@ public interface GestionarComunicacionExternalGatewayIntPort {
 
     List<Candle> getCandles(String symbol, EnumTimeframe timeframe);
 
+    // Diagnostico -- ver GestionarHistoricalDataCUAdapter.probeMaxDepth.
+    List<Candle> probeMaxDepth(String symbol, EnumTimeframe timeframe);
+
     Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars);
 
     Map<String, List<Candle>> getLastCandleBatch(List<String> symbols, EnumTimeframe timeframe);

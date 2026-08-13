@@ -1040,6 +1040,23 @@ public class TastyTradeService {
         return result.getOrDefault(symbol, List.of());
     }
 
+    // Diagnostico: pide el fromTime mas viejo posible en vez de la formula de
+    // getCandlesBatch (piso de 700 barras, techo de 1825 dias) -- esa formula
+    // es a proposito conservadora para no saturar los canales del pool en uso
+    // normal, pero esconde cuanta profundidad real entrega TastyTrade/DxLink
+    // para cada temporalidad. bars=Integer.MAX_VALUE para que
+    // CandleCacheStore.get() no trunque lo que haya llegado.
+    private static final Instant PROBE_FROM_TIME = Instant.parse("2000-01-01T00:00:00Z");
+
+    public List<Candle> probeMaxDepth(String symbol, EnumTimeframe timeframe) {
+        String label = timeframe.getLabel();
+        String type = label.substring(label.length() - 1);
+        String period = label.substring(0, label.length() - 1);
+        Map<String, List<Candle>> result = candleSubscriptionPool.getCandles(
+                List.of(symbol), timeframe, Integer.MAX_VALUE, PROBE_FROM_TIME, period, type);
+        return result.getOrDefault(symbol, List.of());
+    }
+
     /**
      * Registra un listener para velas en vivo (usado por CandleWebSocketHandler).
      * getCandles() se asegura de que el simbolo quede suscrito en el pool antes

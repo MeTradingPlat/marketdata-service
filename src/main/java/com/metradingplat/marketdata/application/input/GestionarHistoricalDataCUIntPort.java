@@ -10,6 +10,9 @@ import com.metradingplat.marketdata.domain.models.Candle;
 public interface GestionarHistoricalDataCUIntPort {
     List<Candle> getCandles(String symbol, EnumTimeframe timeframe, OffsetDateTime endDate, Integer bars);
 
+    // Diagnostico -- ver GestionarHistoricalDataCUAdapter.probeMaxDepth.
+    List<Candle> probeMaxDepth(String symbol, EnumTimeframe timeframe);
+
     Map<String, List<Candle>> getCandlesBatch(List<String> symbols, EnumTimeframe timeframe, int bars);
 
     Candle getLastCandle(String symbol, EnumTimeframe timeframe);
