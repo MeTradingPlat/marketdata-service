@@ -108,6 +108,10 @@ public class CandleSubscriptionPool {
         return allocator.availablePermits();
     }
 
+    public List<Boolean> connectionStatuses() {
+        return connections.stream().map(c -> c.client.isConnected()).toList();
+    }
+
     public Map<String, List<Candle>> getCandles(List<String> symbols, EnumTimeframe timeframe, int bars,
             Instant fromTime, String period, String type) {
         ensureSubscribedBatch(symbols, timeframe, fromTime, period, type);
