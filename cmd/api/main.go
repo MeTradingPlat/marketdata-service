@@ -61,6 +61,18 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to warm up candle pool")
 		}
 
+		// Tras una reconexion, CandlePool descarta la vela M1 a medio
+		// formar de cada simbolo (quedaba incompleta por la caida) -- este
+		// hook rellena el hueco real con las barras nativas de TastyTrade
+		// en vez de dejarlo perdido para siempre.
+		pool.OnLiveReconnect(func(reconnectedSymbols []string) {
+			for _, symbol := range reconnectedSymbols {
+				if err := ingest.Backfill(ctx, symbol, domain.M1); err != nil {
+					log.Error().Err(err).Str("symbol", symbol).Msg("failed to backfill M1 gap after reconnect")
+				}
+			}
+		})
+
 		catchup.StartDailyCatchUp(ctx, symbols, ingest)
 
 		if cfg.BackfillBatchSize > 0 {
