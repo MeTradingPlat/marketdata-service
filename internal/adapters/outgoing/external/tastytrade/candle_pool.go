@@ -66,19 +66,6 @@ type CandlePool struct {
 	// acotada que no sigue creciendo es la condicion de carrera esperada
 	// del unsubscribe (ver unsubscribeDrainPeriod), no una fuga.
 	orphanEvents int64
-
-	// onLiveReconnect se dispara despues de resuscribir los simbolos en
-	// vivo tras una reconexion -- ver handleConnectionReconnect, cierra el
-	// hueco real que dejo la caida con barras nativas de TastyTrade.
-	onLiveReconnect func(symbols []string)
-}
-
-// OnLiveReconnect registra el callback que rellena el hueco de M1 despues
-// de una reconexion -- lo conecta el composition root (main.go) con
-// IngestCandlesService.Backfill, sin que este paquete dependa de la capa
-// de aplicacion.
-func (p *CandlePool) OnLiveReconnect(fn func(symbols []string)) {
-	p.onLiveReconnect = fn
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
@@ -160,12 +147,12 @@ func (p *CandlePool) unregisterDispatchIfCurrent(symbol string, tf domain.Timefr
 	}
 }
 
-// SubscribeLive y FetchHistory(..., M1, ...) comparten la misma clave de
-// dispatch para un simbolo -- si se llaman a la vez para el mismo simbolo,
-// el que limpie al final se lleva la suscripcion del otro. El flujo
-// correcto es backfill primero, en vivo despues (ver IngestCandlesService),
-// nunca concurrentes para el mismo simbolo+M1.
-func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, onClosed func(domain.Candle)) error {
+// SubscribeLive es la unica suscripcion M1 de un simbolo: se abre con
+// FromTime = from (para retomar exactamente donde quedo el ultimo dato
+// guardado) y se queda abierta para siempre, sin un FetchHistory M1
+// separado antes ni un remove/add de por medio -- ver el comentario de
+// subscribeLive sobre por que esa secuencia dejaba el streaming mudo.
+func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time.Time, onClosed func(domain.Candle)) error {
 	ch, err := p.allocator.allocate(ctx)
 	if err != nil {
 		return fmt.Errorf("allocating channel for %s live M1: %w", symbol, err)
@@ -178,7 +165,7 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, onClosed 
 	_ = p.registerDispatch(symbol, domain.M1, "live", func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
 	ch.occupy(candleKey(symbol, domain.M1))
 
-	if err := ch.channel.subscribeLive(symbol, domain.M1); err != nil {
+	if err := ch.channel.subscribeLive(symbol, domain.M1, from); err != nil {
 		return fmt.Errorf("subscribing live M1 for %s: %w", symbol, err)
 	}
 	return nil
@@ -222,19 +209,22 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 	symbols := pc.liveSymbols()
 	pc.reset()
 
-	// Descarta la vela a medio formar de cada simbolo antes de
-	// resuscribir -- sin esto, el primer tick que llegue tras reconectar
-	// (ya en un minuto posterior) hace que handleLiveEvent trate esa vela
-	// vieja como "cerrada" y la guarde, cuando en realidad quedo
-	// incompleta: le faltan los ticks de los segundos que la conexion
-	// estuvo caida. Mejor no guardar nada ahi que guardar un OHLCV falso.
+	// La vela a medio formar de cada simbolo queda incompleta -- le faltan
+	// los ticks de los segundos que la conexion estuvo caida -- asi que se
+	// descarta de current, pero su timestamp se guarda como punto de
+	// retomada: resuscribir con FromTime = ese timestamp le pide a dxLink
+	// que repita desde ahi (la vela incompleta incluida, esta vez completa)
+	// en vez de dejar el hueco perdido para siempre.
 	p.currentMu.Lock()
+	resumeFrom := make(map[string]time.Time, len(symbols))
 	for _, symbol := range symbols {
+		if prev, ok := p.current[symbol]; ok {
+			resumeFrom[symbol] = prev.Timestamp
+		}
 		delete(p.current, symbol)
 	}
 	p.currentMu.Unlock()
 
-	var resubscribed []string
 	for _, symbol := range symbols {
 		p.liveMu.Lock()
 		cb := p.liveSubs[symbol]
@@ -242,19 +232,9 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 		if cb == nil {
 			continue
 		}
-		if err := p.SubscribeLive(ctx, symbol, cb); err != nil {
+		if err := p.SubscribeLive(ctx, symbol, resumeFrom[symbol], cb); err != nil {
 			log.Error().Err(err).Str("symbol", symbol).Msg("failed to resubscribe live candle after reconnect")
-			continue
 		}
-		resubscribed = append(resubscribed, symbol)
-	}
-
-	// El hueco real que dejo la caida (la vela descartada arriba, mas
-	// cualquier minuto completo que se haya saltado) se rellena con las
-	// barras M1 nativas de TastyTrade -- mismo backfill incremental de
-	// siempre, no una reconstruccion nuestra a partir de ticks parciales.
-	if p.onLiveReconnect != nil && len(resubscribed) > 0 {
-		p.onLiveReconnect(resubscribed)
 	}
 }
 

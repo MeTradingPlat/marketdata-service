@@ -107,11 +107,24 @@ func closedCandles(candles []domain.Candle, tf domain.Timeframe) ([]domain.Candl
 	return closed, nil
 }
 
-// SubscribeLiveCandles solo invoca el callback con velas ya cerradas -- ver
-// MarketDataGateway, el merge de ticks parciales es responsabilidad del
-// adaptador, no de este use case.
+// StreamLive arranca la unica suscripcion M1 del simbolo desde el ultimo
+// watermark guardado -- retoma exactamente donde quedo el ultimo dato (sin
+// watermark todavia, el gateway pide profundidad maxima) en vez de un
+// Backfill(M1) puntual seguido de un StreamLive en vivo aparte: esa
+// secuencia (desuscribir y resuscribir la misma clave casi al mismo tiempo)
+// dejaba el streaming mudo para siempre sin ningun error. SubscribeLiveCandles
+// solo invoca el callback con velas ya cerradas -- el merge de ticks
+// parciales es responsabilidad del adaptador, no de este use case.
 func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) error {
-	return s.gateway.SubscribeLiveCandles(ctx, symbol, func(c domain.Candle) {
+	newest, _, err := s.repo.GetWatermark(ctx, symbol, domain.M1)
+	if err != nil {
+		return fmt.Errorf("checking watermark for %s M1: %w", symbol, err)
+	}
+	var from time.Time
+	if newest != nil {
+		from = *newest
+	}
+	return s.gateway.SubscribeLiveCandles(ctx, symbol, from, func(c domain.Candle) {
 		if err := s.repo.Save(ctx, []domain.Candle{c}); err != nil {
 			log.Error().Err(err).Str("symbol", symbol).Msg("failed to save live candle")
 		}

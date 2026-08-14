@@ -162,14 +162,26 @@ func candleSymbolNormalized(symbol string, tf domain.Timeframe) (string, error) 
 	return symbol + suffix, nil
 }
 
-func (c *dxLinkChannel) subscribeLive(symbol string, tf domain.Timeframe) error {
+// subscribeLive es la UNICA suscripcion M1 que se manda por simbolo: con
+// FromTime distinto de cero, dxLink repite primero el historial desde ese
+// punto y despues sigue solo con datos en vivo por la misma suscripcion --
+// nunca hay un remove seguido de un add para la misma clave (visto en vivo:
+// esa secuencia dejaba el streaming mudo para siempre sin ningun error,
+// probablemente el servidor colapsando el remove+add casi simultaneos de la
+// misma clave en un solo diff neto).
+func (c *dxLinkChannel) subscribeLive(symbol string, tf domain.Timeframe, from time.Time) error {
 	sym, err := candleSymbol(symbol, tf)
 	if err != nil {
 		return err
 	}
+	item := feedSubscriptionItem{Symbol: sym, Type: "Candle"}
+	if !from.IsZero() {
+		fromMs := from.UnixMilli()
+		item.FromTime = &fromMs
+	}
 	return c.client.send(feedSubscriptionMessage{
 		Type: "FEED_SUBSCRIPTION", Channel: c.id,
-		Add: []feedSubscriptionItem{{Symbol: sym, Type: "Candle"}},
+		Add: []feedSubscriptionItem{item},
 	})
 }
 

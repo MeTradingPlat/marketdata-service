@@ -32,6 +32,13 @@ func (g *Gateway) ProbeMaxDepth(ctx context.Context, symbol string, timeframe do
 	return g.pool.FetchHistory(ctx, symbol, timeframe, ProbeFromTime)
 }
 
-func (g *Gateway) SubscribeLiveCandles(ctx context.Context, symbol string, onCandle func(domain.Candle)) error {
-	return g.pool.SubscribeLive(ctx, symbol, onCandle)
+// SubscribeLiveCandles trata "from" en cero (sin watermark todavia, simbolo
+// nuevo) igual que ProbeMaxDepth: pide toda la profundidad M1 real que
+// TastyTrade entregue en vez de arrancar la suscripcion en vivo sin nada de
+// historial detras.
+func (g *Gateway) SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onCandle func(domain.Candle)) error {
+	if from.IsZero() {
+		from = ProbeFromTime
+	}
+	return g.pool.SubscribeLive(ctx, symbol, from, onCandle)
 }

@@ -61,18 +61,6 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to warm up candle pool")
 		}
 
-		// Tras una reconexion, CandlePool descarta la vela M1 a medio
-		// formar de cada simbolo (quedaba incompleta por la caida) -- este
-		// hook rellena el hueco real con las barras nativas de TastyTrade
-		// en vez de dejarlo perdido para siempre.
-		pool.OnLiveReconnect(func(reconnectedSymbols []string) {
-			for _, symbol := range reconnectedSymbols {
-				if err := ingest.Backfill(ctx, symbol, domain.M1); err != nil {
-					log.Error().Err(err).Str("symbol", symbol).Msg("failed to backfill M1 gap after reconnect")
-				}
-			}
-		})
-
 		catchup.StartDailyCatchUp(ctx, symbols, ingest)
 
 		if cfg.BackfillBatchSize > 0 {
@@ -93,17 +81,13 @@ func main() {
 		if err := symbols.Upsert(ctx, testSymbols); err != nil {
 			log.Fatal().Err(err).Msg("failed to track test symbols")
 		}
-		// Backfill primero, en vivo despues -- ver comentario en
-		// CandlePool.SubscribeLive sobre por que no pueden ser concurrentes
-		// para el mismo simbolo+M1.
+		// Por fases (todo D1, despues todo H1) en vez de por simbolo: M1 ya
+		// no pasa por Backfill aqui -- StreamLive abre su unica suscripcion
+		// M1 con FromTime = watermark y se queda abierta, sin el ciclo de
+		// desuscribir+resuscribir que dejaba el streaming mudo.
+		backfillPhase(ctx, ingest, cfg.TestSymbols, domain.D1)
+		backfillPhase(ctx, ingest, cfg.TestSymbols, domain.H1)
 		for _, symbol := range cfg.TestSymbols {
-			for _, tf := range []domain.Timeframe{domain.D1, domain.H1, domain.M1} {
-				if err := ingest.Backfill(ctx, symbol, tf); err != nil {
-					log.Error().Err(err).Str("symbol", symbol).Str("timeframe", string(tf)).Msg("failed to backfill history")
-				} else {
-					log.Info().Str("symbol", symbol).Str("timeframe", string(tf)).Msg("backfill finished")
-				}
-			}
 			if err := ingest.StreamLive(ctx, symbol); err != nil {
 				log.Error().Err(err).Str("symbol", symbol).Msg("failed to start live candle stream")
 			}

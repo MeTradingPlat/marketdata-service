@@ -13,6 +13,6 @@ import (
 type MarketDataGateway interface {
 	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, from time.Time) ([]domain.Candle, error)
 	ProbeMaxDepth(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error)
-	SubscribeLiveCandles(ctx context.Context, symbol string, onCandle func(domain.Candle)) error
+	SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onCandle func(domain.Candle)) error
 	ActiveSymbols(ctx context.Context) ([]domain.Symbol, error)
 }
