@@ -33,13 +33,15 @@ const upsertWatermarkSQL = `
 		last_ts = GREATEST(watermarks.last_ts, EXCLUDED.last_ts), updated_at = now()
 `
 
-// Cada vela guardada (backfill o M1 en vivo) deja su propio watermark en el
-// mismo batch -- una sola llamada a Save() cubre ambos, sin un camino
-// separado solo para el streaming en vivo. Reintenta ante deadlock (mismo
-// motivo que AggregateH1/D1: candles y watermarks comparten FK hacia
-// tracked_symbols, y con muchos workers de backfill concurrentes mas el job
-// de agregacion, Postgres puede detectar un ciclo de locks entre sesiones
-// -- confirmado en vivo, es idempotente reintentar gracias a ON CONFLICT).
+// Solo M1 deja watermark aqui -- H1/D1 nativas de TastyTrade no lo
+// necesitan (su frescura ya se puede leer de MAX(ts) en candles via
+// GetWatermark), y escribirlo tambien para ellas competia por la MISMA fila
+// watermarks(symbol_id, 'D1'/'H1') que el job de agregacion, con origenes
+// distintos (nativo vs derivado de M1) mezclados en una sola fila sin
+// distincion. Esa doble escritura era justamente lo que producia el
+// deadlock confirmado en vivo entre Save() y AggregateH1/D1 (ambos
+// intentando actualizar la misma fila al mismo tiempo) -- separar los
+// caminos elimina la colision de raiz en vez de solo reintentarla.
 func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) error {
 	if len(candles) == 0 {
 		return nil
@@ -49,16 +51,20 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) er
 		for _, c := range candles {
 			batch.Queue(upsertCandleSQL, c.Symbol, string(c.Timeframe), c.Timestamp,
 				c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source)
-			batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
+			if c.Timeframe == domain.M1 {
+				batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
+			}
 		}
 		results := r.pool.SendBatch(ctx, batch)
 		defer results.Close()
-		for range candles {
+		for _, c := range candles {
 			if _, err := results.Exec(); err != nil {
 				return fmt.Errorf("upserting candle batch: %w", err)
 			}
-			if _, err := results.Exec(); err != nil {
-				return fmt.Errorf("upserting watermark batch: %w", err)
+			if c.Timeframe == domain.M1 {
+				if _, err := results.Exec(); err != nil {
+					return fmt.Errorf("upserting watermark batch: %w", err)
+				}
 			}
 		}
 		return nil
