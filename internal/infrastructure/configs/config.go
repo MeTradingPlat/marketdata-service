@@ -34,7 +34,7 @@ func Load() *Config {
 	viper.SetDefault("TEST_MARKET", "XNAS")
 	viper.SetDefault("TT_BASE_URL", "https://api.tastytrade.com")
 	viper.SetDefault("MAX_CANDLE_POOL_CONNECTIONS", 40)
-	viper.SetDefault("SWEEP_WORKERS", 80)
+	viper.SetDefault("SWEEP_WORKERS", 60)
 	viper.SetDefault("DB_HOST", "localhost")
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_NAME", "marketdata_db")

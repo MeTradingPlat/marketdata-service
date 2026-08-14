@@ -114,7 +114,7 @@ jobs:
             -e TEST_SYMBOLS="AAPL,MSFT,GOOGL,TSLA,AMZN" \
             -e TEST_MARKET="XNAS" \
             -e MAX_CANDLE_POOL_CONNECTIONS="40" \
-            -e SWEEP_WORKERS="80" \
+            -e SWEEP_WORKERS="60" \
             virtud142/metradingplat_marketdata_service:latest
 
       - name: Clean Old Images of This Service
