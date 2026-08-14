@@ -9,15 +9,21 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// idleReadTimeout: mismo valor que el DefaultMaxSessionIdleTimeout que ya
-// se probo en produccion en el cliente Java (120s) -- si no llega NADA del
-// servidor (dato real o su propio KEEPALIVE) en ese tiempo, ReadMessage
-// devuelve un timeout y cae por el mismo camino de error que un cierre de
-// socket real. Sin este deadline, Read() se queda bloqueado para siempre
-// ante una conexion zombie (TCP nunca cerrado, servidor mudo) -- confirmado
-// en vivo, el streaming en vivo se quedo callado 5+ minutos sin ningun
-// error ni intento de reconexion.
-const idleReadTimeout = 120 * time.Second
+// idleReadTimeout: si no llega NADA del servidor (dato real o su propio
+// KEEPALIVE) en este tiempo, ReadMessage devuelve un timeout y cae por el
+// mismo camino de error que un cierre de socket real. Sin este deadline,
+// Read() se queda bloqueado para siempre ante una conexion zombie (TCP
+// nunca cerrado, servidor mudo) -- confirmado en vivo, el streaming en vivo
+// se quedo callado 5+ minutos sin ningun error ni intento de reconexion.
+// 60s, no los 120s del DefaultMaxSessionIdleTimeout de Java -- ya estamos
+// recibiendo velas en formacion en vivo, asi que esperar tanto para
+// detectar el corte genera huecos de mas. El propio SETUP ya declara
+// KeepaliveTimeout/AcceptKeepaliveTimeout=60, asi que 60s es el limite que
+// el protocolo mismo espera, no un numero arbitrario -- y es 2x nuestro
+// propio intervalo de envio de KEEPALIVE (30s), siguiendo el patron
+// estandar de gorilla/websocket de que el deadline de lectura sea
+// notablemente mayor al periodo de ping, nunca igual.
+const idleReadTimeout = 60 * time.Second
 
 func (c *DxLinkConn) readLoop(ctx context.Context) {
 	for {
