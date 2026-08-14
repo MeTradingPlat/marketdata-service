@@ -130,22 +130,33 @@ func (p *CandlePool) routeEvent(ev rawCandleEvent) {
 // registerDispatch devuelve un id de esta registracion en particular --
 // unregisterDispatchIfCurrent lo necesita para no borrar por accidente el
 // dispatch de una registracion MAS NUEVA para la misma clave (ver
-// unsubscribeDrainPeriod: el borrado se agenda con retraso).
-func (p *CandlePool) registerDispatch(symbol string, tf domain.Timeframe, handler func(rawCandleEvent)) uint64 {
+// unsubscribeDrainPeriod: el borrado se agenda con retraso). source es
+// puramente diagnostico (queda en el log si esta registracion pisa una
+// existente) -- confirmar EXACTAMENTE que esta pisando a que fue dificil de
+// ver solo con volcados de goroutines.
+func (p *CandlePool) registerDispatch(symbol string, tf domain.Timeframe, source string, handler func(rawCandleEvent)) uint64 {
 	p.dispatchMu.Lock()
 	defer p.dispatchMu.Unlock()
 	p.dispatchSeq++
 	id := p.dispatchSeq
-	p.dispatch[candleKey(symbol, tf)] = dispatchEntry{id: id, handler: handler}
+	key := candleKey(symbol, tf)
+	if prev, ok := p.dispatch[key]; ok {
+		log.Info().Str("symbol", symbol).Str("timeframe", string(tf)).Str("source", source).
+			Uint64("new_id", id).Uint64("replaced_id", prev.id).
+			Msg("dispatch registration replaced an existing entry")
+	}
+	p.dispatch[key] = dispatchEntry{id: id, handler: handler}
 	return id
 }
 
-func (p *CandlePool) unregisterDispatchIfCurrent(symbol string, tf domain.Timeframe, id uint64) {
+func (p *CandlePool) unregisterDispatchIfCurrent(symbol string, tf domain.Timeframe, id uint64, source string) {
 	p.dispatchMu.Lock()
 	defer p.dispatchMu.Unlock()
 	key := candleKey(symbol, tf)
 	if entry, ok := p.dispatch[key]; ok && entry.id == id {
 		delete(p.dispatch, key)
+		log.Info().Str("symbol", symbol).Str("timeframe", string(tf)).Str("source", source).Uint64("id", id).
+			Msg("dispatch entry removed")
 	}
 }
 
@@ -164,7 +175,7 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, onClosed 
 	p.liveSubs[symbol] = onClosed
 	p.liveMu.Unlock()
 
-	_ = p.registerDispatch(symbol, domain.M1, func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
+	_ = p.registerDispatch(symbol, domain.M1, "live", func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
 	ch.occupy(candleKey(symbol, domain.M1))
 
 	if err := ch.channel.subscribeLive(symbol, domain.M1); err != nil {
@@ -285,7 +296,7 @@ func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.
 	ch.occupy(key)
 
 	collector := newHistoryCollector(symbol, tf)
-	dispatchID := p.registerDispatch(symbol, tf, collector.onCandle)
+	dispatchID := p.registerDispatch(symbol, tf, "history", collector.onCandle)
 
 	// El remove va primero (le da al servidor la maxima ventaja de tiempo
 	// para procesarlo), el dispatch se borra despues de un rato -- ver
@@ -295,7 +306,7 @@ func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.
 		ch.release(key)
 		_ = ch.channel.unsubscribe(symbol, tf)
 		time.AfterFunc(unsubscribeDrainPeriod, func() {
-			p.unregisterDispatchIfCurrent(symbol, tf, dispatchID)
+			p.unregisterDispatchIfCurrent(symbol, tf, dispatchID, "history")
 		})
 	}
 
