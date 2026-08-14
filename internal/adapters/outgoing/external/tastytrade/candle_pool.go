@@ -41,6 +41,18 @@ type CandlePool struct {
 	dispatch    map[string]dispatchEntry
 	dispatchSeq uint64
 
+	// historyLocks serializa FetchHistory por simbolo+temporalidad -- dos
+	// llamadas concurrentes para la MISMA clave (confirmado en vivo: el
+	// backfill en lote y el catch-up diario corren a la vez al arrancar y
+	// se solapan en los mismos simbolos) se pisaban el registro de
+	// dispatch, y como dxFeed fusiona varios "add" al mismo tema en una
+	// sola suscripcion, el "remove" de la primera mataba tambien la de la
+	// segunda sin que su handler llegara a desregistrarse -- la
+	// suscripcion quedaba viva en el servidor mandando actualizaciones
+	// reales para siempre, sin nadie escuchando (huerfanos que no paran de
+	// crecer, a diferencia de la rafaga acotada de unsubscribeDrainPeriod).
+	historyLocks sync.Map // map[string]*sync.Mutex
+
 	liveMu   sync.Mutex
 	liveSubs map[string]func(domain.Candle)
 
@@ -199,12 +211,18 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 }
 
 func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time) ([]domain.Candle, error) {
+	key := candleKey(symbol, tf)
+
+	lockVal, _ := p.historyLocks.LoadOrStore(key, &sync.Mutex{})
+	lock := lockVal.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
 	ch, err := p.allocator.allocate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("allocating channel for %s %s history: %w", symbol, tf, err)
 	}
 
-	key := candleKey(symbol, tf)
 	ch.occupy(key)
 
 	collector := newHistoryCollector(symbol, tf)
