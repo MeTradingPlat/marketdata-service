@@ -12,6 +12,8 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Acquire exclusive deploy lock (avoid overwhelming the shared host)
         run: |
           LOCK_DIR="/tmp/metradingplat-deploy.lock"
