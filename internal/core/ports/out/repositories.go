@@ -16,4 +16,5 @@ type CandleRepository interface {
 type SymbolRepository interface {
 	Upsert(ctx context.Context, symbols []domain.Symbol) error
 	Tracked(ctx context.Context) ([]domain.Symbol, error)
+	Deactivate(ctx context.Context, symbols []string) error
 }

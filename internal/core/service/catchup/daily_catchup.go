@@ -2,6 +2,7 @@ package catchup
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -26,19 +27,59 @@ const (
 // vez al dia, poco despues de medianoche UTC -- Backfill() ya es
 // incremental, asi que este barrido diario es barato: solo trae lo que
 // cerro desde el ultimo watermark de cada simbolo.
-func StartDailyCatchUp(ctx context.Context, symbols out.SymbolRepository, ingest in.IngestCandlesService) {
+func StartDailyCatchUp(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, ingest in.IngestCandlesService) {
 	go func() {
-		runOnce(ctx, symbols, ingest)
+		runOnce(ctx, gateway, symbols, ingest)
 		for {
 			wait := time.Until(nextRunAt(time.Now().UTC()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runOnce(ctx, symbols, ingest)
+				runOnce(ctx, gateway, symbols, ingest)
 			}
 		}
 	}()
+}
+
+// reconcileUniverse trae el universo activo real de TastyTrade antes de
+// cada corrida -- un simbolo nuevo (IPO, resplit, etc.) entra a Tracked()
+// de inmediato en vez de esperar a que alguien lo agregue a mano, y uno que
+// ya no figura como activo se desactiva (no se borra ninguna vela ya
+// guardada, solo deja de pedirsele mas historia). Si el fetch falla o
+// vuelve vacio (fallo silencioso del lado de TastyTrade), no se toca nada
+// -- mejor un universo desactualizado que desactivar todo por un fetch roto.
+func reconcileUniverse(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository) error {
+	active, err := gateway.ActiveSymbols(ctx)
+	if err != nil {
+		return fmt.Errorf("fetching active symbol universe: %w", err)
+	}
+	if len(active) == 0 {
+		return fmt.Errorf("active symbol universe came back empty, skipping reconciliation")
+	}
+	if err := symbols.Upsert(ctx, active); err != nil {
+		return fmt.Errorf("upserting active symbols: %w", err)
+	}
+
+	tracked, err := symbols.Tracked(ctx)
+	if err != nil {
+		return fmt.Errorf("listing tracked symbols: %w", err)
+	}
+	activeSet := make(map[string]struct{}, len(active))
+	for _, s := range active {
+		activeSet[s.Symbol] = struct{}{}
+	}
+	var stale []string
+	for _, s := range tracked {
+		if _, ok := activeSet[s.Symbol]; !ok {
+			stale = append(stale, s.Symbol)
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	log.Info().Int("count", len(stale)).Msg("deactivating symbols no longer in the active universe")
+	return symbols.Deactivate(ctx, stale)
 }
 
 func nextRunAt(now time.Time) time.Time {
@@ -50,7 +91,11 @@ func nextRunAt(now time.Time) time.Time {
 	return next
 }
 
-func runOnce(ctx context.Context, symbols out.SymbolRepository, ingest in.IngestCandlesService) {
+func runOnce(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, ingest in.IngestCandlesService) {
+	if err := reconcileUniverse(ctx, gateway, symbols); err != nil {
+		log.Error().Err(err).Msg("failed to reconcile symbol universe, backfilling last known tracked list")
+	}
+
 	tracked, err := symbols.Tracked(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to list tracked symbols for daily catch-up")

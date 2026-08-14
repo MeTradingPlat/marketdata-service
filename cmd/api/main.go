@@ -61,7 +61,7 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to warm up candle pool")
 		}
 
-		catchup.StartDailyCatchUp(ctx, symbols, ingest)
+		catchup.StartDailyCatchUp(ctx, gateway, symbols, ingest)
 
 		if cfg.BackfillBatchSize > 0 {
 			runBackfillBatch(ctx, gateway, symbols, ingest, cfg.BackfillBatchSize, cfg.BackfillWorkers)

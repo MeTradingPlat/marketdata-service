@@ -59,3 +59,18 @@ func (r *SymbolRepository) Tracked(ctx context.Context) ([]domain.Symbol, error)
 	}
 	return symbols, rows.Err()
 }
+
+const deactivateSymbolsSQL = `UPDATE tracked_symbols SET is_active = FALSE WHERE symbol = ANY($1)`
+
+// Deactivate no borra ninguna vela ya guardada -- solo saca al simbolo de
+// Tracked() para que el catch-up diario deje de pedirle mas historia, en
+// caso de que TastyTrade ya no lo reporte como activo.
+func (r *SymbolRepository) Deactivate(ctx context.Context, symbols []string) error {
+	if len(symbols) == 0 {
+		return nil
+	}
+	if _, err := r.pool.Exec(ctx, deactivateSymbolsSQL, symbols); err != nil {
+		return fmt.Errorf("deactivating symbols: %w", err)
+	}
+	return nil
+}
