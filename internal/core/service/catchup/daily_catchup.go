@@ -75,43 +75,12 @@ type job struct {
 	tf     domain.Timeframe
 }
 
-// prioritizedJobs arma la cola en fases -- todo D1 antes que todo H1 -- y
-// dentro de cada fase, los simbolos que TODAVIA no tienen ninguna vela
-// guardada van primero. Sin esa segunda prioridad, una corrida sobre el
-// universo entero gasta su tiempo re-chequeando simbolos que ya estan al
-// dia (un chequeo con al menos una barra nueva cuesta lo mismo en red que
-// traer la profundidad completa de un simbolo nuevo, no es proporcional a
-// cuantas barras trae) antes de llegar siquiera a los que nunca se
-// tocaron. SymbolsWithData es una consulta en lote (2 en total), no una
-// por simbolo.
-func prioritizedJobs(ctx context.Context, candles out.CandleRepository, tracked []domain.Symbol) chan job {
-	withD1, err := candles.SymbolsWithData(ctx, domain.D1)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to check which symbols already have D1 data, treating all as uncovered")
-		withD1 = map[string]struct{}{}
-	}
-	withH1, err := candles.SymbolsWithData(ctx, domain.H1)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to check which symbols already have H1 data, treating all as uncovered")
-		withH1 = map[string]struct{}{}
-	}
-
-	d1Jobs := phaseJobs(tracked, domain.D1, withD1)
-	h1Jobs := phaseJobs(tracked, domain.H1, withH1)
-
-	jobs := make(chan job, len(d1Jobs)+len(h1Jobs))
-	for _, j := range d1Jobs {
-		jobs <- j
-	}
-	for _, j := range h1Jobs {
-		jobs <- j
-	}
-	close(jobs)
-	return jobs
-}
-
 // phaseJobs ordena una sola fase: los simbolos sin datos primero, los que
-// ya tienen algo despues.
+// ya tienen algo despues -- un chequeo con al menos una barra nueva cuesta
+// lo mismo en red que traer la profundidad completa de un simbolo nuevo
+// (no es proporcional a cuantas barras trae), asi que sin esta prioridad
+// una fase gasta su tiempo re-chequeando simbolos que ya estan al dia antes
+// de llegar siquiera a los que nunca se tocaron.
 func phaseJobs(tracked []domain.Symbol, tf domain.Timeframe, withData map[string]struct{}) []job {
 	var uncovered, covered []job
 	for _, s := range tracked {
@@ -125,14 +94,46 @@ func phaseJobs(tracked []domain.Symbol, tf domain.Timeframe, withData map[string
 	return append(uncovered, covered...)
 }
 
+// runPhase corre UN timeframe hasta el final -- todos los workers drenan la
+// cola y terminan (wg.Wait) antes de que el llamador pueda arrancar la
+// fase siguiente. Barrera estricta a proposito: nada de H1 empieza mientras
+// quede un solo D1 pendiente, ni al reves.
+func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, tf domain.Timeframe) {
+	start := time.Now()
+	queue := make(chan job, len(jobs))
+	for _, j := range jobs {
+		queue <- j
+	}
+	close(queue)
+
+	var wg sync.WaitGroup
+	for i := 0; i < sweepWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range queue {
+				if err := ingest.Backfill(ctx, j.symbol, j.tf); err != nil {
+					log.Error().Err(err).Str("symbol", j.symbol).Str("timeframe", string(j.tf)).
+						Msg("universe sweep job failed")
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	log.Info().Str("timeframe", string(tf)).Int("symbols", len(jobs)).Dur("elapsed", time.Since(start)).
+		Msg("universe sweep phase finished")
+}
+
 // RunSweep reconcilia el universo y despues corre D1 completo (fase 1) y
-// H1 completo (fase 2) para todo lo rastreado -- reemplaza la agregacion
-// SQL M1->H1/D1 que se tenia antes: en vez de sintetizar H1/D1 nosotros
-// mismos, le pide a TastyTrade las barras nativas que falten. M1 no pasa
-// por aqui -- lo orquesta el llamador (arranque: primera vez; ventana de
-// mantenimiento: despues de StopAllLive), ver cmd/api. Devuelve la lista
-// de simbolos rastreados para que el llamador pueda resuscribir M1 sobre
-// el mismo conjunto sin pedirlo de nuevo.
+// H1 completo (fase 2) para todo lo rastreado, cada fase como una barrera
+// estricta (ver runPhase) -- reemplaza la agregacion SQL M1->H1/D1 que se
+// tenia antes: en vez de sintetizar H1/D1 nosotros mismos, le pide a
+// TastyTrade las barras nativas que falten. M1 no pasa por aqui -- lo
+// orquesta el llamador (arranque: primera vez; ventana de mantenimiento:
+// despues de StopAllLive), ver cmd/api. Devuelve la lista de simbolos
+// rastreados para que el llamador pueda resuscribir M1 sobre el mismo
+// conjunto sin pedirlo de nuevo.
 func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) []domain.Symbol {
 	if err := reconcileUniverse(ctx, gateway, symbols); err != nil {
 		log.Error().Err(err).Msg("failed to reconcile symbol universe, sweeping last known tracked list")
@@ -144,24 +145,19 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sy
 		return nil
 	}
 
-	jobs := prioritizedJobs(ctx, candles, tracked)
-
-	start := time.Now()
-	var wg sync.WaitGroup
-	for i := 0; i < sweepWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := range jobs {
-				if err := ingest.Backfill(ctx, j.symbol, j.tf); err != nil {
-					log.Error().Err(err).Str("symbol", j.symbol).Str("timeframe", string(j.tf)).
-						Msg("universe sweep job failed")
-				}
-			}
-		}()
+	withD1, err := candles.SymbolsWithData(ctx, domain.D1)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to check which symbols already have D1 data, treating all as uncovered")
+		withD1 = map[string]struct{}{}
 	}
-	wg.Wait()
+	runPhase(ctx, ingest, phaseJobs(tracked, domain.D1, withD1), domain.D1)
 
-	log.Info().Int("symbols", len(tracked)).Dur("elapsed", time.Since(start)).Msg("universe sweep finished")
+	withH1, err := candles.SymbolsWithData(ctx, domain.H1)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to check which symbols already have H1 data, treating all as uncovered")
+		withH1 = map[string]struct{}{}
+	}
+	runPhase(ctx, ingest, phaseJobs(tracked, domain.H1, withH1), domain.H1)
+
 	return tracked
 }
