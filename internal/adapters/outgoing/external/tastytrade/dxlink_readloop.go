@@ -4,9 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
+
+// idleReadTimeout: mismo valor que el DefaultMaxSessionIdleTimeout que ya
+// se probo en produccion en el cliente Java (120s) -- si no llega NADA del
+// servidor (dato real o su propio KEEPALIVE) en ese tiempo, ReadMessage
+// devuelve un timeout y cae por el mismo camino de error que un cierre de
+// socket real. Sin este deadline, Read() se queda bloqueado para siempre
+// ante una conexion zombie (TCP nunca cerrado, servidor mudo) -- confirmado
+// en vivo, el streaming en vivo se quedo callado 5+ minutos sin ningun
+// error ni intento de reconexion.
+const idleReadTimeout = 120 * time.Second
 
 func (c *DxLinkConn) readLoop(ctx context.Context) {
 	for {
@@ -17,6 +28,7 @@ func (c *DxLinkConn) readLoop(ctx context.Context) {
 			return
 		}
 
+		_ = conn.SetReadDeadline(time.Now().Add(idleReadTimeout))
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			c.notifyHandshakeFailure(err)
@@ -49,8 +61,6 @@ func (c *DxLinkConn) markAuthenticated() {
 }
 
 func (c *DxLinkConn) handleMessage(ctx context.Context, raw []byte) {
-	c.touchLastMessage()
-
 	var env inboundEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		log.Error().Err(err).Msg("dxlink: failed to decode message")

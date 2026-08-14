@@ -11,15 +11,8 @@ const (
 	initialReconnectDelay = 5 * time.Second
 	maxReconnectDelay     = 300 * time.Second
 	backoffGrowthCeiling  = 10
-	healthCheckInterval   = 20 * time.Second
+	healthCheckInterval   = 60 * time.Second
 	keepaliveInterval     = 30 * time.Second
-
-	// staleConnectionThreshold: si no llega NINGUN mensaje del servidor
-	// (dato real o su propio KEEPALIVE) en este tiempo, se asume conexion
-	// zombie y se fuerza reconexion -- ver lastMessageAtUnixNano en
-	// dxlink_conn.go. 3x keepaliveInterval da margen a jitter normal sin
-	// tardar minutos en reaccionar a un silencio real.
-	staleConnectionThreshold = 90 * time.Second
 )
 
 func (c *DxLinkConn) handleDisconnect(ctx context.Context) {
@@ -93,13 +86,6 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) {
 	}
 }
 
-// healthCheckLoop trata el silencio prolongado igual que una desconexion
-// real -- scheduleReconnect (y performReconnect) se rehusan a hacer nada si
-// Connected() sigue en true, que es EXACTAMENTE lo que pasa con una
-// conexion zombie (TCP nunca arrojo error, authenticated nunca se apago
-// solo). handleDisconnect ya apaga authenticated antes de programar la
-// reconexion -- reusarlo aca evita duplicar esa logica y garantiza que el
-// reintento si ocurra.
 func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 	ticker := time.NewTicker(healthCheckInterval)
 	defer ticker.Stop()
@@ -110,9 +96,6 @@ func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 		case <-ticker.C:
 			if !c.Connected() {
 				c.scheduleReconnect(ctx)
-			} else if c.lastMessageAge() > staleConnectionThreshold {
-				log.Warn().Dur("silence", c.lastMessageAge()).Msg("dxlink connection looks zombied (no messages received), forcing reconnect")
-				c.handleDisconnect(ctx)
 			}
 		}
 	}
