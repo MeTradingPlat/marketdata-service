@@ -11,7 +11,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const historyDefaultWait = 15 * time.Second
+const (
+	historyDefaultWait = 15 * time.Second
+
+	// unsubscribeDrainPeriod: dxLink no confirma cuando un FEED_SUBSCRIPTION
+	// remove ya surtio efecto del lado del servidor (verificado contra la
+	// especificacion oficial: no hay ACK, y el spec no dice nada sobre
+	// eventos que ya estaban en camino). Mantener el dispatch registrado un
+	// rato mas despues de mandar el remove absorbe esos rezagados en vez de
+	// contarlos como huerfanos -- no cambia el resultado ya devuelto, solo
+	// reduce el ruido de una condicion de carrera inherente al protocolo.
+	unsubscribeDrainPeriod = 250 * time.Millisecond
+)
+
+type dispatchEntry struct {
+	id      uint64
+	handler func(rawCandleEvent)
+}
 
 // CandlePool reparte simbolos entre canales/conexiones DxLink pooled (via
 // channelAllocator) y enruta cada evento crudo que llega a la suscripcion
@@ -21,8 +37,9 @@ const historyDefaultWait = 15 * time.Second
 type CandlePool struct {
 	allocator *channelAllocator
 
-	dispatchMu sync.RWMutex
-	dispatch   map[string]func(rawCandleEvent)
+	dispatchMu  sync.RWMutex
+	dispatch    map[string]dispatchEntry
+	dispatchSeq uint64
 
 	liveMu   sync.Mutex
 	liveSubs map[string]func(domain.Candle)
@@ -31,15 +48,17 @@ type CandlePool struct {
 	current   map[string]domain.Candle
 
 	// orphanEvents cuenta eventos que llegan para un simbolo+temporalidad
-	// que ya no tiene handler registrado -- si esto crece con el tiempo
-	// despues de que un fetch de historial deberia haberse desuscrito,
-	// confirma una fuga de suscripcion server-side. Diagnostico temporal.
+	// que ya no tiene handler registrado -- si esto crece SIN PARAR con el
+	// tiempo, confirma una fuga de suscripcion server-side (lo que se vio y
+	// se corrigio antes con el formato normalizado del simbolo). Una rafaga
+	// acotada que no sigue creciendo es la condicion de carrera esperada
+	// del unsubscribe (ver unsubscribeDrainPeriod), no una fuga.
 	orphanEvents int64
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
 	p := &CandlePool{
-		dispatch: make(map[string]func(rawCandleEvent)),
+		dispatch: make(map[string]dispatchEntry),
 		liveSubs: make(map[string]func(domain.Candle)),
 		current:  make(map[string]domain.Candle),
 	}
@@ -71,10 +90,10 @@ func (p *CandlePool) routeEvent(ev rawCandleEvent) {
 		return
 	}
 	p.dispatchMu.RLock()
-	handler := p.dispatch[candleKey(symbol, tf)]
+	entry, found := p.dispatch[candleKey(symbol, tf)]
 	p.dispatchMu.RUnlock()
-	if handler != nil {
-		handler(ev)
+	if found {
+		entry.handler(ev)
 		return
 	}
 	if n := atomic.AddInt64(&p.orphanEvents, 1); n%20 == 1 {
@@ -83,16 +102,26 @@ func (p *CandlePool) routeEvent(ev rawCandleEvent) {
 	}
 }
 
-func (p *CandlePool) registerDispatch(symbol string, tf domain.Timeframe, handler func(rawCandleEvent)) {
+// registerDispatch devuelve un id de esta registracion en particular --
+// unregisterDispatchIfCurrent lo necesita para no borrar por accidente el
+// dispatch de una registracion MAS NUEVA para la misma clave (ver
+// unsubscribeDrainPeriod: el borrado se agenda con retraso).
+func (p *CandlePool) registerDispatch(symbol string, tf domain.Timeframe, handler func(rawCandleEvent)) uint64 {
 	p.dispatchMu.Lock()
-	p.dispatch[candleKey(symbol, tf)] = handler
-	p.dispatchMu.Unlock()
+	defer p.dispatchMu.Unlock()
+	p.dispatchSeq++
+	id := p.dispatchSeq
+	p.dispatch[candleKey(symbol, tf)] = dispatchEntry{id: id, handler: handler}
+	return id
 }
 
-func (p *CandlePool) unregisterDispatch(symbol string, tf domain.Timeframe) {
+func (p *CandlePool) unregisterDispatchIfCurrent(symbol string, tf domain.Timeframe, id uint64) {
 	p.dispatchMu.Lock()
-	delete(p.dispatch, candleKey(symbol, tf))
-	p.dispatchMu.Unlock()
+	defer p.dispatchMu.Unlock()
+	key := candleKey(symbol, tf)
+	if entry, ok := p.dispatch[key]; ok && entry.id == id {
+		delete(p.dispatch, key)
+	}
 }
 
 // SubscribeLive y FetchHistory(..., M1, ...) comparten la misma clave de
@@ -110,7 +139,7 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, onClosed 
 	p.liveSubs[symbol] = onClosed
 	p.liveMu.Unlock()
 
-	p.registerDispatch(symbol, domain.M1, func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
+	_ = p.registerDispatch(symbol, domain.M1, func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
 	ch.occupy(candleKey(symbol, domain.M1))
 
 	if err := ch.channel.subscribeLive(symbol, domain.M1); err != nil {
@@ -177,20 +206,31 @@ func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.
 
 	key := candleKey(symbol, tf)
 	ch.occupy(key)
-	defer func() {
-		ch.release(key)
-		p.unregisterDispatch(symbol, tf)
-		_ = ch.channel.unsubscribe(symbol, tf)
-	}()
 
 	collector := newHistoryCollector(symbol, tf)
-	p.registerDispatch(symbol, tf, collector.onCandle)
+	dispatchID := p.registerDispatch(symbol, tf, collector.onCandle)
+
+	// El remove va primero (le da al servidor la maxima ventaja de tiempo
+	// para procesarlo), el dispatch se borra despues de un rato -- ver
+	// unsubscribeDrainPeriod. unregisterDispatchIfCurrent solo borra si
+	// nadie volvio a registrar esa misma clave mientras tanto.
+	cleanup := func() {
+		ch.release(key)
+		_ = ch.channel.unsubscribe(symbol, tf)
+		time.AfterFunc(unsubscribeDrainPeriod, func() {
+			p.unregisterDispatchIfCurrent(symbol, tf, dispatchID)
+		})
+	}
 
 	if err := ch.channel.subscribeHistory(symbol, tf, from); err != nil {
+		cleanup()
 		return nil, fmt.Errorf("subscribing history: %w", err)
 	}
 	if err := waitForData(ctx, collector.settled, historyDefaultWait); err != nil {
+		cleanup()
 		return nil, err
 	}
-	return collector.complete(), nil
+	result := collector.complete()
+	cleanup()
+	return result, nil
 }
