@@ -88,9 +88,7 @@ func main() {
 		backfillPhase(ctx, ingest, cfg.TestSymbols, domain.D1)
 		backfillPhase(ctx, ingest, cfg.TestSymbols, domain.H1)
 		for _, symbol := range cfg.TestSymbols {
-			if err := ingest.StreamLive(ctx, symbol); err != nil {
-				log.Error().Err(err).Str("symbol", symbol).Msg("failed to start live candle stream")
-			}
+			startLiveWithRetry(ctx, ingest, symbol)
 		}
 
 		r.Init()

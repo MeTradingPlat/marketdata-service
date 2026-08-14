@@ -65,6 +65,10 @@ func runOnce(ctx context.Context, symbols out.SymbolRepository, ingest in.Ingest
 	for _, s := range tracked {
 		jobs <- job{symbol: s.Symbol, tf: domain.D1}
 		jobs <- job{symbol: s.Symbol, tf: domain.H1}
+		// M1 de un simbolo con streaming en vivo activo es un no-op seguro
+		// (ver hasLiveSub en FetchHistory) -- para el resto del universo, le
+		// da a M1 el mismo refresco incremental diario que ya tienen D1/H1.
+		jobs <- job{symbol: s.Symbol, tf: domain.M1}
 	}
 	close(jobs)
 
