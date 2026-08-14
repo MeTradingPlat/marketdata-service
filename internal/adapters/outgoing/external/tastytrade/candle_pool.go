@@ -247,7 +247,29 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 	}
 }
 
+// hasLiveSub dice si un simbolo ya tiene una suscripcion M1 en vivo activa.
+func (p *CandlePool) hasLiveSub(symbol string) bool {
+	p.liveMu.Lock()
+	defer p.liveMu.Unlock()
+	_, ok := p.liveSubs[symbol]
+	return ok
+}
+
 func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time) ([]domain.Candle, error) {
+	// Un fetch M1 puntual para un simbolo que YA esta en vivo competiria por
+	// la MISMA suscripcion server-side (dxFeed fusiona el "add" de esta
+	// peticion con el "add" en vivo en un solo tema), y el "remove" del
+	// cleanup de este fetch se lleva TAMBIEN la suscripcion en vivo por
+	// delante -- confirmado en vivo: el streaming de simbolos que ademas
+	// caian dentro de un lote de backfill se quedaba mudo para siempre, sin
+	// ningun error, porque el TCP seguia perfectamente sano sirviendo el
+	// resto del trafico del lote. El stream en vivo (mas el relleno de
+	// huecos tras reconexion) ya es la fuente autoritativa hacia adelante
+	// para M1, asi que aqui no hay nada que este fetch pueda aportar.
+	if tf == domain.M1 && p.hasLiveSub(symbol) {
+		return nil, nil
+	}
+
 	key := candleKey(symbol, tf)
 
 	lockVal, _ := p.historyLocks.LoadOrStore(key, &sync.Mutex{})

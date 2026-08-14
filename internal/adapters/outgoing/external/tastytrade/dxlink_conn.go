@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -11,6 +12,19 @@ import (
 )
 
 const handshakeTimeout = 30 * time.Second
+
+// tcpKeepAlivePeriod: DefaultDialer no habilita keepalive TCP -- sin esto,
+// un peer/ruta muerta que un dispositivo intermedio (NAT/proxy/firewall)
+// tumbo en silencio (sin FIN/RST, la causa mas comun de una "conexion
+// zombie") solo se detecta por nuestro propio idleReadTimeout de la capa
+// de aplicacion. El keepalive TCP es una sonda del kernel, independiente
+// de que nuestro codigo de WebSocket este funcionando bien -- una segunda
+// via de deteccion, mas rapida y mas barata que agregar logica propia.
+const tcpKeepAlivePeriod = 15 * time.Second
+
+var dxLinkDialer = websocket.Dialer{
+	NetDialContext: (&net.Dialer{KeepAlive: tcpKeepAlivePeriod}).DialContext,
+}
 
 type DxLinkConn struct {
 	urlFunc   func() string
@@ -51,7 +65,7 @@ func (c *DxLinkConn) Connected() bool {
 }
 
 func (c *DxLinkConn) Connect(ctx context.Context) error {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.urlFunc(), nil)
+	conn, _, err := dxLinkDialer.DialContext(ctx, c.urlFunc(), nil)
 	if err != nil {
 		return fmt.Errorf("dialing dxlink websocket: %w", err)
 	}
