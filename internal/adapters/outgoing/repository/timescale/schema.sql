@@ -8,17 +8,23 @@ CREATE TABLE IF NOT EXISTS tracked_symbols (
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- OHLC/VWAP en DOUBLE PRECISION, no NUMERIC(18,6) -- mismo tipo que Go ya
+-- usa internamente (float64), y algunos penny stocks reportan barras
+-- historicas pre-reverse-split con valores que exceden el rango de
+-- NUMERIC(18,6) (confirmado en vivo: overflow real en XXII/GWAV). Guardar
+-- el valor real tal cual que reportar el feed es preferible a recortarlo o
+-- descartar la barra entera.
 CREATE TABLE IF NOT EXISTS candles (
     symbol_id   INT NOT NULL REFERENCES tracked_symbols(symbol_id),
     timeframe   VARCHAR(6) NOT NULL,
     ts          TIMESTAMPTZ NOT NULL,
-    open        NUMERIC(18,6) NOT NULL,
-    high        NUMERIC(18,6) NOT NULL,
-    low         NUMERIC(18,6) NOT NULL,
-    close       NUMERIC(18,6) NOT NULL,
+    open        DOUBLE PRECISION NOT NULL,
+    high        DOUBLE PRECISION NOT NULL,
+    low         DOUBLE PRECISION NOT NULL,
+    close       DOUBLE PRECISION NOT NULL,
     volume      BIGINT NOT NULL DEFAULT 0,
     trade_count INT,
-    vwap        NUMERIC(18,6),
+    vwap        DOUBLE PRECISION,
     source      VARCHAR(16) NOT NULL DEFAULT 'tastytrade',
     PRIMARY KEY (symbol_id, timeframe, ts)
 );

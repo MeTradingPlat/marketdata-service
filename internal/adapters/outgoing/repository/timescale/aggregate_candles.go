@@ -2,8 +2,33 @@ package timescale
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+const deadlockRetries = 3
+
+// execWithDeadlockRetry reintenta ante un deadlock de Postgres (40P01) --
+// esperado bajo escritura concurrente pesada (confirmado en vivo: choco con
+// un backfill grande arrancando al mismo tiempo que el catch-up de
+// agregacion al reiniciar), y por diseño transitorio: reintentar casi
+// siempre basta porque Postgres ya aborto una de las dos transacciones en
+// conflicto.
+func execWithDeadlockRetry(ctx context.Context, exec func(context.Context) error) error {
+	var err error
+	for attempt := 0; attempt < deadlockRetries; attempt++ {
+		err = exec(ctx)
+		var pgErr *pgconn.PgError
+		if err == nil || !errors.As(err, &pgErr) || pgErr.Code != "40P01" {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+	}
+	return err
+}
 
 // El watermark es el ts mas reciente ya agregado (MAX de las filas propias,
 // source='derived_m1') en vez de una ventana fija -- si el job no corre por
@@ -83,14 +108,22 @@ const aggregateD1SQL = `
 `
 
 func (r *CandleRepository) AggregateH1(ctx context.Context) error {
-	if _, err := r.pool.Exec(ctx, aggregateH1SQL); err != nil {
+	err := execWithDeadlockRetry(ctx, func(ctx context.Context) error {
+		_, err := r.pool.Exec(ctx, aggregateH1SQL)
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("aggregating H1 from M1: %w", err)
 	}
 	return nil
 }
 
 func (r *CandleRepository) AggregateD1(ctx context.Context) error {
-	if _, err := r.pool.Exec(ctx, aggregateD1SQL); err != nil {
+	err := execWithDeadlockRetry(ctx, func(ctx context.Context) error {
+		_, err := r.pool.Exec(ctx, aggregateD1SQL)
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("aggregating D1 from M1: %w", err)
 	}
 	return nil
