@@ -2,20 +2,28 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
-	"github.com/MeTradingPlat/marketdata-service/internal/core/service/aggregation"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/injector"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+const shutdownTimeout = 10 * time.Second
 
 func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
@@ -26,14 +34,20 @@ func main() {
 		oauth *tastytrade.OAuth,
 		quoteToken *tastytrade.QuoteToken,
 		pool *tastytrade.CandlePool,
+		dbPool *pgxpool.Pool,
 		gateway out.MarketDataGateway,
 		symbols out.SymbolRepository,
-		candles out.CandleRepository,
 		ingest in.IngestCandlesService,
 		e *echo.Echo,
 		r *router.Router,
 	) {
-		ctx := context.Background()
+		// signal.NotifyContext cancela ctx al recibir SIGTERM/SIGINT --
+		// eso apaga limpio el pool de DB, las goroutines en vivo y el catch-up
+		// diario, en vez de que Docker mate el proceso a la fuerza y deje
+		// conexiones zombie en Postgres (confirmado en vivo: un docker stop
+		// dejaba una sesion colgada que bloqueaba TRUNCATE/ALTER despues).
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		defer stop()
 
 		if _, err := oauth.RefreshAccessToken(ctx); err != nil {
 			log.Fatal().Err(err).Msg("failed to obtain initial TastyTrade access token")
@@ -47,7 +61,7 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to warm up candle pool")
 		}
 
-		aggregation.StartForwardAggregation(ctx, candles)
+		catchup.StartDailyCatchUp(ctx, symbols, ingest)
 
 		if cfg.BackfillBatchSize > 0 {
 			runBackfillBatch(ctx, gateway, symbols, ingest, cfg.BackfillBatchSize, cfg.BackfillWorkers)
@@ -85,7 +99,22 @@ func main() {
 
 		r.Init()
 		address := fmt.Sprintf(":%s", cfg.ServerPort)
-		log.Fatal().Err(e.Start(address)).Msg("server stopped")
+		go func() {
+			if err := e.Start(address); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatal().Err(err).Msg("server stopped unexpectedly")
+			}
+		}()
+
+		<-ctx.Done()
+		log.Info().Msg("shutdown signal received, closing down")
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := e.Shutdown(shutdownCtx); err != nil {
+			log.Error().Err(err).Msg("error shutting down http server")
+		}
+		dbPool.Close()
+		log.Info().Msg("shutdown complete")
 	})
 	if err != nil {
 		panic(err)

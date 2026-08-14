@@ -2,11 +2,13 @@ package timescale
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -16,6 +18,27 @@ type CandleRepository struct {
 
 func NewCandleRepository(pool *pgxpool.Pool) *CandleRepository {
 	return &CandleRepository{pool: pool}
+}
+
+const deadlockRetries = 5
+
+// execWithDeadlockRetry reintenta ante un deadlock de Postgres (40P01) --
+// mucho menos probable ahora que ya no hay una transaccion grande
+// multi-simbolo compitiendo con Save() (ver daily_catchup.go), pero dos
+// escrituras concurrentes para el MISMO simbolo (ej. catch-up diario y
+// stream en vivo tocando el mismo D1 a la vez) todavia podrian chocar --
+// reintentar es seguro porque todo es UPSERT.
+func execWithDeadlockRetry(ctx context.Context, exec func(context.Context) error) error {
+	var err error
+	for attempt := 0; attempt < deadlockRetries; attempt++ {
+		err = exec(ctx)
+		var pgErr *pgconn.PgError
+		if err == nil || !errors.As(err, &pgErr) || pgErr.Code != "40P01" {
+			return err
+		}
+		time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+	}
+	return err
 }
 
 const upsertCandleSQL = `

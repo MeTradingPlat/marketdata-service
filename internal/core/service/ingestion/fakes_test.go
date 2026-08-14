@@ -36,6 +36,7 @@ type fakeRepo struct {
 	saved     [][]domain.Candle
 	saveErr   error
 	getResult []domain.Candle
+	watermark *time.Time
 }
 
 func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle) error {
@@ -51,8 +52,5 @@ func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Time
 }
 
 func (f *fakeRepo) GetWatermark(ctx context.Context, symbol string, tf domain.Timeframe) (*time.Time, *time.Time, error) {
-	return nil, nil, nil
+	return f.watermark, nil, nil
 }
-
-func (f *fakeRepo) AggregateH1(ctx context.Context) error { return nil }
-func (f *fakeRepo) AggregateD1(ctx context.Context) error { return nil }

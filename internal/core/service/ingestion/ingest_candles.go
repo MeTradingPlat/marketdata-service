@@ -20,10 +20,17 @@ func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepos
 	return &ingestCandlesService{gateway: gateway, repo: repo}
 }
 
+// incrementalMargin son barras de mas antes del watermark que se vuelven a
+// pedir aposta -- de sobra (Save() las UPSERTea, pedir de mas es gratis) y
+// cubre cualquier borde raro (ej. el watermark se capturo a mitad de un
+// guardado). Sugerido por el usuario al ver que sin esto, cada backfill
+// repetia toda la profundidad historica sin necesidad.
+const incrementalMargin = 10
+
 func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error {
-	candles, err := s.gateway.ProbeMaxDepth(ctx, symbol, timeframe)
+	candles, err := s.fetchForBackfill(ctx, symbol, timeframe)
 	if err != nil {
-		return fmt.Errorf("probing max depth for %s %s: %w", symbol, timeframe, err)
+		return err
 	}
 	closed, err := closedCandles(candles, timeframe)
 	if err != nil {
@@ -36,6 +43,34 @@ func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, time
 		return fmt.Errorf("saving backfilled candles for %s %s: %w", symbol, timeframe, err)
 	}
 	return nil
+}
+
+// fetchForBackfill pide profundidad completa solo la primera vez (sin
+// watermark todavia); de ahi en adelante solo pide desde el ultimo dato
+// guardado, no lo repite todo. Este mismo camino es el que usa el catch-up
+// diario, ya no hace falta agregar M1 -> H1/D1 por separado.
+func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error) {
+	newest, _, err := s.repo.GetWatermark(ctx, symbol, timeframe)
+	if err != nil {
+		return nil, fmt.Errorf("checking watermark for %s %s: %w", symbol, timeframe, err)
+	}
+	if newest == nil {
+		candles, err := s.gateway.ProbeMaxDepth(ctx, symbol, timeframe)
+		if err != nil {
+			return nil, fmt.Errorf("probing max depth for %s %s: %w", symbol, timeframe, err)
+		}
+		return candles, nil
+	}
+	duration, err := timeframe.Duration()
+	if err != nil {
+		return nil, fmt.Errorf("getting duration for %s: %w", timeframe, err)
+	}
+	from := newest.Add(-incrementalMargin * duration)
+	candles, err := s.gateway.GetCandles(ctx, symbol, timeframe, from)
+	if err != nil {
+		return nil, fmt.Errorf("fetching incremental candles for %s %s: %w", symbol, timeframe, err)
+	}
+	return candles, nil
 }
 
 // closedCandles descarta la vela mas reciente si su periodo todavia no
