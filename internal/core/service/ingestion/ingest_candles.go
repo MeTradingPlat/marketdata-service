@@ -65,12 +65,25 @@ func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol stri
 	if err != nil {
 		return nil, fmt.Errorf("getting duration for %s: %w", timeframe, err)
 	}
+	if !hasNewClosedBar(*newest, duration) {
+		return nil, nil
+	}
 	from := newest.Add(-incrementalMargin * duration)
 	candles, err := s.gateway.GetCandles(ctx, symbol, timeframe, from)
 	if err != nil {
 		return nil, fmt.Errorf("fetching incremental candles for %s %s: %w", symbol, timeframe, err)
 	}
 	return candles, nil
+}
+
+// hasNewClosedBar dice si ya cerro al menos un periodo nuevo despues del
+// watermark -- si el siguiente periodo todavia no termina (comun en D1/H1,
+// donde la mayoria de los reinicios caen a mitad del dia/hora actual), no
+// hay nada que pedir todavia. Evita ocupar un canal/conexion real de DxLink
+// para una peticion que de antemano sabemos que no va a traer nada nuevo.
+func hasNewClosedBar(watermark time.Time, duration time.Duration) bool {
+	nextBar := watermark.Add(duration)
+	return !nextBar.Add(duration).After(time.Now())
 }
 
 // closedCandles descarta la vela mas reciente si su periodo todavia no
