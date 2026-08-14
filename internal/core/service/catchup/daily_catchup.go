@@ -27,16 +27,16 @@ const (
 // vez al dia, poco despues de medianoche UTC -- Backfill() ya es
 // incremental, asi que este barrido diario es barato: solo trae lo que
 // cerro desde el ultimo watermark de cada simbolo.
-func StartDailyCatchUp(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, ingest in.IngestCandlesService) {
+func StartDailyCatchUp(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) {
 	go func() {
-		runOnce(ctx, gateway, symbols, ingest)
+		runOnce(ctx, gateway, symbols, candles, ingest)
 		for {
 			wait := time.Until(nextRunAt(time.Now().UTC()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runOnce(ctx, gateway, symbols, ingest)
+				runOnce(ctx, gateway, symbols, candles, ingest)
 			}
 		}
 	}()
@@ -82,6 +82,55 @@ func reconcileUniverse(ctx context.Context, gateway out.MarketDataGateway, symbo
 	return symbols.Deactivate(ctx, stale)
 }
 
+type job struct {
+	symbol string
+	tf     domain.Timeframe
+}
+
+// prioritizedJobs pone primero los simbolos que TODAVIA no tienen ninguna
+// vela D1/H1 guardada -- sin esto, una corrida sobre el universo entero
+// gasta su tiempo re-chequeando simbolos que ya estan al dia (un chequeo
+// con al menos una barra nueva cuesta lo mismo en red que traer la
+// profundidad completa de un simbolo nuevo, no es proporcional a cuantas
+// barras trae) antes de llegar siquiera a los que nunca se tocaron.
+// SymbolsWithData es una consulta en lote (2 en total), no una por simbolo.
+func prioritizedJobs(ctx context.Context, candles out.CandleRepository, tracked []domain.Symbol) chan job {
+	withD1, err := candles.SymbolsWithData(ctx, domain.D1)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to check which symbols already have D1 data, treating all as uncovered")
+		withD1 = map[string]struct{}{}
+	}
+	withH1, err := candles.SymbolsWithData(ctx, domain.H1)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to check which symbols already have H1 data, treating all as uncovered")
+		withH1 = map[string]struct{}{}
+	}
+
+	var uncovered, covered []job
+	for _, s := range tracked {
+		if _, ok := withD1[s.Symbol]; ok {
+			covered = append(covered, job{symbol: s.Symbol, tf: domain.D1})
+		} else {
+			uncovered = append(uncovered, job{symbol: s.Symbol, tf: domain.D1})
+		}
+		if _, ok := withH1[s.Symbol]; ok {
+			covered = append(covered, job{symbol: s.Symbol, tf: domain.H1})
+		} else {
+			uncovered = append(uncovered, job{symbol: s.Symbol, tf: domain.H1})
+		}
+	}
+
+	jobs := make(chan job, len(uncovered)+len(covered))
+	for _, j := range uncovered {
+		jobs <- j
+	}
+	for _, j := range covered {
+		jobs <- j
+	}
+	close(jobs)
+	return jobs
+}
+
 func nextRunAt(now time.Time) time.Time {
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	next := midnight.Add(postMidnightDelay)
@@ -91,7 +140,7 @@ func nextRunAt(now time.Time) time.Time {
 	return next
 }
 
-func runOnce(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, ingest in.IngestCandlesService) {
+func runOnce(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) {
 	if err := reconcileUniverse(ctx, gateway, symbols); err != nil {
 		log.Error().Err(err).Msg("failed to reconcile symbol universe, backfilling last known tracked list")
 	}
@@ -102,16 +151,7 @@ func runOnce(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sym
 		return
 	}
 
-	type job struct {
-		symbol string
-		tf     domain.Timeframe
-	}
-	jobs := make(chan job, len(tracked)*2)
-	for _, s := range tracked {
-		jobs <- job{symbol: s.Symbol, tf: domain.D1}
-		jobs <- job{symbol: s.Symbol, tf: domain.H1}
-	}
-	close(jobs)
+	jobs := prioritizedJobs(ctx, candles, tracked)
 
 	start := time.Now()
 	var wg sync.WaitGroup

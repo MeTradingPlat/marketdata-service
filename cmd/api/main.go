@@ -64,7 +64,7 @@ func main() {
 
 		catchupGateway := buildCatchupGateway(cfg, oauth, quoteToken)
 		catchupIngest := ingestion.NewIngestCandlesService(catchupGateway, candleRepo)
-		catchup.StartDailyCatchUp(ctx, catchupGateway, symbols, catchupIngest)
+		catchup.StartDailyCatchUp(ctx, catchupGateway, symbols, candleRepo, catchupIngest)
 
 		testSymbols := make([]domain.Symbol, len(cfg.TestSymbols))
 		for i, s := range cfg.TestSymbols {

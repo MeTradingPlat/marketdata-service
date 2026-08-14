@@ -11,6 +11,7 @@ type CandleRepository interface {
 	Save(ctx context.Context, candles []domain.Candle) error
 	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int) ([]domain.Candle, error)
 	GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest, oldest *time.Time, err error)
+	SymbolsWithData(ctx context.Context, timeframe domain.Timeframe) (map[string]struct{}, error)
 }
 
 type SymbolRepository interface {

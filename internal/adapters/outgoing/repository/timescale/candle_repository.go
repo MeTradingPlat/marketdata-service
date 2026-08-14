@@ -133,3 +133,32 @@ func (r *CandleRepository) GetWatermark(ctx context.Context, symbol string, time
 	}
 	return newest, oldest, nil
 }
+
+const symbolsWithDataSQL = `
+	SELECT DISTINCT s.symbol
+	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+	WHERE c.timeframe = $1
+`
+
+// SymbolsWithData es el equivalente en lote de "tiene watermark" -- una
+// consulta para el universo entero en vez de una por simbolo (13k consultas
+// individuales para lo mismo), pensada para priorizar una cola de backfill:
+// separar de una vez los simbolos que nunca se tocaron de los que ya tienen
+// datos, sin pagar el costo de GetWatermark simbolo por simbolo.
+func (r *CandleRepository) SymbolsWithData(ctx context.Context, timeframe domain.Timeframe) (map[string]struct{}, error) {
+	rows, err := r.pool.Query(ctx, symbolsWithDataSQL, string(timeframe))
+	if err != nil {
+		return nil, fmt.Errorf("querying symbols with %s data: %w", timeframe, err)
+	}
+	defer rows.Close()
+
+	symbols := make(map[string]struct{})
+	for rows.Next() {
+		var symbol string
+		if err := rows.Scan(&symbol); err != nil {
+			return nil, fmt.Errorf("scanning symbol row: %w", err)
+		}
+		symbols[symbol] = struct{}{}
+	}
+	return symbols, rows.Err()
+}
