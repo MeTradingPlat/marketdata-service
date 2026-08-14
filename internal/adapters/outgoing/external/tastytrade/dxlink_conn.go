@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -43,7 +44,31 @@ type DxLinkConn struct {
 	reconnecting      bool
 	reconnectMu       sync.Mutex
 
+	// lastMessageAtUnixNano: SetReadDeadline sobre el socket resulto NO ser
+	// confiable en este entorno -- confirmado en vivo con dos volcados de
+	// goroutines separados: el readLoop seguia bloqueado en Read() varios
+	// minutos despues de vencido el deadline, sin error, sin reconexion (es
+	// un problema conocido de gorilla/websocket en ciertos escenarios, no
+	// algo propio de este codigo). En vez de depender de que Read() expire
+	// solo, un vigia independiente (healthCheckLoop) rastrea cuando llego
+	// el ultimo mensaje real y CIERRA la conexion a la fuerza si pasa
+	// demasiado tiempo -- cerrar el socket desde otra goroutine SI hace que
+	// un Read() bloqueado en el reviente con error, de forma garantizada.
+	lastMessageAtUnixNano atomic.Int64
+
 	onReconnect func(ctx context.Context, c *DxLinkConn)
+}
+
+func (c *DxLinkConn) touchLastMessage() {
+	c.lastMessageAtUnixNano.Store(time.Now().UnixNano())
+}
+
+func (c *DxLinkConn) lastMessageAge() time.Duration {
+	last := c.lastMessageAtUnixNano.Load()
+	if last == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, last))
 }
 
 // urlFunc/tokenFunc se evaluan recien al conectar (y en cada reconexion),
@@ -77,6 +102,7 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 	c.handshakeDone = handshakeDone
 	c.channels = make(map[int]*dxLinkChannel)
 	c.mu.Unlock()
+	c.touchLastMessage()
 
 	go c.readLoop(ctx)
 

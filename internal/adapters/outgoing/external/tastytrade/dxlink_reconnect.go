@@ -11,8 +11,14 @@ const (
 	initialReconnectDelay = 5 * time.Second
 	maxReconnectDelay     = 300 * time.Second
 	backoffGrowthCeiling  = 10
-	healthCheckInterval   = 60 * time.Second
+	healthCheckInterval   = 20 * time.Second
 	keepaliveInterval     = 30 * time.Second
+
+	// staleConnectionThreshold: si no llega NINGUN mensaje del servidor
+	// (dato real o su propio KEEPALIVE) en este tiempo, se asume conexion
+	// zombie y se cierra a la fuerza -- 3x keepaliveInterval, margen sobre
+	// jitter normal sin tardar minutos en reaccionar a un silencio real.
+	staleConnectionThreshold = 90 * time.Second
 )
 
 func (c *DxLinkConn) handleDisconnect(ctx context.Context) {
@@ -86,6 +92,13 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) {
 	}
 }
 
+// healthCheckLoop es el vigia real de la conexion -- ver el comentario de
+// lastMessageAtUnixNano en dxlink_conn.go: SetReadDeadline sobre el propio
+// Read() del readLoop no demostro ser confiable, asi que este es el
+// mecanismo que efectivamente detecta y corta una conexion zombie. cleanup()
+// cierra el socket desde ESTA goroutine (no la del readLoop bloqueado), lo
+// que garantiza que ese Read() bloqueado reviente con error y el proceso de
+// reconexion arranque de verdad.
 func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 	ticker := time.NewTicker(healthCheckInterval)
 	defer ticker.Stop()
@@ -95,6 +108,12 @@ func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if !c.Connected() {
+				c.scheduleReconnect(ctx)
+				continue
+			}
+			if age := c.lastMessageAge(); age > staleConnectionThreshold {
+				log.Warn().Dur("silence", age).Msg("dxlink connection silent too long, forcing close to trigger reconnect")
+				c.cleanup()
 				c.scheduleReconnect(ctx)
 			}
 		}
