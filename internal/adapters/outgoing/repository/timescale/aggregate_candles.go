@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const deadlockRetries = 3
+const deadlockRetries = 5
 
 // execWithDeadlockRetry reintenta ante un deadlock de Postgres (40P01) --
 // esperado bajo escritura concurrente pesada (confirmado en vivo: choco con

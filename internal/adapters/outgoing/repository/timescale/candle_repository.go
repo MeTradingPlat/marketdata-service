@@ -35,28 +35,34 @@ const upsertWatermarkSQL = `
 
 // Cada vela guardada (backfill o M1 en vivo) deja su propio watermark en el
 // mismo batch -- una sola llamada a Save() cubre ambos, sin un camino
-// separado solo para el streaming en vivo.
+// separado solo para el streaming en vivo. Reintenta ante deadlock (mismo
+// motivo que AggregateH1/D1: candles y watermarks comparten FK hacia
+// tracked_symbols, y con muchos workers de backfill concurrentes mas el job
+// de agregacion, Postgres puede detectar un ciclo de locks entre sesiones
+// -- confirmado en vivo, es idempotente reintentar gracias a ON CONFLICT).
 func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) error {
 	if len(candles) == 0 {
 		return nil
 	}
-	batch := &pgx.Batch{}
-	for _, c := range candles {
-		batch.Queue(upsertCandleSQL, c.Symbol, string(c.Timeframe), c.Timestamp,
-			c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source)
-		batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
-	}
-	results := r.pool.SendBatch(ctx, batch)
-	defer results.Close()
-	for range candles {
-		if _, err := results.Exec(); err != nil {
-			return fmt.Errorf("upserting candle batch: %w", err)
+	return execWithDeadlockRetry(ctx, func(ctx context.Context) error {
+		batch := &pgx.Batch{}
+		for _, c := range candles {
+			batch.Queue(upsertCandleSQL, c.Symbol, string(c.Timeframe), c.Timestamp,
+				c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source)
+			batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
 		}
-		if _, err := results.Exec(); err != nil {
-			return fmt.Errorf("upserting watermark batch: %w", err)
+		results := r.pool.SendBatch(ctx, batch)
+		defer results.Close()
+		for range candles {
+			if _, err := results.Exec(); err != nil {
+				return fmt.Errorf("upserting candle batch: %w", err)
+			}
+			if _, err := results.Exec(); err != nil {
+				return fmt.Errorf("upserting watermark batch: %w", err)
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 const getCandlesSQL = `
