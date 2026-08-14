@@ -12,10 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	postMidnightDelay = 5 * time.Minute
-	sweepWorkers      = 20
-)
+const postMidnightDelay = 5 * time.Minute
 
 // NextMaintenanceWindowAt es la proxima medianoche UTC (+5min de margen) --
 // cae comodamente dentro del cierre del mercado estadounidense, la hora sin
@@ -98,7 +95,7 @@ func phaseJobs(tracked []domain.Symbol, tf domain.Timeframe, withData map[string
 // cola y terminan (wg.Wait) antes de que el llamador pueda arrancar la
 // fase siguiente. Barrera estricta a proposito: nada de H1 empieza mientras
 // quede un solo D1 pendiente, ni al reves.
-func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, tf domain.Timeframe) {
+func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, tf domain.Timeframe, workers int) {
 	start := time.Now()
 	queue := make(chan job, len(jobs))
 	for _, j := range jobs {
@@ -107,7 +104,7 @@ func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, t
 	close(queue)
 
 	var wg sync.WaitGroup
-	for i := 0; i < sweepWorkers; i++ {
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -134,7 +131,7 @@ func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, t
 // despues de StopAllLive), ver cmd/api. Devuelve la lista de simbolos
 // rastreados para que el llamador pueda resuscribir M1 sobre el mismo
 // conjunto sin pedirlo de nuevo.
-func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) []domain.Symbol {
+func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService, workers int) []domain.Symbol {
 	if err := reconcileUniverse(ctx, gateway, symbols); err != nil {
 		log.Error().Err(err).Msg("failed to reconcile symbol universe, sweeping last known tracked list")
 	}
@@ -150,14 +147,14 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sy
 		log.Error().Err(err).Msg("failed to check which symbols already have D1 data, treating all as uncovered")
 		withD1 = map[string]struct{}{}
 	}
-	runPhase(ctx, ingest, phaseJobs(tracked, domain.D1, withD1), domain.D1)
+	runPhase(ctx, ingest, phaseJobs(tracked, domain.D1, withD1), domain.D1, workers)
 
 	withH1, err := candles.SymbolsWithData(ctx, domain.H1)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to check which symbols already have H1 data, treating all as uncovered")
 		withH1 = map[string]struct{}{}
 	}
-	runPhase(ctx, ingest, phaseJobs(tracked, domain.H1, withH1), domain.H1)
+	runPhase(ctx, ingest, phaseJobs(tracked, domain.H1, withH1), domain.H1, workers)
 
 	return tracked
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
+	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/rs/zerolog/log"
 )
 
@@ -21,27 +22,27 @@ const liveRolloutWorkers = 20
 // D1/H1 no compita por conexiones/canales con miles de suscripciones en
 // vivo, y vuelve a suscribir M1 al terminar -- cada simbolo retoma desde
 // su propio watermark, sin hueco real porque el mercado estuvo cerrado.
-func StartUniverseCycle(ctx context.Context, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) {
 	go func() {
-		runUniverseCycle(ctx, pool, gateway, symbols, candles, ingest, true)
+		runUniverseCycle(ctx, cfg, pool, gateway, symbols, candles, ingest, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now().UTC()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, pool, gateway, symbols, candles, ingest, false)
+				runUniverseCycle(ctx, cfg, pool, gateway, symbols, candles, ingest, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService, firstRun bool) {
 	if !firstRun {
 		pool.StopAllLive(ctx)
 	}
 
-	tracked := catchup.RunSweep(ctx, gateway, symbols, candles, ingest)
+	tracked := catchup.RunSweep(ctx, gateway, symbols, candles, ingest, cfg.SweepWorkers)
 	if len(tracked) == 0 {
 		log.Error().Msg("universe sweep returned no symbols, skipping live M1 rollout")
 		return

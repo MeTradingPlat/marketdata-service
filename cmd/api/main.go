@@ -74,7 +74,7 @@ func main() {
 		// Ciclo del universo completo -- D1 fase 1, H1 fase 2, M1 fase 3 --
 		// corre en background (no bloquea el arranque del servidor HTTP) y se
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
-		StartUniverseCycle(ctx, pool, gateway, symbols, candleRepo, ingest)
+		StartUniverseCycle(ctx, cfg, pool, gateway, symbols, candleRepo, ingest)
 
 		r.Init()
 		address := fmt.Sprintf(":%s", cfg.ServerPort)
