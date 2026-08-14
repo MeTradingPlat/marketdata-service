@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,11 +26,35 @@ type DxLinkConn struct {
 	nextChannelID int32
 	handshakeDone chan error
 
+	// lastMessageAtUnixNano marca cuando llego el ultimo mensaje real del
+	// servidor (de cualquier tipo, incluido su propio KEEPALIVE) -- Read()
+	// sobre el socket no tiene deadline, asi que si el servidor deja de
+	// mandar CUALQUIER COSA sin cerrar el TCP formalmente (conexion zombie:
+	// ESTAB pero muerta), Connected() se queda en true para siempre y
+	// ReadMessage() se queda bloqueado sin error ni timeout -- confirmado
+	// en vivo, el streaming en vivo se quedo mudo mas de 5 minutos sin
+	// ningun log de error ni intento de reconexion. healthCheckLoop usa
+	// esto para detectar el silencio y forzar una reconexion aunque el
+	// socket nunca haya arrojado un error.
+	lastMessageAtUnixNano atomic.Int64
+
 	reconnectAttempts int32
 	reconnecting      bool
 	reconnectMu       sync.Mutex
 
 	onReconnect func(ctx context.Context, c *DxLinkConn)
+}
+
+func (c *DxLinkConn) touchLastMessage() {
+	c.lastMessageAtUnixNano.Store(time.Now().UnixNano())
+}
+
+func (c *DxLinkConn) lastMessageAge() time.Duration {
+	last := c.lastMessageAtUnixNano.Load()
+	if last == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, last))
 }
 
 // urlFunc/tokenFunc se evaluan recien al conectar (y en cada reconexion),
@@ -63,6 +88,7 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 	c.handshakeDone = handshakeDone
 	c.channels = make(map[int]*dxLinkChannel)
 	c.mu.Unlock()
+	c.touchLastMessage()
 
 	go c.readLoop(ctx)
 

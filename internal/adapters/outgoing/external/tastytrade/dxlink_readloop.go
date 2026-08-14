@@ -49,6 +49,8 @@ func (c *DxLinkConn) markAuthenticated() {
 }
 
 func (c *DxLinkConn) handleMessage(ctx context.Context, raw []byte) {
+	c.touchLastMessage()
+
 	var env inboundEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		log.Error().Err(err).Msg("dxlink: failed to decode message")
