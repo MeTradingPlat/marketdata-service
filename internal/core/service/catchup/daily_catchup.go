@@ -14,32 +14,20 @@ import (
 
 const (
 	postMidnightDelay = 5 * time.Minute
-	catchUpWorkers    = 20
+	sweepWorkers      = 20
 )
 
-// StartDailyCatchUp reemplaza la agregacion SQL M1->H1/D1 que se tenia
-// antes: en vez de sintetizar H1/D1 nosotros mismos, le pide a TastyTrade
-// las barras nativas que falten -- mas simple, mas fiel (son las barras
-// reales, no una reconstruccion), y sin la clase de deadlock que tenia la
-// agregacion (esa competia con Save() por la misma fila de watermarks;
-// aqui cada simbolo es su propio Backfill(), ya idempotente via UPSERT).
-// Corre una vez al arrancar (por si el servicio estuvo caido) y luego una
-// vez al dia, poco despues de medianoche UTC -- Backfill() ya es
-// incremental, asi que este barrido diario es barato: solo trae lo que
-// cerro desde el ultimo watermark de cada simbolo.
-func StartDailyCatchUp(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) {
-	go func() {
-		runOnce(ctx, gateway, symbols, candles, ingest)
-		for {
-			wait := time.Until(nextRunAt(time.Now().UTC()))
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(wait):
-				runOnce(ctx, gateway, symbols, candles, ingest)
-			}
-		}
-	}()
+// NextMaintenanceWindowAt es la proxima medianoche UTC (+5min de margen) --
+// cae comodamente dentro del cierre del mercado estadounidense, la hora sin
+// movimiento que aprovecha RunSweep para no competir con el streaming en
+// vivo (ver CandlePool.StopAllLive).
+func NextMaintenanceWindowAt(now time.Time) time.Time {
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	next := midnight.Add(postMidnightDelay)
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
 }
 
 // reconcileUniverse trae el universo activo real de TastyTrade antes de
@@ -87,13 +75,15 @@ type job struct {
 	tf     domain.Timeframe
 }
 
-// prioritizedJobs pone primero los simbolos que TODAVIA no tienen ninguna
-// vela D1/H1 guardada -- sin esto, una corrida sobre el universo entero
-// gasta su tiempo re-chequeando simbolos que ya estan al dia (un chequeo
-// con al menos una barra nueva cuesta lo mismo en red que traer la
-// profundidad completa de un simbolo nuevo, no es proporcional a cuantas
-// barras trae) antes de llegar siquiera a los que nunca se tocaron.
-// SymbolsWithData es una consulta en lote (2 en total), no una por simbolo.
+// prioritizedJobs arma la cola en fases -- todo D1 antes que todo H1 -- y
+// dentro de cada fase, los simbolos que TODAVIA no tienen ninguna vela
+// guardada van primero. Sin esa segunda prioridad, una corrida sobre el
+// universo entero gasta su tiempo re-chequeando simbolos que ya estan al
+// dia (un chequeo con al menos una barra nueva cuesta lo mismo en red que
+// traer la profundidad completa de un simbolo nuevo, no es proporcional a
+// cuantas barras trae) antes de llegar siquiera a los que nunca se
+// tocaron. SymbolsWithData es una consulta en lote (2 en total), no una
+// por simbolo.
 func prioritizedJobs(ctx context.Context, candles out.CandleRepository, tracked []domain.Symbol) chan job {
 	withD1, err := candles.SymbolsWithData(ctx, domain.D1)
 	if err != nil {
@@ -106,68 +96,72 @@ func prioritizedJobs(ctx context.Context, candles out.CandleRepository, tracked 
 		withH1 = map[string]struct{}{}
 	}
 
-	var uncovered, covered []job
-	for _, s := range tracked {
-		if _, ok := withD1[s.Symbol]; ok {
-			covered = append(covered, job{symbol: s.Symbol, tf: domain.D1})
-		} else {
-			uncovered = append(uncovered, job{symbol: s.Symbol, tf: domain.D1})
-		}
-		if _, ok := withH1[s.Symbol]; ok {
-			covered = append(covered, job{symbol: s.Symbol, tf: domain.H1})
-		} else {
-			uncovered = append(uncovered, job{symbol: s.Symbol, tf: domain.H1})
-		}
-	}
+	d1Jobs := phaseJobs(tracked, domain.D1, withD1)
+	h1Jobs := phaseJobs(tracked, domain.H1, withH1)
 
-	jobs := make(chan job, len(uncovered)+len(covered))
-	for _, j := range uncovered {
+	jobs := make(chan job, len(d1Jobs)+len(h1Jobs))
+	for _, j := range d1Jobs {
 		jobs <- j
 	}
-	for _, j := range covered {
+	for _, j := range h1Jobs {
 		jobs <- j
 	}
 	close(jobs)
 	return jobs
 }
 
-func nextRunAt(now time.Time) time.Time {
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	next := midnight.Add(postMidnightDelay)
-	if !next.After(now) {
-		next = next.Add(24 * time.Hour)
+// phaseJobs ordena una sola fase: los simbolos sin datos primero, los que
+// ya tienen algo despues.
+func phaseJobs(tracked []domain.Symbol, tf domain.Timeframe, withData map[string]struct{}) []job {
+	var uncovered, covered []job
+	for _, s := range tracked {
+		j := job{symbol: s.Symbol, tf: tf}
+		if _, ok := withData[s.Symbol]; ok {
+			covered = append(covered, j)
+		} else {
+			uncovered = append(uncovered, j)
+		}
 	}
-	return next
+	return append(uncovered, covered...)
 }
 
-func runOnce(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) {
+// RunSweep reconcilia el universo y despues corre D1 completo (fase 1) y
+// H1 completo (fase 2) para todo lo rastreado -- reemplaza la agregacion
+// SQL M1->H1/D1 que se tenia antes: en vez de sintetizar H1/D1 nosotros
+// mismos, le pide a TastyTrade las barras nativas que falten. M1 no pasa
+// por aqui -- lo orquesta el llamador (arranque: primera vez; ventana de
+// mantenimiento: despues de StopAllLive), ver cmd/api. Devuelve la lista
+// de simbolos rastreados para que el llamador pueda resuscribir M1 sobre
+// el mismo conjunto sin pedirlo de nuevo.
+func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) []domain.Symbol {
 	if err := reconcileUniverse(ctx, gateway, symbols); err != nil {
-		log.Error().Err(err).Msg("failed to reconcile symbol universe, backfilling last known tracked list")
+		log.Error().Err(err).Msg("failed to reconcile symbol universe, sweeping last known tracked list")
 	}
 
 	tracked, err := symbols.Tracked(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to list tracked symbols for daily catch-up")
-		return
+		log.Error().Err(err).Msg("failed to list tracked symbols for universe sweep")
+		return nil
 	}
 
 	jobs := prioritizedJobs(ctx, candles, tracked)
 
 	start := time.Now()
 	var wg sync.WaitGroup
-	for i := 0; i < catchUpWorkers; i++ {
+	for i := 0; i < sweepWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
 				if err := ingest.Backfill(ctx, j.symbol, j.tf); err != nil {
 					log.Error().Err(err).Str("symbol", j.symbol).Str("timeframe", string(j.tf)).
-						Msg("daily catch-up job failed")
+						Msg("universe sweep job failed")
 				}
 			}
 		}()
 	}
 	wg.Wait()
 
-	log.Info().Int("symbols", len(tracked)).Dur("elapsed", time.Since(start)).Msg("daily catch-up finished")
+	log.Info().Int("symbols", len(tracked)).Dur("elapsed", time.Since(start)).Msg("universe sweep finished")
+	return tracked
 }

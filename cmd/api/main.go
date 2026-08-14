@@ -13,8 +13,6 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
-	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
-	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/injector"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
@@ -36,6 +34,7 @@ func main() {
 		quoteToken *tastytrade.QuoteToken,
 		pool *tastytrade.CandlePool,
 		dbPool *pgxpool.Pool,
+		gateway out.MarketDataGateway,
 		candleRepo out.CandleRepository,
 		symbols out.SymbolRepository,
 		ingest in.IngestCandlesService,
@@ -62,10 +61,8 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to warm up candle pool")
 		}
 
-		catchupGateway := buildCatchupGateway(cfg, oauth, quoteToken)
-		catchupIngest := ingestion.NewIngestCandlesService(catchupGateway, candleRepo)
-		catchup.StartDailyCatchUp(ctx, catchupGateway, symbols, candleRepo, catchupIngest)
-
+		// Red de seguridad: si ActiveSymbols fallara en la primera pasada del
+		// ciclo, estos simbolos ya quedan rastreados igual.
 		testSymbols := make([]domain.Symbol, len(cfg.TestSymbols))
 		for i, s := range cfg.TestSymbols {
 			testSymbols[i] = domain.Symbol{Symbol: s, Market: cfg.TestMarket}
@@ -73,15 +70,11 @@ func main() {
 		if err := symbols.Upsert(ctx, testSymbols); err != nil {
 			log.Fatal().Err(err).Msg("failed to track test symbols")
 		}
-		// Por fases (todo D1, despues todo H1) en vez de por simbolo: M1 ya
-		// no pasa por Backfill aqui -- StreamLive abre su unica suscripcion
-		// M1 con FromTime = watermark y se queda abierta, sin el ciclo de
-		// desuscribir+resuscribir que dejaba el streaming mudo.
-		backfillPhase(ctx, ingest, cfg.TestSymbols, domain.D1)
-		backfillPhase(ctx, ingest, cfg.TestSymbols, domain.H1)
-		for _, symbol := range cfg.TestSymbols {
-			startLiveWithRetry(ctx, ingest, symbol)
-		}
+
+		// Ciclo del universo completo -- D1 fase 1, H1 fase 2, M1 fase 3 --
+		// corre en background (no bloquea el arranque del servidor HTTP) y se
+		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
+		StartUniverseCycle(ctx, pool, gateway, symbols, candleRepo, ingest)
 
 		r.Init()
 		address := fmt.Sprintf(":%s", cfg.ServerPort)

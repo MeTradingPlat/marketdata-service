@@ -238,6 +238,51 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 	}
 }
 
+// StopAllLive desuscribe TODAS las suscripciones M1 en vivo del pool -- se
+// usa antes del barrido pesado de D1/H1 sobre el universo completo (en una
+// hora sin movimiento de mercado, ver runOnce), para que ese barrido no
+// compita por conexiones/canales con miles de suscripciones en vivo. Es
+// seguro (no repite la colision que causaba el congelamiento) porque el
+// hueco entre este remove y el proximo SubscribeLive va a ser de horas,
+// no milisegundos -- dxFeed ya proceso el remove de sobra para cuando
+// llegue el add. Cada simbolo retoma solo desde su propio watermark al
+// resuscribirse, sin perder nada (el mercado estuvo cerrado mientras tanto).
+func (p *CandlePool) StopAllLive(ctx context.Context) {
+	p.allocator.mu.Lock()
+	conns := append([]*pooledConnection(nil), p.allocator.connections...)
+	p.allocator.mu.Unlock()
+
+	var stopped []string
+	for _, pc := range conns {
+		pc.mu.Lock()
+		channels := append([]*pooledChannel(nil), pc.channels...)
+		pc.mu.Unlock()
+		for _, ch := range channels {
+			for _, symbol := range ch.liveSymbols() {
+				_ = ch.channel.unsubscribe(symbol, domain.M1)
+				ch.release(candleKey(symbol, domain.M1))
+				stopped = append(stopped, symbol)
+			}
+		}
+	}
+
+	p.dispatchMu.Lock()
+	for _, symbol := range stopped {
+		delete(p.dispatch, candleKey(symbol, domain.M1))
+	}
+	p.dispatchMu.Unlock()
+
+	p.liveMu.Lock()
+	p.liveSubs = make(map[string]func(domain.Candle))
+	p.liveMu.Unlock()
+
+	p.currentMu.Lock()
+	p.current = make(map[string]domain.Candle)
+	p.currentMu.Unlock()
+
+	log.Info().Int("symbols", len(stopped)).Msg("stopped all live M1 subscriptions for the maintenance window")
+}
+
 // hasLiveSub dice si un simbolo ya tiene una suscripcion M1 en vivo activa.
 func (p *CandlePool) hasLiveSub(symbol string) bool {
 	p.liveMu.Lock()
