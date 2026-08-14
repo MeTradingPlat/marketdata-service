@@ -14,6 +14,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/injector"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
@@ -36,6 +37,7 @@ func main() {
 		pool *tastytrade.CandlePool,
 		dbPool *pgxpool.Pool,
 		gateway out.MarketDataGateway,
+		candleRepo out.CandleRepository,
 		symbols out.SymbolRepository,
 		ingest in.IngestCandlesService,
 		e *echo.Echo,
@@ -61,7 +63,9 @@ func main() {
 			log.Fatal().Err(err).Msg("failed to warm up candle pool")
 		}
 
-		catchup.StartDailyCatchUp(ctx, gateway, symbols, ingest)
+		catchupGateway := buildCatchupGateway(cfg, oauth, quoteToken)
+		catchupIngest := ingestion.NewIngestCandlesService(catchupGateway, candleRepo)
+		catchup.StartDailyCatchUp(ctx, catchupGateway, symbols, catchupIngest)
 
 		if cfg.BackfillBatchSize > 0 {
 			runBackfillBatch(ctx, gateway, symbols, ingest, cfg.BackfillBatchSize, cfg.BackfillWorkers)
