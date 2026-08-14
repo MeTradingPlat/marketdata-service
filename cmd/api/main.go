@@ -36,7 +36,6 @@ func main() {
 		quoteToken *tastytrade.QuoteToken,
 		pool *tastytrade.CandlePool,
 		dbPool *pgxpool.Pool,
-		gateway out.MarketDataGateway,
 		candleRepo out.CandleRepository,
 		symbols out.SymbolRepository,
 		ingest in.IngestCandlesService,
@@ -66,17 +65,6 @@ func main() {
 		catchupGateway := buildCatchupGateway(cfg, oauth, quoteToken)
 		catchupIngest := ingestion.NewIngestCandlesService(catchupGateway, candleRepo)
 		catchup.StartDailyCatchUp(ctx, catchupGateway, symbols, catchupIngest)
-
-		if cfg.BackfillBatchSize > 0 {
-			runBackfillBatch(ctx, gateway, symbols, ingest, cfg.BackfillBatchSize, cfg.BackfillWorkers)
-		}
-
-		if cfg.UnsubscribeCheckSymbol != "" {
-			if err := symbols.Upsert(ctx, []domain.Symbol{{Symbol: cfg.UnsubscribeCheckSymbol, Market: cfg.TestMarket}}); err != nil {
-				log.Fatal().Err(err).Msg("failed to track unsubscribe-check symbol")
-			}
-			runUnsubscribeCheck(ctx, ingest, cfg.UnsubscribeCheckSymbol, cfg.UnsubscribeCheckRounds)
-		}
 
 		testSymbols := make([]domain.Symbol, len(cfg.TestSymbols))
 		for i, s := range cfg.TestSymbols {
