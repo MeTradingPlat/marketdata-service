@@ -36,33 +36,41 @@ jobs:
           echo "${{ github.repository }}" > "$LOCK_DIR/owner"
           echo "Lock de deploy adquirido"
 
-      - name: Run Postgres Container
+      - name: Run TimescaleDB Container
         run: |
+          # TimescaleDB, no postgres:15-alpine liso -- el diseno de retencion
+          # de este servicio depende de hypertables + compresion (ver
+          # internal/adapters/outgoing/repository/timescale/schema.sql), que
+          # no existen en Postgres plano.
           if [ -z "$(docker ps -a -q -f name=postgres-marketdata)" ]; then
             echo "Creating and starting postgres-marketdata container..."
             docker run -d \
               --name "postgres-marketdata" \
               --network "metradingplat-network" \
               --restart "always" \
-              --cpus "0.5" \
-              --memory "256m" \
-              --memory-swap "256m" \
+              --cpus "1.0" \
+              --memory "512m" \
+              --memory-swap "512m" \
               -e POSTGRES_DB="marketdata_db" \
               -e POSTGRES_USER="user_marketdata" \
               -e POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
               -v postgres_marketdata_data:/var/lib/postgresql/data \
-              postgres:15-alpine
+              timescale/timescaledb:latest-pg15
           else
             echo "postgres-marketdata container exists, ensuring it is started..."
             docker start postgres-marketdata
           fi
 
+      - name: Apply Schema
+        run: |
+          docker exec -i postgres-marketdata psql -U user_marketdata -d marketdata_db < internal/adapters/outgoing/repository/timescale/schema.sql
+
       - name: Infrastructure Diagnosis & Cleanup
         run: |
           echo "--- DISK SPACE CHECK ---"
           df -h
-          echo "--- CLEANING SHARED BASE IMAGES ---"
-          docker image rm -f eclipse-temurin:21-jdk eclipse-temurin:21-jre-alpine || true
+          echo "--- PRUNING DANGLING IMAGES ---"
+          docker image prune -f || true
 
       - name: Pull Application Image (with Retry Logic)
         run: |
@@ -76,36 +84,22 @@ jobs:
 
       - name: Delete Old Application Container
         run: |
-          # docker stop (SIGTERM) antes de rm -f (SIGKILL directo) -- le da
-          # tiempo al shutdown hook de Eureka a desregistrarse limpiamente.
-          # Sin esto, el gateway seguia enrutando a la IP vieja del
-          # contenedor muerto hasta que la lease expirara (confirmado en
-          # vivo: 500 "Connection refused" en /marketdata/** por varios
-          # minutos tras cada deploy de este servicio).
           docker stop marketdata-service 2>/dev/null || true
           docker rm -f marketdata-service || true
 
       - name: Run Application Container
         run: |
-          # El host tiene 4 nucleos compartidos con historical-data-service +
-          # postgres-historical (1.0 + 1.5 nucleos ya topados) -- el refresco
-          # OHLC periodico de este servicio (~12.7k simbolos cada 5min, ver
-          # TastyTradeService.refreshOhlcData) llegaba a 1 nucleo completo el
-          # solo. 1.5 nucleos de techo le deja margen para picos sin poder
-          # copar los 4 nucleos completos junto con los otros dos.
+          # Binario Go, sin JVM que calentar -- memoria muchisimo mas baja
+          # que el servicio Java que reemplaza (ver historial de este repo).
           docker run -d \
             --name "marketdata-service" \
             --network "metradingplat-network" \
             --restart "unless-stopped" \
-            --cpus "1.5" \
-            --memory "3072m" \
-            --memory-swap "3072m" \
+            --cpus "1.0" \
+            --memory "512m" \
+            --memory-swap "512m" \
             --label project="metradingplat" \
             --label service="marketdata-service" \
-            -v secedgar_cache_v2:/app/secedgar-cache \
-            -e SPRING_PROFILES_ACTIVE="prod" \
-            -e KAFKA_BOOTSTRAP_SERVERS="kafka:29092" \
-            -e EUREKA_HOST="directory" \
             -e DB_HOST="postgres-marketdata" \
             -e DB_PORT="5432" \
             -e DB_NAME="marketdata_db" \
@@ -114,9 +108,12 @@ jobs:
             -e TT_CLIENT_ID="${{ secrets.TT_CLIENT_ID }}" \
             -e TT_CLIENT_SECRET="${{ secrets.TT_CLIENT_SECRET }}" \
             -e TT_REFRESH_TOKEN="${{ secrets.TT_REFRESH_TOKEN }}" \
-            -e TASTYTRADE_ACCOUNT_NUMBER="${{ secrets.TASTYTRADE_ACCOUNT_NUMBER }}" \
             -e DXLINK_URL="${{ secrets.DXLINK_URL }}" \
-            -e HISTORICAL_DATA_SERVICE_URL="http://historical-data-service:8086" \
+            -e TEST_SYMBOLS="AAPL,MSFT,GOOGL,TSLA,AMZN" \
+            -e TEST_MARKET="XNAS" \
+            -e MAX_CANDLE_POOL_CONNECTIONS="40" \
+            -e BACKFILL_BATCH_SIZE="1000" \
+            -e BACKFILL_WORKERS="40" \
             virtud142/metradingplat_marketdata_service:latest
 
       - name: Clean Old Images of This Service

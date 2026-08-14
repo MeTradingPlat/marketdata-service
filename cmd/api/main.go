@@ -8,6 +8,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/aggregation"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/injector"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
@@ -24,8 +25,10 @@ func main() {
 		cfg *configs.Config,
 		oauth *tastytrade.OAuth,
 		quoteToken *tastytrade.QuoteToken,
-		conn *tastytrade.DxLinkConn,
+		pool *tastytrade.CandlePool,
+		gateway out.MarketDataGateway,
 		symbols out.SymbolRepository,
+		candles out.CandleRepository,
 		ingest in.IngestCandlesService,
 		e *echo.Echo,
 		r *router.Router,
@@ -40,21 +43,43 @@ func main() {
 		}
 		tastytrade.StartProactiveRefresh(ctx, oauth, quoteToken)
 
-		if err := conn.Connect(ctx); err != nil {
-			log.Fatal().Err(err).Msg("failed to connect to DxLink")
+		if err := pool.WarmUp(ctx); err != nil {
+			log.Fatal().Err(err).Msg("failed to warm up candle pool")
 		}
 
-		if err := symbols.Upsert(ctx, []domain.Symbol{{Symbol: cfg.TestSymbol, Market: cfg.TestMarket}}); err != nil {
-			log.Fatal().Err(err).Msg("failed to track test symbol")
+		aggregation.StartForwardAggregation(ctx, candles)
+
+		if cfg.BackfillBatchSize > 0 {
+			runBackfillBatch(ctx, gateway, symbols, ingest, cfg.BackfillBatchSize, cfg.BackfillWorkers)
 		}
-		if err := ingest.StreamLive(ctx, cfg.TestSymbol); err != nil {
-			log.Error().Err(err).Str("symbol", cfg.TestSymbol).Msg("failed to start live candle stream")
+
+		if cfg.UnsubscribeCheckSymbol != "" {
+			if err := symbols.Upsert(ctx, []domain.Symbol{{Symbol: cfg.UnsubscribeCheckSymbol, Market: cfg.TestMarket}}); err != nil {
+				log.Fatal().Err(err).Msg("failed to track unsubscribe-check symbol")
+			}
+			runUnsubscribeCheck(ctx, ingest, cfg.UnsubscribeCheckSymbol, cfg.UnsubscribeCheckRounds)
 		}
-		for _, tf := range []domain.Timeframe{domain.D1, domain.H1, domain.M1} {
-			if err := ingest.Backfill(ctx, cfg.TestSymbol, tf); err != nil {
-				log.Error().Err(err).Str("symbol", cfg.TestSymbol).Str("timeframe", string(tf)).Msg("failed to backfill history")
-			} else {
-				log.Info().Str("symbol", cfg.TestSymbol).Str("timeframe", string(tf)).Msg("backfill finished")
+
+		testSymbols := make([]domain.Symbol, len(cfg.TestSymbols))
+		for i, s := range cfg.TestSymbols {
+			testSymbols[i] = domain.Symbol{Symbol: s, Market: cfg.TestMarket}
+		}
+		if err := symbols.Upsert(ctx, testSymbols); err != nil {
+			log.Fatal().Err(err).Msg("failed to track test symbols")
+		}
+		// Backfill primero, en vivo despues -- ver comentario en
+		// CandlePool.SubscribeLive sobre por que no pueden ser concurrentes
+		// para el mismo simbolo+M1.
+		for _, symbol := range cfg.TestSymbols {
+			for _, tf := range []domain.Timeframe{domain.D1, domain.H1, domain.M1} {
+				if err := ingest.Backfill(ctx, symbol, tf); err != nil {
+					log.Error().Err(err).Str("symbol", symbol).Str("timeframe", string(tf)).Msg("failed to backfill history")
+				} else {
+					log.Info().Str("symbol", symbol).Str("timeframe", string(tf)).Msg("backfill finished")
+				}
+			}
+			if err := ingest.StreamLive(ctx, symbol); err != nil {
+				log.Error().Err(err).Str("symbol", symbol).Msg("failed to start live candle stream")
 			}
 		}
 

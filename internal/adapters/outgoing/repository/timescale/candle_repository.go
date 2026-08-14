@@ -26,6 +26,16 @@ const upsertCandleSQL = `
 		volume = EXCLUDED.volume, trade_count = EXCLUDED.trade_count, vwap = EXCLUDED.vwap
 `
 
+const upsertWatermarkSQL = `
+	INSERT INTO watermarks (symbol_id, timeframe, last_ts, updated_at)
+	SELECT symbol_id, $2, $3, now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id, timeframe) DO UPDATE SET
+		last_ts = GREATEST(watermarks.last_ts, EXCLUDED.last_ts), updated_at = now()
+`
+
+// Cada vela guardada (backfill o M1 en vivo) deja su propio watermark en el
+// mismo batch -- una sola llamada a Save() cubre ambos, sin un camino
+// separado solo para el streaming en vivo.
 func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) error {
 	if len(candles) == 0 {
 		return nil
@@ -34,12 +44,16 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) er
 	for _, c := range candles {
 		batch.Queue(upsertCandleSQL, c.Symbol, string(c.Timeframe), c.Timestamp,
 			c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source)
+		batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
 	}
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()
 	for range candles {
 		if _, err := results.Exec(); err != nil {
 			return fmt.Errorf("upserting candle batch: %w", err)
+		}
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("upserting watermark batch: %w", err)
 		}
 	}
 	return nil

@@ -46,10 +46,10 @@ type feedSubscriptionItem struct {
 }
 
 type feedSubscriptionMessage struct {
-	Type    string                  `json:"type"`
-	Channel int                     `json:"channel"`
-	Add     []feedSubscriptionItem  `json:"add,omitempty"`
-	Remove  []feedSubscriptionItem  `json:"remove,omitempty"`
+	Type    string                 `json:"type"`
+	Channel int                    `json:"channel"`
+	Add     []feedSubscriptionItem `json:"add,omitempty"`
+	Remove  []feedSubscriptionItem `json:"remove,omitempty"`
 }
 
 type inboundEnvelope struct {

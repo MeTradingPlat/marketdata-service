@@ -3,6 +3,7 @@ package ingestion
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
@@ -24,13 +25,38 @@ func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, time
 	if err != nil {
 		return fmt.Errorf("probing max depth for %s %s: %w", symbol, timeframe, err)
 	}
-	if len(candles) == 0 {
+	closed, err := closedCandles(candles, timeframe)
+	if err != nil {
+		return err
+	}
+	if len(closed) == 0 {
 		return nil
 	}
-	if err := s.repo.Save(ctx, candles); err != nil {
+	if err := s.repo.Save(ctx, closed); err != nil {
 		return fmt.Errorf("saving backfilled candles for %s %s: %w", symbol, timeframe, err)
 	}
 	return nil
+}
+
+// closedCandles descarta la vela mas reciente si su periodo todavia no
+// termino -- IsComplete() solo confirma que el OHLC no es null, pero
+// dxLink manda OHLC parcial de la vela EN FORMACION igual que de las ya
+// cerradas (confirmado en vivo: quedo guardada la barra D1 de hoy a mitad
+// del dia de trading). El backfill es historico por definicion, nunca
+// debe incluir la barra que todavia se esta formando.
+func closedCandles(candles []domain.Candle, tf domain.Timeframe) ([]domain.Candle, error) {
+	duration, err := tf.Duration()
+	if err != nil {
+		return nil, fmt.Errorf("getting duration for %s: %w", tf, err)
+	}
+	now := time.Now()
+	closed := make([]domain.Candle, 0, len(candles))
+	for _, c := range candles {
+		if !c.Timestamp.Add(duration).After(now) {
+			closed = append(closed, c)
+		}
+	}
+	return closed, nil
 }
 
 // SubscribeLiveCandles solo invoca el callback con velas ya cerradas -- ver

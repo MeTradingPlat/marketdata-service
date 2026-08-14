@@ -45,3 +45,14 @@ ALTER TABLE candles SET (
     autovacuum_analyze_scale_factor = 0.02,
     autovacuum_vacuum_cost_limit = 1000
 );
+
+-- last_ts refleja hasta donde llega la data real por simbolo+temporalidad,
+-- actualizado en cada Save() (incluye M1 en vivo) y en cada agregacion
+-- H1/D1 de medianoche -- consulta barata sin escanear candles.
+CREATE TABLE IF NOT EXISTS watermarks (
+    symbol_id  INT NOT NULL REFERENCES tracked_symbols(symbol_id),
+    timeframe  VARCHAR(6) NOT NULL,
+    last_ts    TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (symbol_id, timeframe)
+);

@@ -1,6 +1,7 @@
 package injector
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
@@ -26,8 +27,7 @@ func BuildContainer() *dig.Container {
 
 	checkErr(container.Provide(provideOAuth))
 	checkErr(container.Provide(tastytrade.NewQuoteToken))
-	checkErr(container.Provide(provideDxLinkConn))
-	checkErr(container.Provide(tastytrade.NewCandlePool))
+	checkErr(container.Provide(provideCandlePool))
 	checkErr(container.Provide(provideGateway))
 
 	checkErr(container.Provide(ingestion.NewIngestCandlesService))
@@ -69,18 +69,25 @@ func provideOAuth(cfg *configs.Config) *tastytrade.OAuth {
 	})
 }
 
-func provideDxLinkConn(cfg *configs.Config, qt *tastytrade.QuoteToken) *tastytrade.DxLinkConn {
+func provideCandlePool(cfg *configs.Config, qt *tastytrade.QuoteToken) *tastytrade.CandlePool {
 	urlFunc := qt.DxlinkURL
 	if cfg.DxlinkURLOverride != "" {
 		urlFunc = func() string { return cfg.DxlinkURLOverride }
 	}
-	return tastytrade.NewDxLinkConn(urlFunc, qt.Token)
+	connFactory := func(ctx context.Context) (*tastytrade.DxLinkConn, error) {
+		conn := tastytrade.NewDxLinkConn(urlFunc, qt.Token)
+		if err := conn.Connect(ctx); err != nil {
+			return nil, err
+		}
+		return conn, nil
+	}
+	return tastytrade.NewCandlePool(connFactory, cfg.MaxCandlePoolConnections)
 }
 
 func provideGateway(oauth *tastytrade.OAuth, pool *tastytrade.CandlePool) out.MarketDataGateway {
 	return tastytrade.NewGateway(oauth, pool)
 }
 
-func provideHealthHandler(conn *tastytrade.DxLinkConn) *handler.HealthHandler {
-	return handler.NewHealthHandler(conn)
+func provideHealthHandler(pool *tastytrade.CandlePool) *handler.HealthHandler {
+	return handler.NewHealthHandler(pool)
 }

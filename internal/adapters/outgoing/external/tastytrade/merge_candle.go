@@ -1,8 +1,6 @@
 package tastytrade
 
 import (
-	"strings"
-
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 )
 
@@ -32,11 +30,4 @@ func mergeCandle(existing domain.Candle, ev rawCandleEvent, symbol string, tf do
 		c.VWAP = *ev.VWAP
 	}
 	return c
-}
-
-func stripCandleSuffix(dxSymbol string) string {
-	if idx := strings.Index(dxSymbol, "{="); idx >= 0 {
-		return dxSymbol[:idx]
-	}
-	return dxSymbol
 }

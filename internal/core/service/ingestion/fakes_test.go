@@ -53,3 +53,6 @@ func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Time
 func (f *fakeRepo) GetWatermark(ctx context.Context, symbol string, tf domain.Timeframe) (*time.Time, *time.Time, error) {
 	return nil, nil, nil
 }
+
+func (f *fakeRepo) AggregateH1(ctx context.Context) error { return nil }
+func (f *fakeRepo) AggregateD1(ctx context.Context) error { return nil }
