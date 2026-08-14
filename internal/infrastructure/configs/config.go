@@ -17,6 +17,7 @@ type Config struct {
 	TastyTradeRefreshToken   string
 	DxlinkURLOverride        string
 	MaxCandlePoolConnections int
+	CatchupPoolConnections   int
 
 	DBHost     string
 	DBPort     string
@@ -33,6 +34,7 @@ func Load() *Config {
 	viper.SetDefault("TEST_MARKET", "XNAS")
 	viper.SetDefault("TT_BASE_URL", "https://api.tastytrade.com")
 	viper.SetDefault("MAX_CANDLE_POOL_CONNECTIONS", 40)
+	viper.SetDefault("CATCHUP_POOL_CONNECTIONS", 20)
 	viper.SetDefault("DB_HOST", "localhost")
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_NAME", "marketdata_db")
@@ -48,6 +50,7 @@ func Load() *Config {
 		TastyTradeRefreshToken:   viper.GetString("TT_REFRESH_TOKEN"),
 		DxlinkURLOverride:        viper.GetString("DXLINK_URL"),
 		MaxCandlePoolConnections: viper.GetInt("MAX_CANDLE_POOL_CONNECTIONS"),
+		CatchupPoolConnections:   viper.GetInt("CATCHUP_POOL_CONNECTIONS"),
 		DBHost:                   viper.GetString("DB_HOST"),
 		DBPort:                   viper.GetString("DB_PORT"),
 		DBName:                   viper.GetString("DB_NAME"),
