@@ -35,6 +35,7 @@ type equitiesResponse struct {
 			Symbol       string `json:"symbol"`
 			Description  string `json:"description"`
 			ListedMarket string `json:"listed-market"`
+			IsEtf        bool   `json:"is-etf"`
 		} `json:"items"`
 	} `json:"data"`
 }
@@ -92,7 +93,7 @@ func (g *Gateway) fetchEquitiesPage(ctx context.Context, page, perPage int) ([]d
 		if _, ok := allowedMarkets[item.ListedMarket]; !ok {
 			continue
 		}
-		symbols = append(symbols, domain.Symbol{Symbol: item.Symbol, Description: item.Description, Market: item.ListedMarket})
+		symbols = append(symbols, domain.Symbol{Symbol: item.Symbol, Description: item.Description, Market: item.ListedMarket, IsEtf: item.IsEtf})
 	}
 	return symbols, len(er.Data.Items), nil
 }

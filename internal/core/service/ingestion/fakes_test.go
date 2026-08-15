@@ -38,6 +38,10 @@ func (f *fakeGateway) CurrentCandle(symbol string) (domain.Candle, bool) {
 	return domain.Candle{}, false
 }
 
+func (f *fakeGateway) DividendInfo(ctx context.Context, symbols []string) ([]domain.Fundamentals, error) {
+	return nil, nil
+}
+
 type fakeRepo struct {
 	saved     [][]domain.Candle
 	saveErr   error

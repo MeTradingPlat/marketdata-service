@@ -75,3 +75,34 @@ func TestStreamLive(t *testing.T) {
 		t.Fatalf("Save called %d times, want 1", len(repo.saved))
 	}
 }
+
+func TestStreamLive_BuffersFailedSaveForRetry(t *testing.T) {
+	gw := &fakeGateway{}
+	repo := &fakeRepo{saveErr: errors.New("db down")}
+	svc := ingestion.NewIngestCandlesService(gw, repo)
+
+	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: 1, High: 1, Low: 1, Close: 1})
+	if len(repo.saved) != 0 {
+		t.Fatalf("Save should have failed and not recorded a save, got %d", len(repo.saved))
+	}
+
+	repo.saveErr = nil
+	svc.RetryPendingSaves(context.Background())
+
+	if len(repo.saved) != 1 {
+		t.Fatalf("expected the buffered candle to be saved on retry, got %d saves", len(repo.saved))
+	}
+	if len(repo.saved[0]) != 1 || repo.saved[0][0].Symbol != "AAPL" {
+		t.Fatalf("unexpected saved candle: %+v", repo.saved)
+	}
+
+	repo.saved = nil
+	svc.RetryPendingSaves(context.Background())
+	if len(repo.saved) != 0 {
+		t.Fatalf("expected empty buffer to result in no further Save call, got %d", len(repo.saved))
+	}
+}

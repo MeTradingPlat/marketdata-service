@@ -12,12 +12,13 @@ import (
 )
 
 type ingestCandlesService struct {
-	gateway out.MarketDataGateway
-	repo    out.CandleRepository
+	gateway     out.MarketDataGateway
+	repo        out.CandleRepository
+	retryBuffer *saveRetryBuffer
 }
 
 func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo}
+	return &ingestCandlesService{gateway: gateway, repo: repo, retryBuffer: newSaveRetryBuffer()}
 }
 
 // incrementalMargin son barras de mas antes del watermark que se vuelven a
@@ -126,7 +127,25 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 	}
 	return s.gateway.SubscribeLiveCandles(ctx, symbol, from, func(c domain.Candle) {
 		if err := s.repo.Save(ctx, []domain.Candle{c}); err != nil {
-			log.Error().Err(err).Str("symbol", symbol).Msg("failed to save live candle")
+			log.Error().Err(err).Str("symbol", symbol).Msg("failed to save live candle, buffering for retry")
+			s.retryBuffer.add(c)
 		}
 	})
+}
+
+// RetryPendingSaves reintenta las velas en vivo que fallaron al guardarse --
+// llamado periodicamente desde cmd/api, no en el hilo de lectura del
+// WebSocket (ver comentario de saveRetryBuffer sobre por que la suscripcion
+// DxLink no necesita tocarse para esto).
+func (s *ingestCandlesService) RetryPendingSaves(ctx context.Context) {
+	pending := s.retryBuffer.drain()
+	if len(pending) == 0 {
+		return
+	}
+	if err := s.repo.Save(ctx, pending); err != nil {
+		log.Error().Err(err).Int("candles", len(pending)).Msg("retrying pending candle saves failed, will retry again")
+		s.retryBuffer.requeue(pending)
+		return
+	}
+	log.Info().Int("candles", len(pending)).Msg("recovered pending candle saves")
 }

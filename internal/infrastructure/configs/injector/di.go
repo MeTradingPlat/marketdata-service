@@ -8,6 +8,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/repository/timescale"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
@@ -25,6 +26,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideTimescalePool))
 	checkErr(container.Provide(provideCandleRepository))
 	checkErr(container.Provide(provideSymbolRepository))
+	checkErr(container.Provide(provideFundamentalsRepository))
 
 	checkErr(container.Provide(provideOAuth))
 	checkErr(container.Provide(tastytrade.NewQuoteToken))
@@ -34,10 +36,12 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(ingestion.NewIngestCandlesService))
 	checkErr(container.Provide(ingestion.NewGetCandlesService))
 	checkErr(container.Provide(intraday.NewGetIntradaySnapshotService))
+	checkErr(container.Provide(fundamentals.NewGetFundamentalsService))
 
 	checkErr(container.Provide(handler.NewCandlesHandler))
 	checkErr(container.Provide(provideHealthHandler))
 	checkErr(container.Provide(handler.NewIntradayHandler))
+	checkErr(container.Provide(handler.NewFundamentalsHandler))
 
 	checkErr(container.Provide(server.NewServer))
 	checkErr(container.Provide(router.NewRouter))
@@ -61,6 +65,10 @@ func provideCandleRepository(pool *pgxpool.Pool) out.CandleRepository {
 
 func provideSymbolRepository(pool *pgxpool.Pool) out.SymbolRepository {
 	return timescale.NewSymbolRepository(pool)
+}
+
+func provideFundamentalsRepository(pool *pgxpool.Pool) out.FundamentalsRepository {
+	return timescale.NewFundamentalsRepository(pool)
 }
 
 func provideOAuth(cfg *configs.Config) *tastytrade.OAuth {

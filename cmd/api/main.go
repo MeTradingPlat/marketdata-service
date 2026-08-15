@@ -38,6 +38,7 @@ func main() {
 		gateway out.MarketDataGateway,
 		candleRepo out.CandleRepository,
 		symbols out.SymbolRepository,
+		fundamentals out.FundamentalsRepository,
 		ingest in.IngestCandlesService,
 		e *echo.Echo,
 		r *router.Router,
@@ -75,7 +76,8 @@ func main() {
 		// Ciclo del universo completo -- D1 fase 1, H1 fase 2, M1 fase 3 --
 		// corre en background (no bloquea el arranque del servidor HTTP) y se
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
-		StartUniverseCycle(ctx, cfg, pool, gateway, symbols, candleRepo, ingest)
+		StartUniverseCycle(ctx, cfg, pool, gateway, symbols, candleRepo, fundamentals, ingest)
+		StartSaveRetryLoop(ctx, ingest)
 
 		r.Init()
 		address := fmt.Sprintf(":%s", cfg.ServerPort)

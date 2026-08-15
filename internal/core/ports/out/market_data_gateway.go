@@ -16,4 +16,5 @@ type MarketDataGateway interface {
 	SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onCandle func(domain.Candle)) error
 	ActiveSymbols(ctx context.Context) ([]domain.Symbol, error)
 	CurrentCandle(symbol string) (domain.Candle, bool)
+	DividendInfo(ctx context.Context, symbols []string) ([]domain.Fundamentals, error)
 }

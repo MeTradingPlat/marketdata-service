@@ -24,3 +24,8 @@ type SymbolRepository interface {
 	Tracked(ctx context.Context) ([]domain.Symbol, error)
 	Deactivate(ctx context.Context, symbols []string) error
 }
+
+type FundamentalsRepository interface {
+	Get(ctx context.Context, symbol string) (domain.Fundamentals, error)
+	UpsertDividends(ctx context.Context, fundamentals []domain.Fundamentals) error
+}

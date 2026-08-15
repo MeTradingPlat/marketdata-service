@@ -5,8 +5,14 @@ CREATE TABLE IF NOT EXISTS tracked_symbols (
     symbol        VARCHAR(20) NOT NULL UNIQUE,
     market        VARCHAR(10) NOT NULL,
     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+    is_etf        BOOLEAN NOT NULL DEFAULT FALSE,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ALTER separado del CREATE de arriba: la tabla ya existe en produccion
+-- desde antes de que is_etf existiera, CREATE TABLE IF NOT EXISTS no la
+-- toca en un despliegue sobre una BD ya inicializada.
+ALTER TABLE tracked_symbols ADD COLUMN IF NOT EXISTS is_etf BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- OHLC/VWAP en DOUBLE PRECISION, no NUMERIC(18,6) -- mismo tipo que Go ya
 -- usa internamente (float64), y algunos penny stocks reportan barras
@@ -61,4 +67,15 @@ CREATE TABLE IF NOT EXISTS watermarks (
     last_ts    TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (symbol_id, timeframe)
+);
+
+-- dividend_amount/dividend_frequency de /market-data/by-type, refrescados en
+-- el barrido nocturno (ver catchup.RefreshDividends). 0 significa "el emisor
+-- no reparte dividendo" (SPAC, warrant, ETN, ETF apalancado sin
+-- distribucion) -- confirmado con muestra real, no una ausencia de datos.
+CREATE TABLE IF NOT EXISTS dividends (
+    symbol_id          INT NOT NULL PRIMARY KEY REFERENCES tracked_symbols(symbol_id),
+    dividend_amount    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    dividend_frequency DOUBLE PRECISION NOT NULL DEFAULT 0,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

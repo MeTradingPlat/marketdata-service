@@ -9,6 +9,7 @@ import (
 type IngestCandlesService interface {
 	Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error
 	StreamLive(ctx context.Context, symbol string) error
+	RetryPendingSaves(ctx context.Context)
 }
 
 type GetCandlesService interface {
@@ -17,4 +18,8 @@ type GetCandlesService interface {
 
 type GetIntradaySnapshotService interface {
 	GetSnapshot(ctx context.Context, symbol string) (domain.IntradaySnapshot, error)
+}
+
+type GetFundamentalsService interface {
+	GetFundamentals(ctx context.Context, symbol string) (domain.Fundamentals, error)
 }

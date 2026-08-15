@@ -22,22 +22,22 @@ const liveRolloutWorkers = 20
 // D1/H1 no compita por conexiones/canales con miles de suscripciones en
 // vivo, y vuelve a suscribir M1 al terminar -- cada simbolo retoma desde
 // su propio watermark, sin hueco real porque el mercado estuvo cerrado.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService) {
 	go func() {
-		runUniverseCycle(ctx, cfg, pool, gateway, symbols, candles, ingest, true)
+		runUniverseCycle(ctx, cfg, pool, gateway, symbols, candles, fundamentals, ingest, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now().UTC()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, pool, gateway, symbols, candles, ingest, false)
+				runUniverseCycle(ctx, cfg, pool, gateway, symbols, candles, fundamentals, ingest, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, firstRun bool) {
 	if !firstRun {
 		pool.StopAllLive(ctx)
 	}
@@ -48,6 +48,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade
 		return
 	}
 
+	catchup.RefreshDividends(ctx, gateway, fundamentals, tracked)
 	startLiveUniverse(ctx, ingest, tracked)
 }
 

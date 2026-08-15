@@ -91,6 +91,11 @@ func phaseJobs(tracked []domain.Symbol, tf domain.Timeframe, withData map[string
 	return append(uncovered, covered...)
 }
 
+const (
+	backfillMaxAttempts = 3
+	backfillRetryDelay  = 5 * time.Second
+)
+
 // runPhase corre UN timeframe hasta el final -- todos los workers drenan la
 // cola y terminan (wg.Wait) antes de que el llamador pueda arrancar la
 // fase siguiente. Barrera estricta a proposito: nada de H1 empieza mientras
@@ -109,10 +114,7 @@ func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, t
 		go func() {
 			defer wg.Done()
 			for j := range queue {
-				if err := ingest.Backfill(ctx, j.symbol, j.tf); err != nil {
-					log.Error().Err(err).Str("symbol", j.symbol).Str("timeframe", string(j.tf)).
-						Msg("universe sweep job failed")
-				}
+				backfillWithRetry(ctx, ingest, j)
 			}
 		}()
 	}
@@ -120,6 +122,28 @@ func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, t
 
 	log.Info().Str("timeframe", string(tf)).Int("symbols", len(jobs)).Dur("elapsed", time.Since(start)).
 		Msg("universe sweep phase finished")
+}
+
+// backfillWithRetry reintenta un trabajo de backfill fallido -- confirmado en
+// vivo: un apagon transitorio de Postgres (segundos) durante la fase D1/H1
+// dejaba simbolos completos sin H1 hasta la siguiente noche, porque este
+// camino nunca tuvo reintento (a diferencia de M1, ver startLiveWithRetry).
+// A diferencia del callback de M1 en vivo -- compartido por cientos de
+// simbolos en el mismo hilo de lectura del WebSocket, donde bloquear ahi
+// afectaria a todos -- cada worker de este pool ya procesa su propia cola:
+// reintentar aca solo demora a ESE worker, no a los demas.
+func backfillWithRetry(ctx context.Context, ingest in.IngestCandlesService, j job) {
+	var err error
+	for attempt := 1; attempt <= backfillMaxAttempts; attempt++ {
+		if err = ingest.Backfill(ctx, j.symbol, j.tf); err == nil {
+			return
+		}
+		if attempt < backfillMaxAttempts {
+			time.Sleep(backfillRetryDelay)
+		}
+	}
+	log.Error().Err(err).Str("symbol", j.symbol).Str("timeframe", string(j.tf)).Int("attempts", backfillMaxAttempts).
+		Msg("universe sweep job failed after retries")
 }
 
 // RunSweep reconcilia el universo y despues corre D1 completo (fase 1) y

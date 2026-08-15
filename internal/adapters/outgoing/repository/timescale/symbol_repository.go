@@ -18,8 +18,8 @@ func NewSymbolRepository(pool *pgxpool.Pool) *SymbolRepository {
 }
 
 const upsertSymbolSQL = `
-	INSERT INTO tracked_symbols (symbol, market) VALUES ($1, $2)
-	ON CONFLICT (symbol) DO UPDATE SET market = EXCLUDED.market, is_active = TRUE
+	INSERT INTO tracked_symbols (symbol, market, is_etf) VALUES ($1, $2, $3)
+	ON CONFLICT (symbol) DO UPDATE SET market = EXCLUDED.market, is_active = TRUE, is_etf = EXCLUDED.is_etf
 `
 
 func (r *SymbolRepository) Upsert(ctx context.Context, symbols []domain.Symbol) error {
@@ -28,7 +28,7 @@ func (r *SymbolRepository) Upsert(ctx context.Context, symbols []domain.Symbol) 
 	}
 	batch := &pgx.Batch{}
 	for _, s := range symbols {
-		batch.Queue(upsertSymbolSQL, s.Symbol, s.Market)
+		batch.Queue(upsertSymbolSQL, s.Symbol, s.Market, s.IsEtf)
 	}
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()
