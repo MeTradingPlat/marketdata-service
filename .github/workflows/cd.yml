@@ -107,7 +107,7 @@ jobs:
             -e DB_NAME="marketdata_db" \
             -e DB_USERNAME="user_marketdata" \
             -e DB_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
-            -e DB_MAX_CONNS="80" \
+            -e DB_MAX_CONNS="20" \
             -e TT_CLIENT_ID="${{ secrets.TT_CLIENT_ID }}" \
             -e TT_CLIENT_SECRET="${{ secrets.TT_CLIENT_SECRET }}" \
             -e TT_REFRESH_TOKEN="${{ secrets.TT_REFRESH_TOKEN }}" \

@@ -40,7 +40,7 @@ func Load() *Config {
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_NAME", "marketdata_db")
 	viper.SetDefault("DB_USERNAME", "user_marketdata")
-	viper.SetDefault("DB_MAX_CONNS", 80)
+	viper.SetDefault("DB_MAX_CONNS", 20)
 
 	return &Config{
 		ServerPort:               viper.GetString("SERVER_PORT"),
