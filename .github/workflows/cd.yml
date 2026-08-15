@@ -107,7 +107,7 @@ jobs:
             -e DB_NAME="marketdata_db" \
             -e DB_USERNAME="user_marketdata" \
             -e DB_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
-            -e DB_MAX_CONNS="35" \
+            -e DB_MAX_CONNS="25" \
             -e TT_CLIENT_ID="${{ secrets.TT_CLIENT_ID }}" \
             -e TT_CLIENT_SECRET="${{ secrets.TT_CLIENT_SECRET }}" \
             -e TT_REFRESH_TOKEN="${{ secrets.TT_REFRESH_TOKEN }}" \
@@ -115,7 +115,7 @@ jobs:
             -e TEST_SYMBOLS="AAPL,MSFT,GOOGL,TSLA,AMZN" \
             -e TEST_MARKET="XNAS" \
             -e MAX_CANDLE_POOL_CONNECTIONS="40" \
-            -e SWEEP_WORKERS="35" \
+            -e SWEEP_WORKERS="25" \
             virtud142/metradingplat_marketdata_service:latest
 
       - name: Clean Old Images of This Service
