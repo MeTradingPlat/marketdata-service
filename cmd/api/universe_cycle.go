@@ -23,22 +23,29 @@ const liveRolloutWorkers = 20
 // abiertas ante TastyTrade, y vuelve a suscribir M1 al terminar -- cada
 // simbolo retoma desde su propio watermark, sin hueco real porque el
 // mercado estuvo cerrado.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService) {
+//
+// catchup.RefreshDividends (REST a /market-data/by-type) NO se llama aqui
+// por ahora -- Java traia estos mismos campos via una suscripcion DxLink
+// dedicada (FundamentalsConnectionPool, conexiones propias y separadas del
+// pool de velas), no REST por lotes. Pausado hasta investigar si REST se
+// comporta igual de bien a escala completa antes de dejarlo corriendo cada
+// noche.
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, ingest, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now().UTC()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, ingest, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService, firstRun bool) {
 	if !firstRun {
 		gateway.ResetLiveConnections()
 	}
@@ -49,7 +56,6 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		return
 	}
 
-	catchup.RefreshDividends(ctx, gateway, fundamentals, tracked)
 	startLiveUniverse(ctx, ingest, tracked)
 }
 

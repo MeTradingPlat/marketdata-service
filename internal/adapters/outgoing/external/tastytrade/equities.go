@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -93,7 +94,25 @@ func (g *Gateway) fetchEquitiesPage(ctx context.Context, page, perPage int) ([]d
 		if _, ok := allowedMarkets[item.ListedMarket]; !ok {
 			continue
 		}
+		if isTestSymbol(item.Symbol, item.Description) {
+			continue
+		}
 		symbols = append(symbols, domain.Symbol{Symbol: item.Symbol, Description: item.Description, Market: item.ListedMarket, IsEtf: item.IsEtf})
 	}
 	return symbols, len(er.Data.Items), nil
+}
+
+// isTestSymbol identifica los tickers de prueba que los exchanges publican
+// para verificar que el feed funciona (ATEST/*, CTEST, NTEST/*, PTEST/*,
+// ZAZZT/ZBZZT/ZCZZT "tick pilot", ZXYZ/A "NASDAQ SYMBOLOGY TST") -- nunca
+// cotizan nada real, mismo criterio que ya usaba classifySecurityType() en
+// el servicio Java (confirmado en vivo contra /instruments/equities).
+// Al no incluirlos en ActiveSymbols(), reconcileUniverse() los desactiva
+// solos si ya estaban rastreados, sin logica nueva de por medio.
+func isTestSymbol(symbol, description string) bool {
+	if strings.Contains(symbol, "TEST") {
+		return true
+	}
+	d := strings.ToLower(description)
+	return strings.Contains(d, "tick pilot") || strings.Contains(d, "symbology tst")
 }
