@@ -162,3 +162,58 @@ func (r *CandleRepository) SymbolsWithData(ctx context.Context, timeframe domain
 	}
 	return symbols, rows.Err()
 }
+
+// intradaySessionsSQL agrega las M1 de hoy en las 3 sesiones (pre/regular/
+// post) en una sola pasada -- FILTER separa cada sesion por la hora en
+// horario de Nueva York (AT TIME ZONE convierte de UTC solo, ajusta DST
+// solo por estar comparando contra un nombre de zona real, no un offset
+// fijo). ARRAY_AGG(...)[1] es el modismo para "primer/ultimo valor segun
+// ese orden" sin una subconsulta correlacionada por sesion.
+const intradaySessionsSQL = `
+	WITH today_bars AS (
+		SELECT c.ts, c.open, c.high, c.low, c.close, c.volume,
+			(c.ts AT TIME ZONE 'America/New_York')::time AS et_time
+		FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+		WHERE s.symbol = $1 AND c.timeframe = 'M1'
+			AND (c.ts AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date
+	)
+	SELECT
+		(ARRAY_AGG(open ORDER BY ts) FILTER (WHERE et_time >= '09:30' AND et_time < '16:00'))[1],
+		MAX(high) FILTER (WHERE et_time >= '09:30' AND et_time < '16:00'),
+		MIN(low) FILTER (WHERE et_time >= '09:30' AND et_time < '16:00'),
+		COALESCE(SUM(volume) FILTER (WHERE et_time >= '09:30' AND et_time < '16:00'), 0),
+		COALESCE(SUM(volume) FILTER (WHERE et_time < '09:30'), 0),
+		(ARRAY_AGG(close ORDER BY ts DESC) FILTER (WHERE et_time < '09:30'))[1],
+		COALESCE(SUM(volume) FILTER (WHERE et_time >= '16:00'), 0),
+		(ARRAY_AGG(close ORDER BY ts DESC) FILTER (WHERE et_time >= '16:00'))[1]
+	FROM today_bars
+`
+
+func (r *CandleRepository) GetIntradaySessions(ctx context.Context, symbol string) (domain.IntradaySnapshot, error) {
+	snap := domain.IntradaySnapshot{Symbol: symbol}
+	var open, high, low, preClose, postClose *float64
+	err := r.pool.QueryRow(ctx, intradaySessionsSQL, symbol).Scan(
+		&open, &high, &low, &snap.DayVolume,
+		&snap.PreMarketVolume, &preClose,
+		&snap.PostMarketVolume, &postClose,
+	)
+	if err != nil {
+		return domain.IntradaySnapshot{}, fmt.Errorf("querying intraday sessions for %s: %w", symbol, err)
+	}
+	if open != nil {
+		snap.Open = *open
+	}
+	if high != nil {
+		snap.High = *high
+	}
+	if low != nil {
+		snap.Low = *low
+	}
+	if preClose != nil {
+		snap.PreMarketClose = *preClose
+	}
+	if postClose != nil {
+		snap.PostMarketClose = *postClose
+	}
+	return snap, nil
+}

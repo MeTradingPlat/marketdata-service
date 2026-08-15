@@ -15,4 +15,5 @@ type MarketDataGateway interface {
 	ProbeMaxDepth(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error)
 	SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onCandle func(domain.Candle)) error
 	ActiveSymbols(ctx context.Context) ([]domain.Symbol, error)
+	CurrentCandle(symbol string) (domain.Candle, bool)
 }

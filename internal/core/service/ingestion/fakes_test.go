@@ -34,6 +34,10 @@ func (f *fakeGateway) ActiveSymbols(ctx context.Context) ([]domain.Symbol, error
 	return nil, nil
 }
 
+func (f *fakeGateway) CurrentCandle(symbol string) (domain.Candle, bool) {
+	return domain.Candle{}, false
+}
+
 type fakeRepo struct {
 	saved     [][]domain.Candle
 	saveErr   error
@@ -59,4 +63,8 @@ func (f *fakeRepo) GetWatermark(ctx context.Context, symbol string, tf domain.Ti
 
 func (f *fakeRepo) SymbolsWithData(ctx context.Context, tf domain.Timeframe) (map[string]struct{}, error) {
 	return nil, nil
+}
+
+func (f *fakeRepo) GetIntradaySessions(ctx context.Context, symbol string) (domain.IntradaySnapshot, error) {
+	return domain.IntradaySnapshot{}, nil
 }

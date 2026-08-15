@@ -9,6 +9,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/repository/timescale"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/server"
@@ -32,9 +33,11 @@ func BuildContainer() *dig.Container {
 
 	checkErr(container.Provide(ingestion.NewIngestCandlesService))
 	checkErr(container.Provide(ingestion.NewGetCandlesService))
+	checkErr(container.Provide(intraday.NewGetIntradaySnapshotService))
 
 	checkErr(container.Provide(handler.NewCandlesHandler))
 	checkErr(container.Provide(provideHealthHandler))
+	checkErr(container.Provide(handler.NewIntradayHandler))
 
 	checkErr(container.Provide(server.NewServer))
 	checkErr(container.Provide(router.NewRouter))

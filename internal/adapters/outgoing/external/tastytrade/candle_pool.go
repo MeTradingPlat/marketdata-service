@@ -291,6 +291,16 @@ func (p *CandlePool) hasLiveSub(symbol string) bool {
 	return ok
 }
 
+// CurrentCandle devuelve la vela M1 en formacion ahora mismo -- precio y
+// volumen mas frescos que cualquier vela ya cerrada en la BD, se actualiza
+// en cada tick sin esperar a que cierre el minuto.
+func (p *CandlePool) CurrentCandle(symbol string) (domain.Candle, bool) {
+	p.currentMu.Lock()
+	defer p.currentMu.Unlock()
+	c, ok := p.current[symbol]
+	return c, ok
+}
+
 func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time) ([]domain.Candle, error) {
 	// Un fetch M1 puntual para un simbolo que YA esta en vivo competiria por
 	// la MISMA suscripcion server-side (dxFeed fusiona el "add" de esta

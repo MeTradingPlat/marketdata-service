@@ -42,3 +42,7 @@ func (g *Gateway) SubscribeLiveCandles(ctx context.Context, symbol string, from 
 	}
 	return g.pool.SubscribeLive(ctx, symbol, from, onCandle)
 }
+
+func (g *Gateway) CurrentCandle(symbol string) (domain.Candle, bool) {
+	return g.pool.CurrentCandle(symbol)
+}
