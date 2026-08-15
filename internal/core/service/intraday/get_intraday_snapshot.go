@@ -34,6 +34,7 @@ func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol str
 	if current, ok := s.gateway.CurrentCandle(symbol); ok {
 		snap.CurrentPrice = current.Close
 		snap.CurrentVolume = current.Volume
+		mergeFormingCandle(&snap, current)
 	} else if lastM1, err := s.repo.GetCandles(ctx, symbol, domain.M1, 1); err == nil && len(lastM1) > 0 {
 		snap.CurrentPrice = lastM1[0].Close
 		snap.CurrentVolume = lastM1[0].Volume
@@ -48,4 +49,38 @@ func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol str
 	}
 
 	return snap, nil
+}
+
+// mergeFormingCandle suma la vela M1 en formacion (todavia no guardada, la
+// unica fuente que llega hasta el ultimo tick real) a la sesion que le
+// corresponde ahora -- sin esto, high/low/volumen del dia quedan hasta un
+// minuto atras del precio actual, que si la incluye.
+func mergeFormingCandle(snap *domain.IntradaySnapshot, current domain.Candle) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return
+	}
+	nowET := current.Timestamp.In(loc)
+	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
+	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
+
+	switch {
+	case current.Timestamp.Before(marketOpen):
+		snap.PreMarketVolume += current.Volume
+		snap.PreMarketClose = current.Close
+	case current.Timestamp.Before(marketClose):
+		if snap.Open == 0 {
+			snap.Open = current.Open
+		}
+		if snap.High == 0 || current.High > snap.High {
+			snap.High = current.High
+		}
+		if snap.Low == 0 || current.Low < snap.Low {
+			snap.Low = current.Low
+		}
+		snap.DayVolume += current.Volume
+	default:
+		snap.PostMarketVolume += current.Volume
+		snap.PostMarketClose = current.Close
+	}
 }
