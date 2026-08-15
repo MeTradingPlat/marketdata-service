@@ -18,8 +18,9 @@ func NewSymbolRepository(pool *pgxpool.Pool) *SymbolRepository {
 }
 
 const upsertSymbolSQL = `
-	INSERT INTO tracked_symbols (symbol, market, is_etf) VALUES ($1, $2, $3)
-	ON CONFLICT (symbol) DO UPDATE SET market = EXCLUDED.market, is_active = TRUE, is_etf = EXCLUDED.is_etf
+	INSERT INTO tracked_symbols (symbol, market, is_etf, description) VALUES ($1, $2, $3, $4)
+	ON CONFLICT (symbol) DO UPDATE SET
+		market = EXCLUDED.market, is_active = TRUE, is_etf = EXCLUDED.is_etf, description = EXCLUDED.description
 `
 
 func (r *SymbolRepository) Upsert(ctx context.Context, symbols []domain.Symbol) error {
@@ -28,7 +29,7 @@ func (r *SymbolRepository) Upsert(ctx context.Context, symbols []domain.Symbol) 
 	}
 	batch := &pgx.Batch{}
 	for _, s := range symbols {
-		batch.Queue(upsertSymbolSQL, s.Symbol, s.Market, s.IsEtf)
+		batch.Queue(upsertSymbolSQL, s.Symbol, s.Market, s.IsEtf, s.Description)
 	}
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()
@@ -40,7 +41,7 @@ func (r *SymbolRepository) Upsert(ctx context.Context, symbols []domain.Symbol) 
 	return nil
 }
 
-const trackedSymbolsSQL = `SELECT symbol, market FROM tracked_symbols WHERE is_active = TRUE`
+const trackedSymbolsSQL = `SELECT symbol, market, description, is_etf FROM tracked_symbols WHERE is_active = TRUE`
 
 func (r *SymbolRepository) Tracked(ctx context.Context) ([]domain.Symbol, error) {
 	rows, err := r.pool.Query(ctx, trackedSymbolsSQL)
@@ -52,12 +53,32 @@ func (r *SymbolRepository) Tracked(ctx context.Context) ([]domain.Symbol, error)
 	var symbols []domain.Symbol
 	for rows.Next() {
 		var s domain.Symbol
-		if err := rows.Scan(&s.Symbol, &s.Market); err != nil {
+		if err := rows.Scan(&s.Symbol, &s.Market, &s.Description, &s.IsEtf); err != nil {
 			return nil, fmt.Errorf("scanning symbol row: %w", err)
 		}
 		symbols = append(symbols, s)
 	}
 	return symbols, rows.Err()
+}
+
+const marketsSQL = `SELECT DISTINCT market FROM tracked_symbols WHERE is_active = TRUE ORDER BY market`
+
+func (r *SymbolRepository) Markets(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx, marketsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("querying distinct markets: %w", err)
+	}
+	defer rows.Close()
+
+	var markets []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return nil, fmt.Errorf("scanning market row: %w", err)
+		}
+		markets = append(markets, m)
+	}
+	return markets, rows.Err()
 }
 
 const deactivateSymbolsSQL = `UPDATE tracked_symbols SET is_active = FALSE WHERE symbol = ANY($1)`

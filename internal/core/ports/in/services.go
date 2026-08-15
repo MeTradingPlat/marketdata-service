@@ -23,3 +23,15 @@ type GetIntradaySnapshotService interface {
 type GetFundamentalsService interface {
 	GetFundamentals(ctx context.Context, symbol string) (domain.Fundamentals, error)
 }
+
+type GetSymbolsService interface {
+	GetSymbols(ctx context.Context, markets []string) ([]domain.Symbol, error)
+}
+
+type GetMarketsService interface {
+	GetMarkets(ctx context.Context) ([]domain.Market, error)
+}
+
+type GetTimeframesService interface {
+	GetTimeframes() []domain.TimeframeInfo
+}

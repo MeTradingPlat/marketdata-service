@@ -12,10 +12,11 @@ type Router struct {
 	health       *handler.HealthHandler
 	intraday     *handler.IntradayHandler
 	fundamentals *handler.FundamentalsHandler
+	metadata     *handler.MetadataHandler
 }
 
-func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler) *Router {
-	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals}
+func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler) *Router {
+	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata}
 }
 
 func (r *Router) Init() {
@@ -26,4 +27,7 @@ func (r *Router) Init() {
 	r.echo.GET("/marketdata/historical/:symbol", r.candles.GetCandles)
 	r.echo.GET("/marketdata/intraday/:symbol", r.intraday.GetSnapshot)
 	r.echo.GET("/marketdata/fundamentals/:symbol", r.fundamentals.GetFundamentals)
+	r.echo.GET("/marketdata/symbols", r.metadata.GetSymbols)
+	r.echo.GET("/marketdata/markets", r.metadata.GetMarkets)
+	r.echo.GET("/marketdata/timeframes", r.metadata.GetTimeframes)
 }

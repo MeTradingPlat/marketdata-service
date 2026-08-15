@@ -6,13 +6,15 @@ CREATE TABLE IF NOT EXISTS tracked_symbols (
     market        VARCHAR(10) NOT NULL,
     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
     is_etf        BOOLEAN NOT NULL DEFAULT FALSE,
+    description   VARCHAR(500) NOT NULL DEFAULT '',
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ALTER separado del CREATE de arriba: la tabla ya existe en produccion
--- desde antes de que is_etf existiera, CREATE TABLE IF NOT EXISTS no la
--- toca en un despliegue sobre una BD ya inicializada.
+-- ALTERs separados del CREATE de arriba: la tabla ya existia en produccion
+-- desde antes de que estas columnas existieran, CREATE TABLE IF NOT EXISTS
+-- no la toca en un despliegue sobre una BD ya inicializada.
 ALTER TABLE tracked_symbols ADD COLUMN IF NOT EXISTS is_etf BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE tracked_symbols ADD COLUMN IF NOT EXISTS description VARCHAR(500) NOT NULL DEFAULT '';
 
 -- OHLC/VWAP en DOUBLE PRECISION, no NUMERIC(18,6) -- mismo tipo que Go ya
 -- usa internamente (float64), y algunos penny stocks reportan barras
