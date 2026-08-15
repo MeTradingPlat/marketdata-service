@@ -95,13 +95,33 @@ const getCandlesSQL = `
 	SELECT ts, open, high, low, close, volume, trade_count, vwap, source FROM (
 		SELECT c.ts, c.open, c.high, c.low, c.close, c.volume, c.trade_count, c.vwap, c.source
 		FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-		WHERE s.symbol = $1 AND c.timeframe = $2
-		ORDER BY c.ts DESC LIMIT $3
+		WHERE s.symbol = $1 AND c.timeframe = $2 AND c.ts >= $3
+		ORDER BY c.ts DESC LIMIT $4
 	) recent ORDER BY ts ASC
 `
 
+// GetCandles arranca leyendo el watermark (la tabla chica, ver comentario
+// de Save()) para calcular un piso de fecha real antes de tocar la
+// hypertable -- sin eso, "dame las ultimas N barras" no le daba a Postgres
+// ningun rango que excluir y sufria el mismo problema que GetWatermark
+// antes de arreglarse: hasta planear la consulta bloqueaba chunks de mas.
+// El margen (2x bars + 30 periodos) cubre fines de semana/feriados/halts
+// sin volver a un scan sin limite.
 func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int) ([]domain.Candle, error) {
-	rows, err := r.pool.Query(ctx, getCandlesSQL, symbol, string(timeframe), bars)
+	newest, err := r.GetWatermark(ctx, symbol, timeframe)
+	if err != nil {
+		return nil, fmt.Errorf("checking watermark for %s %s: %w", symbol, timeframe, err)
+	}
+	if newest == nil {
+		return nil, nil
+	}
+	duration, err := timeframe.Duration()
+	if err != nil {
+		return nil, fmt.Errorf("getting duration for %s: %w", timeframe, err)
+	}
+	from := newest.Add(-time.Duration(bars*2+30) * duration)
+
+	rows, err := r.pool.Query(ctx, getCandlesSQL, symbol, string(timeframe), from, bars)
 	if err != nil {
 		return nil, fmt.Errorf("querying candles for %s %s: %w", symbol, timeframe, err)
 	}
