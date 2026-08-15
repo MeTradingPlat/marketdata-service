@@ -164,35 +164,42 @@ func (r *CandleRepository) SymbolsWithData(ctx context.Context, timeframe domain
 }
 
 // intradaySessionsSQL agrega las M1 de hoy en las 3 sesiones (pre/regular/
-// post) en una sola pasada -- FILTER separa cada sesion por la hora en
-// horario de Nueva York (AT TIME ZONE convierte de UTC solo, ajusta DST
-// solo por estar comparando contra un nombre de zona real, no un offset
-// fijo). ARRAY_AGG(...)[1] es el modismo para "primer/ultimo valor segun
-// ese orden" sin una subconsulta correlacionada por sesion.
+// post) en una sola pasada. Los limites de tiempo se calculan en Go
+// (dayStart/dayEnd/marketOpen/marketClose, ya en America/New_York) y se
+// mandan como parametros -- comparar c.ts contra un valor ya calculado usa
+// el indice (symbol_id, timeframe, ts) de verdad; la version anterior
+// filtraba con (c.ts AT TIME ZONE ...)::date = hoy, una expresion por fila
+// que Postgres no puede indexar y tardaba 30s en producción. ARRAY_AGG(...)[1]
+// es el modismo para "primer/ultimo valor segun ese orden" sin una
+// subconsulta correlacionada por sesion.
 const intradaySessionsSQL = `
-	WITH today_bars AS (
-		SELECT c.ts, c.open, c.high, c.low, c.close, c.volume,
-			(c.ts AT TIME ZONE 'America/New_York')::time AS et_time
-		FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-		WHERE s.symbol = $1 AND c.timeframe = 'M1'
-			AND (c.ts AT TIME ZONE 'America/New_York')::date = (now() AT TIME ZONE 'America/New_York')::date
-	)
 	SELECT
-		(ARRAY_AGG(open ORDER BY ts) FILTER (WHERE et_time >= '09:30' AND et_time < '16:00'))[1],
-		MAX(high) FILTER (WHERE et_time >= '09:30' AND et_time < '16:00'),
-		MIN(low) FILTER (WHERE et_time >= '09:30' AND et_time < '16:00'),
-		COALESCE(SUM(volume) FILTER (WHERE et_time >= '09:30' AND et_time < '16:00'), 0),
-		COALESCE(SUM(volume) FILTER (WHERE et_time < '09:30'), 0),
-		(ARRAY_AGG(close ORDER BY ts DESC) FILTER (WHERE et_time < '09:30'))[1],
-		COALESCE(SUM(volume) FILTER (WHERE et_time >= '16:00'), 0),
-		(ARRAY_AGG(close ORDER BY ts DESC) FILTER (WHERE et_time >= '16:00'))[1]
-	FROM today_bars
+		(ARRAY_AGG(c.open ORDER BY c.ts) FILTER (WHERE c.ts >= $4 AND c.ts < $5))[1],
+		MAX(c.high) FILTER (WHERE c.ts >= $4 AND c.ts < $5),
+		MIN(c.low) FILTER (WHERE c.ts >= $4 AND c.ts < $5),
+		COALESCE(SUM(c.volume) FILTER (WHERE c.ts >= $4 AND c.ts < $5), 0),
+		COALESCE(SUM(c.volume) FILTER (WHERE c.ts < $4), 0),
+		(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts < $4))[1],
+		COALESCE(SUM(c.volume) FILTER (WHERE c.ts >= $5), 0),
+		(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts >= $5))[1]
+	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+	WHERE s.symbol = $1 AND c.timeframe = 'M1' AND c.ts >= $2 AND c.ts < $3
 `
 
 func (r *CandleRepository) GetIntradaySessions(ctx context.Context, symbol string) (domain.IntradaySnapshot, error) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return domain.IntradaySnapshot{}, fmt.Errorf("loading America/New_York location: %w", err)
+	}
+	nowET := time.Now().In(loc)
+	dayStart := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 0, 0, 0, 0, loc)
+	dayEnd := dayStart.Add(24 * time.Hour)
+	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
+	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
+
 	snap := domain.IntradaySnapshot{Symbol: symbol}
 	var open, high, low, preClose, postClose *float64
-	err := r.pool.QueryRow(ctx, intradaySessionsSQL, symbol).Scan(
+	err = r.pool.QueryRow(ctx, intradaySessionsSQL, symbol, dayStart, dayEnd, marketOpen, marketClose).Scan(
 		&open, &high, &low, &snap.DayVolume,
 		&snap.PreMarketVolume, &preClose,
 		&snap.PostMarketVolume, &postClose,
