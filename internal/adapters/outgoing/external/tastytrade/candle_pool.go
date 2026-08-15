@@ -283,6 +283,54 @@ func (p *CandlePool) StopAllLive(ctx context.Context) {
 	log.Info().Int("symbols", len(stopped)).Msg("stopped all live M1 subscriptions for the maintenance window")
 }
 
+// CloseAllConnections desuscribe todo lo que haya ocupado en cada canal y
+// cierra las conexiones fisicas del pool sin esperar -- se usa en las
+// fronteras D1->H1->M1 del barrido nocturno para que cada fase arranque
+// con cero sesiones abiertas ante TastyTrade, en vez de arrastrar las
+// conexiones que uso la fase anterior justo cuando la siguiente intenta
+// abrir varias de golpe (confirmado en vivo: asi se supero el limite de
+// sesiones de TastyTrade durante un rollout de M1 rapido). DxLinkConn.Close
+// marca cada conexion como cierre intencional para que no dispare su
+// propia reconexion automatica.
+func (p *CandlePool) CloseAllConnections() {
+	conns := p.allocator.drainAll()
+
+	p.dispatchMu.Lock()
+	p.dispatch = make(map[string]dispatchEntry)
+	p.dispatchMu.Unlock()
+
+	p.liveMu.Lock()
+	p.liveSubs = make(map[string]func(domain.Candle))
+	p.liveMu.Unlock()
+
+	p.currentMu.Lock()
+	p.current = make(map[string]domain.Candle)
+	p.currentMu.Unlock()
+
+	for _, pc := range conns {
+		pc.mu.Lock()
+		channels := append([]*pooledChannel(nil), pc.channels...)
+		pc.mu.Unlock()
+
+		for _, ch := range channels {
+			ch.mu.Lock()
+			keys := make([]string, 0, len(ch.symbols))
+			for key := range ch.symbols {
+				keys = append(keys, key)
+			}
+			ch.mu.Unlock()
+			for _, key := range keys {
+				if symbol, tf, ok := parseCandleKey(key); ok {
+					_ = ch.channel.unsubscribe(symbol, tf)
+				}
+			}
+		}
+		pc.conn.Close()
+	}
+
+	log.Info().Int("connections", len(conns)).Msg("closed all dxlink connections at phase boundary")
+}
+
 // hasLiveSub dice si un simbolo ya tiene una suscripcion M1 en vivo activa.
 func (p *CandlePool) hasLiveSub(symbol string) bool {
 	p.liveMu.Lock()

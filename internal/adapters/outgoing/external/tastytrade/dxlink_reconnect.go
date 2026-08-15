@@ -33,6 +33,9 @@ func (c *DxLinkConn) handleDisconnect(ctx context.Context) {
 // solo alarga el delay hasta el techo, nunca deja la conexion muerta para
 // siempre sin reintentar.
 func (c *DxLinkConn) scheduleReconnect(ctx context.Context) {
+	if c.closing.Load() {
+		return
+	}
 	c.reconnectMu.Lock()
 	if c.reconnecting {
 		c.reconnectMu.Unlock()

@@ -112,6 +112,17 @@ func (a *channelAllocator) connectionWithRoomForChannel() *pooledConnection {
 	return nil
 }
 
+// drainAll saca todas las conexiones del pool y lo deja vacio -- la
+// proxima allocate() arranca desde cero, abriendo conexiones nuevas segun
+// haga falta en vez de reusar las que trae el llamador.
+func (a *channelAllocator) drainAll() []*pooledConnection {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	conns := a.connections
+	a.connections = nil
+	return conns
+}
+
 func (a *channelAllocator) connectionCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()

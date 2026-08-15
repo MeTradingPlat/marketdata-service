@@ -42,6 +42,8 @@ func (f *fakeGateway) DividendInfo(ctx context.Context, symbols []string) ([]dom
 	return nil, nil
 }
 
+func (f *fakeGateway) ResetLiveConnections() {}
+
 type fakeRepo struct {
 	saved     [][]domain.Candle
 	saveErr   error

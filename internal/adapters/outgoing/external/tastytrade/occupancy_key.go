@@ -23,3 +23,14 @@ func liveSymbolFromKey(key string) (string, bool) {
 	}
 	return strings.TrimSuffix(key, suffix), true
 }
+
+// parseCandleKey es el inverso general de candleKey (cualquier
+// temporalidad, no solo M1) -- lo usa CloseAllConnections para desuscribir
+// lo que quede ocupado en un canal antes de cerrar la conexion completa.
+func parseCandleKey(key string) (symbol string, tf domain.Timeframe, ok bool) {
+	idx := strings.LastIndex(key, "|")
+	if idx < 0 {
+		return "", "", false
+	}
+	return key[:idx], domain.Timeframe(key[idx+1:]), true
+}

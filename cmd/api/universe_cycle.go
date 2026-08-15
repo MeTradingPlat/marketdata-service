@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
@@ -17,29 +16,31 @@ const liveRolloutWorkers = 20
 
 // StartUniverseCycle corre el ciclo completo del universo -- D1 fase 1, H1
 // fase 2, M1 fase 3 -- una vez al arrancar (nada esta en vivo todavia, no
-// hace falta desuscribir nada) y despues en cada ventana de mantenimiento
-// (mercado cerrado): ahi si desuscribe M1 primero, para que el barrido de
-// D1/H1 no compita por conexiones/canales con miles de suscripciones en
-// vivo, y vuelve a suscribir M1 al terminar -- cada simbolo retoma desde
-// su propio watermark, sin hueco real porque el mercado estuvo cerrado.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService) {
+// hace falta desconectar nada) y despues en cada ventana de mantenimiento
+// (mercado cerrado): ahi si cierra todas las conexiones DxLink primero
+// (ver CandlePool.CloseAllConnections, tambien usado entre D1->H1 y H1->M1
+// dentro de RunSweep) para que cada fase arranque con cero sesiones
+// abiertas ante TastyTrade, y vuelve a suscribir M1 al terminar -- cada
+// simbolo retoma desde su propio watermark, sin hueco real porque el
+// mercado estuvo cerrado.
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService) {
 	go func() {
-		runUniverseCycle(ctx, cfg, pool, gateway, symbols, candles, fundamentals, ingest, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now().UTC()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, pool, gateway, symbols, candles, fundamentals, ingest, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, pool *tastytrade.CandlePool, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, firstRun bool) {
 	if !firstRun {
-		pool.StopAllLive(ctx)
+		gateway.ResetLiveConnections()
 	}
 
 	tracked := catchup.RunSweep(ctx, gateway, symbols, candles, ingest, cfg.SweepWorkers)

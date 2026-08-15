@@ -57,6 +57,8 @@ type DxLinkConn struct {
 	lastMessageAtUnixNano atomic.Int64
 
 	onReconnect func(ctx context.Context, c *DxLinkConn)
+
+	closing atomic.Bool
 }
 
 func (c *DxLinkConn) touchLastMessage() {
@@ -130,6 +132,16 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 	c.reconnectAttempts = 0
 	c.reconnectMu.Unlock()
 	return nil
+}
+
+// Close es un cierre INTENCIONAL -- a diferencia de cleanup() (usado por la
+// deteccion de conexion zombie, que SI debe reconectar), esto marca la
+// conexion para que scheduleReconnect no dispare una reconexion automatica.
+// Se usa en las fronteras D1->H1->M1 del barrido para arrancar cada fase
+// con cero sesiones abiertas ante TastyTrade.
+func (c *DxLinkConn) Close() {
+	c.closing.Store(true)
+	c.cleanup()
 }
 
 func (c *DxLinkConn) cleanup() {

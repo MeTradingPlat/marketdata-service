@@ -173,12 +173,20 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sy
 	}
 	runPhase(ctx, ingest, phaseJobs(tracked, domain.D1, withD1), domain.D1, workers)
 
+	// Cierra todas las conexiones DxLink entre fases -- confirmado en vivo
+	// que arrastrar las conexiones de D1 justo cuando H1/M1 abren varias de
+	// golpe puede superar el limite de sesiones concurrentes de TastyTrade.
+	// Cada fase arranca desde cero sesiones.
+	gateway.ResetLiveConnections()
+
 	withH1, err := candles.SymbolsWithData(ctx, domain.H1)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to check which symbols already have H1 data, treating all as uncovered")
 		withH1 = map[string]struct{}{}
 	}
 	runPhase(ctx, ingest, phaseJobs(tracked, domain.H1, withH1), domain.H1, workers)
+
+	gateway.ResetLiveConnections()
 
 	return tracked
 }

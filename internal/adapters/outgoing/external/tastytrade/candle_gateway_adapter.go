@@ -46,3 +46,7 @@ func (g *Gateway) SubscribeLiveCandles(ctx context.Context, symbol string, from 
 func (g *Gateway) CurrentCandle(symbol string) (domain.Candle, bool) {
 	return g.pool.CurrentCandle(symbol)
 }
+
+func (g *Gateway) ResetLiveConnections() {
+	g.pool.CloseAllConnections()
+}
