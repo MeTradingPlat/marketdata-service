@@ -56,15 +56,16 @@ const upsertWatermarkSQL = `
 		last_ts = GREATEST(watermarks.last_ts, EXCLUDED.last_ts), updated_at = now()
 `
 
-// Solo M1 deja watermark aqui -- H1/D1 nativas de TastyTrade no lo
-// necesitan (su frescura ya se puede leer de MAX(ts) en candles via
-// GetWatermark), y escribirlo tambien para ellas competia por la MISMA fila
-// watermarks(symbol_id, 'D1'/'H1') que el job de agregacion, con origenes
-// distintos (nativo vs derivado de M1) mezclados en una sola fila sin
-// distincion. Esa doble escritura era justamente lo que producia el
-// deadlock confirmado en vivo entre Save() y AggregateH1/D1 (ambos
-// intentando actualizar la misma fila al mismo tiempo) -- separar los
-// caminos elimina la colision de raiz en vez de solo reintentarla.
+// Todo timeframe deja watermark aqui ahora -- antes solo M1 lo hacia (la
+// vieja agregacion SQL H1/D1 ya no existe, asi que la fila ya no tiene con
+// quien competir) y D1/H1 se apoyaban en MAX(ts) sobre candles directamente
+// via GetWatermark. Eso resulto ser mucho mas caro de lo que parecia: sin
+// un rango de fecha que acotar, Postgres no puede excluir chunks de la
+// hypertable ni para PLANEAR la consulta (confirmado en vivo: hasta un
+// EXPLAIN sin ejecutar tiraba "out of shared memory" con miles de chunks
+// bloqueados de golpe). watermarks es una tabla chica sin particionar, una
+// fila por simbolo+timeframe -- leerla es una busqueda por clave primaria,
+// nunca toca la hypertable.
 func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) error {
 	if len(candles) == 0 {
 		return nil
@@ -74,20 +75,16 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) er
 		for _, c := range candles {
 			batch.Queue(upsertCandleSQL, c.Symbol, string(c.Timeframe), c.Timestamp,
 				c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source)
-			if c.Timeframe == domain.M1 {
-				batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
-			}
+			batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
 		}
 		results := r.pool.SendBatch(ctx, batch)
 		defer results.Close()
-		for _, c := range candles {
+		for range candles {
 			if _, err := results.Exec(); err != nil {
 				return fmt.Errorf("upserting candle batch: %w", err)
 			}
-			if c.Timeframe == domain.M1 {
-				if _, err := results.Exec(); err != nil {
-					return fmt.Errorf("upserting watermark batch: %w", err)
-				}
+			if _, err := results.Exec(); err != nil {
+				return fmt.Errorf("upserting watermark batch: %w", err)
 			}
 		}
 		return nil
@@ -121,21 +118,27 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 	return candles, rows.Err()
 }
 
-// watermarkSQL solo pide MAX(ts) -- nadie usa el minimo (los dos llamadores
-// reales lo descartan), y calcularlo igual obligaba a Postgres a revisar
-// chunks viejos de la hypertable para encontrar el dato mas antiguo de cada
-// simbolo en vez de resolver todo desde el chunk mas reciente. Con 60
-// workers concurrentes pidiendo watermark de miles de simbolos, esos locks
-// de mas agotaban max_locks_per_transaction y tumbaban el barrido con "out
-// of shared memory".
+// watermarkSQL lee de la tabla watermarks (una fila por simbolo+timeframe,
+// sin particionar) en vez de MAX(ts) sobre la hypertable -- ver el
+// comentario de Save() sobre por que esa version se volvio carisima a esta
+// escala.
 const watermarkSQL = `
-	SELECT MAX(c.ts)
-	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-	WHERE s.symbol = $1 AND c.timeframe = $2
+	SELECT w.last_ts
+	FROM watermarks w JOIN tracked_symbols s ON s.symbol_id = w.symbol_id
+	WHERE s.symbol = $1 AND w.timeframe = $2
 `
 
+// GetWatermark devuelve (nil, nil) si el simbolo+timeframe todavia no tiene
+// ninguna vela guardada -- a diferencia de MAX(ts) sobre la hypertable (que
+// siempre devuelve una fila, con NULL si no hay datos), una consulta comun
+// contra watermarks no devuelve fila si nunca se escribio, asi que
+// pgx.ErrNoRows es el caso normal de "simbolo nuevo", no un error real.
 func (r *CandleRepository) GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error) {
-	if err := r.pool.QueryRow(ctx, watermarkSQL, symbol, string(timeframe)).Scan(&newest); err != nil {
+	err = r.pool.QueryRow(ctx, watermarkSQL, symbol, string(timeframe)).Scan(&newest)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, fmt.Errorf("querying watermark for %s %s: %w", symbol, timeframe, err)
 	}
 	return newest, nil
