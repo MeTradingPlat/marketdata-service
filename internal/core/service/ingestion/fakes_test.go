@@ -57,8 +57,8 @@ func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Time
 	return f.getResult, nil
 }
 
-func (f *fakeRepo) GetWatermark(ctx context.Context, symbol string, tf domain.Timeframe) (*time.Time, *time.Time, error) {
-	return f.watermark, nil, nil
+func (f *fakeRepo) GetWatermark(ctx context.Context, symbol string, tf domain.Timeframe) (*time.Time, error) {
+	return f.watermark, nil
 }
 
 func (f *fakeRepo) SymbolsWithData(ctx context.Context, tf domain.Timeframe) (map[string]struct{}, error) {

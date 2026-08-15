@@ -121,17 +121,24 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 	return candles, rows.Err()
 }
 
+// watermarkSQL solo pide MAX(ts) -- nadie usa el minimo (los dos llamadores
+// reales lo descartan), y calcularlo igual obligaba a Postgres a revisar
+// chunks viejos de la hypertable para encontrar el dato mas antiguo de cada
+// simbolo en vez de resolver todo desde el chunk mas reciente. Con 60
+// workers concurrentes pidiendo watermark de miles de simbolos, esos locks
+// de mas agotaban max_locks_per_transaction y tumbaban el barrido con "out
+// of shared memory".
 const watermarkSQL = `
-	SELECT MAX(c.ts), MIN(c.ts)
+	SELECT MAX(c.ts)
 	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
 	WHERE s.symbol = $1 AND c.timeframe = $2
 `
 
-func (r *CandleRepository) GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest, oldest *time.Time, err error) {
-	if err := r.pool.QueryRow(ctx, watermarkSQL, symbol, string(timeframe)).Scan(&newest, &oldest); err != nil {
-		return nil, nil, fmt.Errorf("querying watermark for %s %s: %w", symbol, timeframe, err)
+func (r *CandleRepository) GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error) {
+	if err := r.pool.QueryRow(ctx, watermarkSQL, symbol, string(timeframe)).Scan(&newest); err != nil {
+		return nil, fmt.Errorf("querying watermark for %s %s: %w", symbol, timeframe, err)
 	}
-	return newest, oldest, nil
+	return newest, nil
 }
 
 const symbolsWithDataSQL = `

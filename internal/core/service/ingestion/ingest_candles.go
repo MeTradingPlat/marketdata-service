@@ -50,7 +50,7 @@ func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, time
 // guardado, no lo repite todo. Este mismo camino es el que usa el catch-up
 // diario, ya no hace falta agregar M1 -> H1/D1 por separado.
 func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error) {
-	newest, _, err := s.repo.GetWatermark(ctx, symbol, timeframe)
+	newest, err := s.repo.GetWatermark(ctx, symbol, timeframe)
 	if err != nil {
 		return nil, fmt.Errorf("checking watermark for %s %s: %w", symbol, timeframe, err)
 	}
@@ -116,7 +116,7 @@ func closedCandles(candles []domain.Candle, tf domain.Timeframe) ([]domain.Candl
 // solo invoca el callback con velas ya cerradas -- el merge de ticks
 // parciales es responsabilidad del adaptador, no de este use case.
 func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) error {
-	newest, _, err := s.repo.GetWatermark(ctx, symbol, domain.M1)
+	newest, err := s.repo.GetWatermark(ctx, symbol, domain.M1)
 	if err != nil {
 		return fmt.Errorf("checking watermark for %s M1: %w", symbol, err)
 	}
