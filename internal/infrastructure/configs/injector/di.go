@@ -12,6 +12,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/metadata"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
@@ -37,6 +38,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideFundamentalsRepository))
 
 	checkErr(container.Provide(provideDiscoveryClient))
+	checkErr(container.Provide(livecandles.NewBroadcaster))
 
 	checkErr(container.Provide(provideOAuth))
 	checkErr(container.Provide(tastytrade.NewQuoteToken))
@@ -56,6 +58,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(handler.NewIntradayHandler))
 	checkErr(container.Provide(handler.NewFundamentalsHandler))
 	checkErr(container.Provide(handler.NewMetadataHandler))
+	checkErr(container.Provide(handler.NewCandleWSHandler))
 
 	checkErr(container.Provide(server.NewServer))
 	checkErr(container.Provide(router.NewRouter))

@@ -8,17 +8,19 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 	"github.com/rs/zerolog/log"
 )
 
 type ingestCandlesService struct {
 	gateway     out.MarketDataGateway
 	repo        out.CandleRepository
+	broadcaster *livecandles.Broadcaster
 	retryBuffer *saveRetryBuffer
 }
 
-func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo, retryBuffer: newSaveRetryBuffer()}
+func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster) in.IngestCandlesService {
+	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, retryBuffer: newSaveRetryBuffer()}
 }
 
 // incrementalMargin son barras de mas antes del watermark que se vuelven a
@@ -130,6 +132,7 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 			log.Error().Err(err).Str("symbol", symbol).Msg("failed to save live candle, buffering for retry")
 			s.retryBuffer.add(c)
 		}
+		s.broadcaster.Publish(c)
 	})
 }
 
