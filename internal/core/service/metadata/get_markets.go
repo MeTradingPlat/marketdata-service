@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 )
@@ -31,18 +31,18 @@ func NewGetMarketsService(symbols out.SymbolRepository) in.GetMarketsService {
 // GetMarkets solo devuelve mercados que de verdad tienen al menos un simbolo
 // rastreado ahora mismo -- mismo "discovery" que hacia Java, en vez de una
 // lista fija que podria anunciar un mercado sin nada real detras.
-func (s *getMarketsService) GetMarkets(ctx context.Context) ([]domain.Market, error) {
+func (s *getMarketsService) GetMarkets(ctx context.Context) ([]dto.Market, error) {
 	mics, err := s.symbols.Markets(ctx)
 	if err != nil {
 		return nil, err
 	}
-	markets := make([]domain.Market, 0, len(mics))
+	markets := make([]dto.Market, 0, len(mics))
 	for _, mic := range mics {
 		name, ok := marketNames[mic]
 		if !ok {
 			name = mic
 		}
-		markets = append(markets, domain.Market{ID: strings.ToLower(mic), Nombre: name})
+		markets = append(markets, dto.Market{ID: strings.ToLower(mic), Nombre: name})
 	}
 	return markets, nil
 }

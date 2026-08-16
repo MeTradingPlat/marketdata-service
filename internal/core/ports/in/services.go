@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 )
 
 type IngestCandlesService interface {
@@ -29,9 +30,9 @@ type GetSymbolsService interface {
 }
 
 type GetMarketsService interface {
-	GetMarkets(ctx context.Context) ([]domain.Market, error)
+	GetMarkets(ctx context.Context) ([]dto.Market, error)
 }
 
 type GetTimeframesService interface {
-	GetTimeframes() []domain.TimeframeInfo
+	GetTimeframes() []dto.TimeframeInfo
 }
