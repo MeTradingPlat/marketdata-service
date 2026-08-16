@@ -133,6 +133,10 @@ const getCandlesSQL = `
 // devolvia siempre las mismas N barras mas recientes, asi que llegar al
 // borde izquierdo nunca traia nada nuevo.
 func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
+	if source, bucket, approxPeriod, ok := timeframe.Aggregation(); ok {
+		return r.getAggregatedCandles(ctx, symbol, timeframe, source, bucket, approxPeriod, bars, before)
+	}
+
 	anchor := before
 	if anchor == nil {
 		newest, err := r.GetWatermark(ctx, symbol, timeframe)
