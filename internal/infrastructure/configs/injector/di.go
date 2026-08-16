@@ -48,7 +48,9 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(ingestion.NewIngestCandlesService))
 	checkErr(container.Provide(ingestion.NewGetCandlesService))
 	checkErr(container.Provide(intraday.NewGetIntradaySnapshotService))
+	checkErr(container.Provide(intraday.NewGetCurrentPricesService))
 	checkErr(container.Provide(fundamentals.NewGetFundamentalsService))
+	checkErr(container.Provide(fundamentals.NewGetFundamentalsRealtimeService))
 	checkErr(container.Provide(metadata.NewGetSymbolsService))
 	checkErr(container.Provide(metadata.NewGetMarketsService))
 	checkErr(container.Provide(metadata.NewGetTimeframesService))
@@ -61,6 +63,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(handler.NewFundamentalsHandler))
 	checkErr(container.Provide(handler.NewMetadataHandler))
 	checkErr(container.Provide(handler.NewCandleWSHandler))
+	checkErr(container.Provide(handler.NewQuotesHandler))
 
 	checkErr(container.Provide(server.NewServer))
 	checkErr(container.Provide(router.NewRouter))

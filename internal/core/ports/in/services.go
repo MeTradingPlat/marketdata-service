@@ -24,8 +24,22 @@ type GetIntradaySnapshotService interface {
 	GetSnapshot(ctx context.Context, symbol string) (domain.IntradaySnapshot, error)
 }
 
+// GetCurrentPricesService es la version liviana de GetIntradaySnapshotService
+// para lotes -- solo precio, sin sesiones del dia. Un simbolo sin precio
+// disponible queda afuera del mapa devuelto, nunca en 0.
+type GetCurrentPricesService interface {
+	GetCurrentPrices(ctx context.Context, symbols []string) map[string]float64
+}
+
 type GetFundamentalsService interface {
 	GetFundamentals(ctx context.Context, symbol string) (domain.Fundamentals, error)
+}
+
+// GetFundamentalsRealtimeService es el contrato en lote que consume
+// signal-processing-service (POST /marketdata/fundamentals/realtime) --
+// un simbolo sin cobertura real simplemente no aparece en el mapa.
+type GetFundamentalsRealtimeService interface {
+	GetFundamentalsRealtime(ctx context.Context, symbols []string) map[string]dto.FundamentalRealtime
 }
 
 type GetSymbolsService interface {

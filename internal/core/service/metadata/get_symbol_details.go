@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"context"
-	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
@@ -57,7 +56,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 
 			TradingStatus: fundamentals.TradingStatus,
 
-			MarketCap:                   liveMarketCap(fundamentals.MarketCap, snapshot),
+			MarketCap:                   domain.LiveMarketCap(fundamentals.MarketCap, snapshot),
 			Eps:                         fundamentals.Eps,
 			Beta:                        fundamentals.Beta,
 			Lendability:                 fundamentals.Lendability,
@@ -68,39 +67,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			ImpliedVolatilityRank:       fundamentals.ImpliedVolatilityRank,
 			ImpliedVolatilityPercentile: fundamentals.ImpliedVolatilityPercentile,
 			NextEarningsDate:            fundamentals.NextEarningsDate,
-			DaysUntilEarnings:           daysUntil(fundamentals.NextEarningsDate),
+			DaysUntilEarnings:           domain.DaysUntil(fundamentals.NextEarningsDate),
 		},
 	}, nil
-}
-
-// liveMarketCap escala el market-cap guardado (de /market-metrics, que
-// TastyTrade solo recalcula de su lado unas pocas veces al dia, ver
-// updated-at en la respuesta real) por cuanto se movio el precio desde
-// entonces -- mismo principio que Java (recomputeMarketCapFromLivePrice),
-// sin necesitar sharesOutstanding: si el precio subio 1%, el market cap
-// tambien, sin importar cuantas acciones haya. Si no hay ancla real
-// (PrevClose o CurrentPrice en 0, simbolo nuevo sin velas todavia) se sirve
-// el valor crudo sin escalar en vez de dividir por cero.
-func liveMarketCap(stored float64, snapshot domain.IntradaySnapshot) float64 {
-	if stored == 0 || snapshot.PrevClose == 0 || snapshot.CurrentPrice == 0 {
-		return stored
-	}
-	return stored * (snapshot.CurrentPrice / snapshot.PrevClose)
-}
-
-// daysUntil calcula dias restantes al vuelo en vez de guardarlo -- guardado
-// se volveria stale al dia siguiente sin un refresco que lo recalcule.
-func daysUntil(isoDate string) int {
-	if isoDate == "" {
-		return 0
-	}
-	target, err := time.Parse("2006-01-02", isoDate)
-	if err != nil {
-		return 0
-	}
-	days := int(time.Until(target).Hours() / 24)
-	if days < 0 {
-		return 0
-	}
-	return days
 }

@@ -115,3 +115,18 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS implied_volatility_rank DOUBLE PR
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS implied_volatility_percentile DOUBLE PRECISION;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS next_earnings_date TEXT;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS metrics_updated_at TIMESTAMPTZ;
+
+-- shares_outstanding/float_shares/short_interest/short_ratio no vienen de
+-- TastyTrade (confirmado contra /market-metrics, /market-data/by-type e
+-- /instruments/equities reales, ninguna los trae) -- vienen de SEC EDGAR
+-- (companyfacts.zip + insider/institutional ownership bulk data) y FINRA
+-- (CSV quincenal de interes en corto). external_updated_at es NULL hasta
+-- que ese refresco corre por primera vez para el simbolo -- distinto de
+-- "corrio y no encontro dato" (que deja la columna en NULL tambien, pero
+-- external_updated_at si queda seteado -- la app distingue por esa fecha,
+-- no por si el valor es NULL).
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS shares_outstanding BIGINT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS float_shares BIGINT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS short_interest DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS short_ratio DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS external_updated_at TIMESTAMPTZ;

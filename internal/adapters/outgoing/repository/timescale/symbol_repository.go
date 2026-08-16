@@ -102,6 +102,32 @@ func (r *SymbolRepository) GetBySymbol(ctx context.Context, symbol string) (doma
 // COUNT(*) OVER() trae el total en la misma consulta, sin un segundo
 // round-trip solo para paginar. La tabla es chica (un symbol_id por fila,
 // no el hypertable de candles), un ILIKE completo no necesita mas.
+const getSymbolsBatchSQL = `SELECT symbol, market, description, is_etf FROM tracked_symbols WHERE symbol = ANY($1)`
+
+// GetBatch es una sola consulta acotada por symbol = ANY($1) -- para
+// /marketdata/fundamentals/realtime, que necesita isEtf/description de
+// potencialmente miles de simbolos de una.
+func (r *SymbolRepository) GetBatch(ctx context.Context, symbols []string) (map[string]domain.Symbol, error) {
+	if len(symbols) == 0 {
+		return map[string]domain.Symbol{}, nil
+	}
+	rows, err := r.pool.Query(ctx, getSymbolsBatchSQL, symbols)
+	if err != nil {
+		return nil, fmt.Errorf("querying symbols batch: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]domain.Symbol, len(symbols))
+	for rows.Next() {
+		var s domain.Symbol
+		if err := rows.Scan(&s.Symbol, &s.Market, &s.Description, &s.IsEtf); err != nil {
+			return nil, fmt.Errorf("scanning symbol batch row: %w", err)
+		}
+		result[s.Symbol] = s
+	}
+	return result, rows.Err()
+}
+
 const searchSymbolsSQL = `
 	SELECT symbol, market, description, is_etf, COUNT(*) OVER() AS total
 	FROM tracked_symbols
