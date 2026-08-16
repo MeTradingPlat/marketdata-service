@@ -13,7 +13,12 @@ import (
 )
 
 const (
-	dividendChunkSize     = 250
+	// dividendChunkSize: 100 es el limite duro real de TastyTrade para
+	// /market-data/by-type (confirmado en el servicio Java, "Limite
+	// estricto de TastyTrade") -- distinto del limite de /market-metrics
+	// (250, ver marketMetricsChunkSize), no la misma cota para los dos
+	// endpoints aunque ambos devuelvan fundamentales.
+	dividendChunkSize     = 100
 	dividendChunkThrottle = 500 * time.Millisecond
 )
 

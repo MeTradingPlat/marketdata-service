@@ -55,7 +55,8 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	}
 
 	startLiveUniverse(ctx, ingest, tracked)
-	catchup.RefreshFundamentals(ctx, gateway, symbols, fundamentals)
+	catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
+	catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
 }
 
 // startLiveUniverse suscribe M1 en vivo para todo el universo con un pool

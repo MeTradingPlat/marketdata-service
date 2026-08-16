@@ -80,6 +80,7 @@ func main() {
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
 		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest)
 		StartSaveRetryLoop(ctx, ingest)
+		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo)
 
 		r.Init()
 		address := fmt.Sprintf(":%s", cfg.ServerPort)
