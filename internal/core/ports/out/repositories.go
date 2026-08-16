@@ -44,6 +44,13 @@ type FundamentalsRepository interface {
 	UpsertMarketMetrics(ctx context.Context, fundamentals []domain.Fundamentals) error
 	// UpsertExternalFundamentals cubre sharesOutstanding/floatShares (SEC
 	// EDGAR) y shortInterest/shortRatio (FINRA) -- fuentes ajenas a
-	// TastyTrade, refrescadas juntas.
+	// TastyTrade, refrescadas juntas. Cada columna usa COALESCE contra el
+	// valor ya guardado, asi que un caller que solo llena un subconjunto de
+	// campos (ej. RefreshBeneficialOwners solo toca floatShares) no borra lo
+	// que puso otro caller.
 	UpsertExternalFundamentals(ctx context.Context, fundamentals []domain.Fundamentals) error
+	// GetSymbolsDueForFloatRefresh trae el lote de simbolos con
+	// sharesOutstanding+insiderShares ya conocidos pero floatShares real
+	// menos reciente -- ver RefreshBeneficialOwners.
+	GetSymbolsDueForFloatRefresh(ctx context.Context, limit int) ([]domain.Fundamentals, error)
 }

@@ -6,6 +6,8 @@ import (
 	"strconv"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
+	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/finra"
+	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/secedgar"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/repository/timescale"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
@@ -39,6 +41,12 @@ func BuildContainer() *dig.Container {
 
 	checkErr(container.Provide(provideDiscoveryClient))
 	checkErr(container.Provide(livecandles.NewBroadcaster))
+
+	checkErr(container.Provide(provideTickerCikLookup))
+	checkErr(container.Provide(provideSharesOutstandingGateway))
+	checkErr(container.Provide(provideInsiderOwnershipGateway))
+	checkErr(container.Provide(provideBeneficialOwnersGateway))
+	checkErr(container.Provide(provideShortInterestGateway))
 
 	checkErr(container.Provide(provideOAuth))
 	checkErr(container.Provide(tastytrade.NewQuoteToken))
@@ -132,4 +140,24 @@ func provideGateway(oauth *tastytrade.OAuth, pool *tastytrade.CandlePool) out.Ma
 
 func provideHealthHandler(pool *tastytrade.CandlePool) *handler.HealthHandler {
 	return handler.NewHealthHandler(pool)
+}
+
+func provideTickerCikLookup(cfg *configs.Config) *secedgar.TickerCikLookup {
+	return secedgar.NewTickerCikLookup(cfg.SecEdgarCacheDir)
+}
+
+func provideSharesOutstandingGateway(cfg *configs.Config, tickerCik *secedgar.TickerCikLookup) out.SharesOutstandingGateway {
+	return secedgar.NewEdgarClient(tickerCik, cfg.SecEdgarCacheDir)
+}
+
+func provideInsiderOwnershipGateway(cfg *configs.Config) out.InsiderOwnershipGateway {
+	return secedgar.NewInsiderOwnershipClient(cfg.SecEdgarCacheDir)
+}
+
+func provideBeneficialOwnersGateway(tickerCik *secedgar.TickerCikLookup) out.BeneficialOwnersGateway {
+	return secedgar.NewBeneficialOwnersClient(tickerCik)
+}
+
+func provideShortInterestGateway() out.ShortInterestGateway {
+	return finra.NewClient()
 }

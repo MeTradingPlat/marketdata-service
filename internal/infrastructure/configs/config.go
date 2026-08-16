@@ -28,6 +28,8 @@ type Config struct {
 
 	EurekaHost string
 	EurekaPort string
+
+	SecEdgarCacheDir string
 }
 
 func Load() *Config {
@@ -46,6 +48,7 @@ func Load() *Config {
 	viper.SetDefault("DB_MAX_CONNS", 25)
 	viper.SetDefault("EUREKA_HOST", "directory")
 	viper.SetDefault("EUREKA_PORT", "8761")
+	viper.SetDefault("SEC_EDGAR_CACHE_DIR", "/app/secedgar-cache")
 
 	return &Config{
 		ServerPort:               viper.GetString("SERVER_PORT"),
@@ -66,5 +69,6 @@ func Load() *Config {
 		DBMaxConns:               viper.GetInt("DB_MAX_CONNS"),
 		EurekaHost:               viper.GetString("EUREKA_HOST"),
 		EurekaPort:               viper.GetString("EUREKA_PORT"),
+		SecEdgarCacheDir:         viper.GetString("SEC_EDGAR_CACHE_DIR"),
 	}
 }

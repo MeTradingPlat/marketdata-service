@@ -45,4 +45,14 @@ type Fundamentals struct {
 	ShortInterest     *float64   `json:"-"`
 	ShortRatio        *float64   `json:"-"`
 	ExternalUpdatedAt *time.Time `json:"-"`
+
+	// InsiderShares/InsiderCiks son intermedios para calcular floatShares
+	// real (ver RefreshBeneficialOwners) -- nunca se exponen en
+	// /marketdata/fundamentals/realtime, signal-processing-service no los
+	// pide. FloatUpdatedAt solo se toca cuando floatShares pasa de
+	// heuristico (90% de sharesOutstanding) a real (SEC EDGAR), para poder
+	// rotar por "el que hace mas tiempo no se refresca de verdad".
+	InsiderShares  *int64     `json:"-"`
+	InsiderCiks    []string   `json:"-"`
+	FloatUpdatedAt *time.Time `json:"-"`
 }

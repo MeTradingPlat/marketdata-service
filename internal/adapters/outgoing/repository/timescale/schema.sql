@@ -130,3 +130,13 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS float_shares BIGINT;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS short_interest DOUBLE PRECISION;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS short_ratio DOUBLE PRECISION;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS external_updated_at TIMESTAMPTZ;
+-- insider_shares/insider_ciks son intermedios de RefreshExternalFundamentals
+-- (Form 3/4/5 bulk) que RefreshBeneficialOwners lee despues para calcular
+-- floatShares real sin restar dos veces la posicion de un insider que
+-- tambien sea holder 5%+. float_updated_at solo se toca cuando floatShares
+-- pasa de heuristico (90% de sharesOutstanding) a real, para poder rotar
+-- por "el que hace mas tiempo no se refresca de verdad" (ver
+-- GetSymbolsDueForFloatRefresh).
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS insider_shares BIGINT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS insider_ciks TEXT[];
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS float_updated_at TIMESTAMPTZ;

@@ -182,19 +182,26 @@ func (r *FundamentalsRepository) UpsertMarketMetrics(ctx context.Context, fundam
 	return nil
 }
 
-// upsertExternalFundamentalsSQL cubre shares_outstanding/float_shares
-// (SEC EDGAR) y short_interest/short_ratio (FINRA) -- fuentes externas a
-// TastyTrade, refrescadas juntas en el barrido nocturno pero con su propio
-// external_updated_at para distinguir "nunca corrio" de "corrio y no hubo
-// dato" en ese simbolo puntual.
+// upsertExternalFundamentalsSQL cubre shares_outstanding/float_shares (SEC
+// EDGAR), short_interest/short_ratio (FINRA), e insider_shares/insider_ciks
+// (SEC EDGAR insider bulk) -- tres fuentes independientes que llaman a este
+// mismo upsert cada una con su propio subconjunto de columnas lleno. Cada
+// columna usa COALESCE contra el valor ya guardado (no EXCLUDED a secas):
+// sin esto, RefreshBeneficialOwners (que solo llena floatShares) borraria
+// el shortInterest que puso FINRA la noche anterior, y viceversa.
+// external_updated_at si se pisa siempre -- representa "algo externo se
+// refresco", no un campo puntual.
 const upsertExternalFundamentalsSQL = `
-	INSERT INTO dividends (symbol_id, shares_outstanding, float_shares, short_interest, short_ratio, external_updated_at)
-	SELECT symbol_id, $2, $3, $4, $5, now() FROM tracked_symbols WHERE symbol = $1
+	INSERT INTO dividends (symbol_id, shares_outstanding, float_shares, short_interest, short_ratio, insider_shares, insider_ciks, float_updated_at, external_updated_at)
+	SELECT symbol_id, $2, $3, $4, $5, $6, $7, $8, now() FROM tracked_symbols WHERE symbol = $1
 	ON CONFLICT (symbol_id) DO UPDATE SET
-		shares_outstanding = EXCLUDED.shares_outstanding,
-		float_shares = EXCLUDED.float_shares,
-		short_interest = EXCLUDED.short_interest,
-		short_ratio = EXCLUDED.short_ratio,
+		shares_outstanding = COALESCE(EXCLUDED.shares_outstanding, dividends.shares_outstanding),
+		float_shares = COALESCE(EXCLUDED.float_shares, dividends.float_shares),
+		short_interest = COALESCE(EXCLUDED.short_interest, dividends.short_interest),
+		short_ratio = COALESCE(EXCLUDED.short_ratio, dividends.short_ratio),
+		insider_shares = COALESCE(EXCLUDED.insider_shares, dividends.insider_shares),
+		insider_ciks = COALESCE(EXCLUDED.insider_ciks, dividends.insider_ciks),
+		float_updated_at = COALESCE(EXCLUDED.float_updated_at, dividends.float_updated_at),
 		external_updated_at = EXCLUDED.external_updated_at
 `
 
@@ -204,7 +211,8 @@ func (r *FundamentalsRepository) UpsertExternalFundamentals(ctx context.Context,
 	}
 	batch := &pgx.Batch{}
 	for _, f := range fundamentals {
-		batch.Queue(upsertExternalFundamentalsSQL, f.Symbol, f.SharesOutstanding, f.FloatShares, f.ShortInterest, f.ShortRatio)
+		batch.Queue(upsertExternalFundamentalsSQL, f.Symbol, f.SharesOutstanding, f.FloatShares, f.ShortInterest, f.ShortRatio,
+			f.InsiderShares, f.InsiderCiks, f.FloatUpdatedAt)
 	}
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()
@@ -214,4 +222,36 @@ func (r *FundamentalsRepository) UpsertExternalFundamentals(ctx context.Context,
 		}
 	}
 	return nil
+}
+
+// getSymbolsDueForFloatRefreshSQL trae el lote de simbolos con
+// sharesOutstanding+insiderShares ya conocidos (condicion para poder
+// calcular floatShares real) ordenados por float_updated_at ascendente --
+// NULLS FIRST prioriza los que todavia solo tienen el heuristico del 90%,
+// nunca refrescados a real. Ver RefreshBeneficialOwners.
+const getSymbolsDueForFloatRefreshSQL = `
+	SELECT s.symbol, d.shares_outstanding, d.insider_shares, d.insider_ciks
+	FROM tracked_symbols s
+	JOIN dividends d ON d.symbol_id = s.symbol_id
+	WHERE s.is_active = TRUE AND d.shares_outstanding IS NOT NULL AND d.insider_shares IS NOT NULL
+	ORDER BY d.float_updated_at ASC NULLS FIRST
+	LIMIT $1
+`
+
+func (r *FundamentalsRepository) GetSymbolsDueForFloatRefresh(ctx context.Context, limit int) ([]domain.Fundamentals, error) {
+	rows, err := r.pool.Query(ctx, getSymbolsDueForFloatRefreshSQL, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying symbols due for float refresh: %w", err)
+	}
+	defer rows.Close()
+
+	var result []domain.Fundamentals
+	for rows.Next() {
+		f := domain.Fundamentals{}
+		if err := rows.Scan(&f.Symbol, &f.SharesOutstanding, &f.InsiderShares, &f.InsiderCiks); err != nil {
+			return nil, fmt.Errorf("scanning float refresh candidate row: %w", err)
+		}
+		result = append(result, f)
+	}
+	return result, rows.Err()
 }
