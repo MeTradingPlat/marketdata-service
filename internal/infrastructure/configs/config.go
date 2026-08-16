@@ -48,7 +48,12 @@ func Load() *Config {
 	viper.SetDefault("DB_MAX_CONNS", 25)
 	viper.SetDefault("EUREKA_HOST", "directory")
 	viper.SetDefault("EUREKA_PORT", "8761")
-	viper.SetDefault("SEC_EDGAR_CACHE_DIR", "/app/secedgar-cache")
+	// El contenedor corre como usuario no-root "app" sin permiso de escritura
+	// sobre /app (confirmado en vivo: MkdirAll fallaba con permission denied,
+	// silenciosamente reduciendo el refresco de SEC EDGAR/insiders a un
+	// no-op para las 13k+ simbolos del universo) -- /tmp si es escribible
+	// para cualquier usuario (sticky bit 1777).
+	viper.SetDefault("SEC_EDGAR_CACHE_DIR", "/tmp/secedgar-cache")
 
 	return &Config{
 		ServerPort:               viper.GetString("SERVER_PORT"),

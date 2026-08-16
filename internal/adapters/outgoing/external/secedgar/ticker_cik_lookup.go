@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const tickersURL = "https://www.sec.gov/files/company_tickers.json"
@@ -43,6 +45,11 @@ func (l *TickerCikLookup) TickerToCikMap(ctx context.Context) map[string]int {
 
 	m, err := l.loadCachedOrDownload(ctx)
 	if err != nil {
+		// Sin este log, un fallo aca (ej. permiso denegado sobre cacheDir,
+		// confirmado en vivo una vez) reduce sharesOutstanding/insiders a
+		// un no-op silencioso para el universo entero -- symbols=0 en el
+		// log del caller sin ninguna pista de por que.
+		log.Error().Err(err).Str("cacheDir", l.cacheDir).Msg("sec edgar ticker->CIK lookup failed")
 		l.lastFailureAt = time.Now()
 		return map[string]int{}
 	}

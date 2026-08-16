@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/rs/zerolog/log"
 )
 
 const insiderZipURLTemplate = "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/%dq%d_form345.zip"
@@ -36,7 +37,11 @@ func (c *InsiderOwnershipClient) FetchInsiderShares(ctx context.Context, symbols
 	}
 
 	zipFiles, err := c.ensureCachedZips(ctx, insiderLookbackQuarters)
-	if err != nil || len(zipFiles) == 0 {
+	if err != nil {
+		log.Error().Err(err).Str("cacheDir", c.cacheDir).Msg("sec insider ownership zips unavailable")
+		return map[string]domain.InsiderOwnership{}
+	}
+	if len(zipFiles) == 0 {
 		return map[string]domain.InsiderOwnership{}
 	}
 	return parseInsiderHoldings(zipFiles, targets)

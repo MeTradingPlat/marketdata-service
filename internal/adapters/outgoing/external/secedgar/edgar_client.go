@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 const bulkFactsURL = "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip"
@@ -51,6 +53,7 @@ func (c *EdgarClient) FetchSharesOutstanding(ctx context.Context, symbols []stri
 
 	zipPath, err := c.ensureCachedZip(ctx)
 	if err != nil {
+		log.Error().Err(err).Str("cacheDir", c.cacheDir).Msg("sec edgar companyfacts.zip unavailable")
 		return map[string]int64{}
 	}
 	return parseCompanyFactsZip(zipPath, cikToSymbols, totalTargets)
