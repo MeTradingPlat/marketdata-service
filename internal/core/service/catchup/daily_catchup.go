@@ -12,19 +12,37 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const postMidnightDelay = 5 * time.Minute
+const (
+	postCloseDelay = 5 * time.Minute
+	// marketCloseHourET es el fin del post-market extendido -- despues de
+	// esto no llegan ticks nuevos hasta el pre-market del dia siguiente.
+	marketCloseHourET = 20
+)
 
-// NextMaintenanceWindowAt es la proxima medianoche UTC (+5min de margen) --
-// cae comodamente dentro del cierre del mercado estadounidense, la hora sin
-// movimiento que aprovecha RunSweep para no competir con el streaming en
-// vivo (ver CandlePool.StopAllLive).
+// NextMaintenanceWindowAt es la proxima vez que el mercado (post-market
+// extendido incluido) lleva postCloseDelay sin actividad -- se calcula en
+// hora de Nueva York, no UTC. Con UTC fijo la ventana caia a medianoche UTC,
+// que en horario estandar (EST, invierno) son las 7pm ET: todavia dentro
+// del post-market real, compitiendo con RunSweep por las mismas conexiones
+// DxLink en vez de esperar a que el mercado este de verdad inactivo (ver
+// CandlePool.StopAllLive).
 func NextMaintenanceWindowAt(now time.Time) time.Time {
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	next := midnight.Add(postMidnightDelay)
-	if !next.After(now) {
-		next = next.Add(24 * time.Hour)
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		next := midnight.Add(postCloseDelay)
+		if !next.After(now) {
+			next = next.Add(24 * time.Hour)
+		}
+		return next
 	}
-	return next
+
+	nowET := now.In(loc)
+	target := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), marketCloseHourET, 0, 0, 0, loc).Add(postCloseDelay)
+	if !target.After(nowET) {
+		target = target.AddDate(0, 0, 1)
+	}
+	return target
 }
 
 // reconcileUniverse trae el universo activo real de TastyTrade antes de

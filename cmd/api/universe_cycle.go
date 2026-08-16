@@ -34,7 +34,7 @@ func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Ma
 	go func() {
 		runUniverseCycle(ctx, cfg, gateway, symbols, candles, ingest, true)
 		for {
-			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now().UTC()))
+			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
