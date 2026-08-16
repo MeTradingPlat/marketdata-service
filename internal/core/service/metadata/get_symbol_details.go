@@ -57,7 +57,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 
 			TradingStatus: fundamentals.TradingStatus,
 
-			MarketCap:                   fundamentals.MarketCap,
+			MarketCap:                   liveMarketCap(fundamentals.MarketCap, snapshot),
 			Eps:                         fundamentals.Eps,
 			Beta:                        fundamentals.Beta,
 			Lendability:                 fundamentals.Lendability,
@@ -71,6 +71,21 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			DaysUntilEarnings:           daysUntil(fundamentals.NextEarningsDate),
 		},
 	}, nil
+}
+
+// liveMarketCap escala el market-cap guardado (de /market-metrics, que
+// TastyTrade solo recalcula de su lado unas pocas veces al dia, ver
+// updated-at en la respuesta real) por cuanto se movio el precio desde
+// entonces -- mismo principio que Java (recomputeMarketCapFromLivePrice),
+// sin necesitar sharesOutstanding: si el precio subio 1%, el market cap
+// tambien, sin importar cuantas acciones haya. Si no hay ancla real
+// (PrevClose o CurrentPrice en 0, simbolo nuevo sin velas todavia) se sirve
+// el valor crudo sin escalar en vez de dividir por cero.
+func liveMarketCap(stored float64, snapshot domain.IntradaySnapshot) float64 {
+	if stored == 0 || snapshot.PrevClose == 0 || snapshot.CurrentPrice == 0 {
+		return stored
+	}
+	return stored * (snapshot.CurrentPrice / snapshot.PrevClose)
 }
 
 // daysUntil calcula dias restantes al vuelo en vez de guardarlo -- guardado
