@@ -60,7 +60,18 @@ func mergeFormingCandle(snap *domain.IntradaySnapshot, current domain.Candle) {
 	if err != nil {
 		return
 	}
-	nowET := current.Timestamp.In(loc)
+
+	nowET := time.Now().In(loc)
+	currentET := current.Timestamp.In(loc)
+	// p.current se vacia por completo en cada frontera del barrido nocturno,
+	// pero justo despues de medianoche (ET) puede seguir viva la ultima vela
+	// de AYER hasta que llegue el primer tick real de hoy -- sin este chequeo
+	// esa vela se clasificaria igual (post-market de ayer) pero mezclada
+	// dentro del snapshot de HOY, que la query SQL ya calculo vacio.
+	if currentET.Year() != nowET.Year() || currentET.YearDay() != nowET.YearDay() {
+		return
+	}
+
 	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
 	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
 
