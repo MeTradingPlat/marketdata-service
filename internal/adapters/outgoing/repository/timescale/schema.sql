@@ -16,6 +16,17 @@ CREATE TABLE IF NOT EXISTS tracked_symbols (
 ALTER TABLE tracked_symbols ADD COLUMN IF NOT EXISTS is_etf BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE tracked_symbols ADD COLUMN IF NOT EXISTS description VARCHAR(500) NOT NULL DEFAULT '';
 
+-- last_volume/last_volume_ts denormalizan el volumen del D1 mas reciente de
+-- cada simbolo directo en tracked_symbols -- para ordenar /symbols/search
+-- por volumen (mas relevante que alfabetico para un screener) sin tocar el
+-- hypertable candles en cada busqueda. Se actualiza en Save() solo con
+-- velas D1, comparando contra last_volume_ts para no dejar que un
+-- re-fetch nocturno mas viejo (ver incrementalMargin) pise el valor mas
+-- reciente si llega en otro orden dentro del mismo batch.
+ALTER TABLE tracked_symbols ADD COLUMN IF NOT EXISTS last_volume BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE tracked_symbols ADD COLUMN IF NOT EXISTS last_volume_ts TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_tracked_symbols_volume ON tracked_symbols (last_volume DESC);
+
 -- OHLC/VWAP en DOUBLE PRECISION, no NUMERIC(18,6) -- mismo tipo que Go ya
 -- usa internamente (float64), y algunos penny stocks reportan barras
 -- historicas pre-reverse-split con valores que exceden el rango de

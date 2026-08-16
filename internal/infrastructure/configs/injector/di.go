@@ -52,6 +52,8 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(metadata.NewGetSymbolsService))
 	checkErr(container.Provide(metadata.NewGetMarketsService))
 	checkErr(container.Provide(metadata.NewGetTimeframesService))
+	checkErr(container.Provide(metadata.NewSearchSymbolsService))
+	checkErr(container.Provide(metadata.NewGetSymbolDetailsService))
 
 	checkErr(container.Provide(handler.NewCandlesHandler))
 	checkErr(container.Provide(provideHealthHandler))

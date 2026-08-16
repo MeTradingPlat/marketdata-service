@@ -22,6 +22,10 @@ type CandleRepository interface {
 type SymbolRepository interface {
 	Upsert(ctx context.Context, symbols []domain.Symbol) error
 	Tracked(ctx context.Context) ([]domain.Symbol, error)
+	GetBySymbol(ctx context.Context, symbol string) (domain.Symbol, error)
+	// Search ordena por last_volume descendente (ver Save() en el
+	// repositorio) en vez de alfabetico -- mas relevante para un screener.
+	Search(ctx context.Context, query string, markets []string, page, size int) (symbols []domain.Symbol, totalElements int64, err error)
 	Deactivate(ctx context.Context, symbols []string) error
 	Markets(ctx context.Context) ([]string, error)
 }

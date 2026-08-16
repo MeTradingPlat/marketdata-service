@@ -29,6 +29,14 @@ type GetSymbolsService interface {
 	GetSymbols(ctx context.Context, markets []string) ([]domain.Symbol, error)
 }
 
+type SearchSymbolsService interface {
+	Search(ctx context.Context, query string, markets []string, page, size int) (dto.PaginatedResponse[domain.Symbol], error)
+}
+
+type GetSymbolDetailsService interface {
+	GetSymbolDetails(ctx context.Context, symbol string) (dto.SymbolDetails, error)
+}
+
 type GetMarketsService interface {
 	GetMarkets(ctx context.Context) ([]dto.Market, error)
 }

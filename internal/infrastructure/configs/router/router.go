@@ -29,6 +29,8 @@ func (r *Router) Init() {
 	r.echo.GET("/marketdata/intraday/:symbol", r.intraday.GetSnapshot)
 	r.echo.GET("/marketdata/fundamentals/:symbol", r.fundamentals.GetFundamentals)
 	r.echo.GET("/marketdata/symbols", r.metadata.GetSymbols)
+	r.echo.GET("/marketdata/symbols/search", r.metadata.SearchSymbols)
+	r.echo.GET("/marketdata/symbols/:symbol/details", r.metadata.GetSymbolDetails)
 	r.echo.GET("/marketdata/markets", r.metadata.GetMarkets)
 	r.echo.GET("/marketdata/timeframes", r.metadata.GetTimeframes)
 	r.echo.GET("/ws/candles", r.candleWS.Handle)

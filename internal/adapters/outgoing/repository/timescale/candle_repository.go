@@ -56,6 +56,15 @@ const upsertWatermarkSQL = `
 		last_ts = GREATEST(watermarks.last_ts, EXCLUDED.last_ts), updated_at = now()
 `
 
+// updateLastVolumeSQL solo se encola para velas D1 -- la comparacion contra
+// last_volume_ts evita que el re-fetch defensivo del catch-up nocturno
+// (10 dias hacia atras, ver incrementalMargin) pise el volumen mas
+// reciente con uno mas viejo si llega despues en el mismo batch.
+const updateLastVolumeSQL = `
+	UPDATE tracked_symbols SET last_volume = $2, last_volume_ts = $3
+	WHERE symbol = $1 AND (last_volume_ts IS NULL OR last_volume_ts < $3)
+`
+
 // Todo timeframe deja watermark aqui ahora -- antes solo M1 lo hacia (la
 // vieja agregacion SQL H1/D1 ya no existe, asi que la fila ya no tiene con
 // quien competir) y D1/H1 se apoyaban en MAX(ts) sobre candles directamente
@@ -76,15 +85,23 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) er
 			batch.Queue(upsertCandleSQL, c.Symbol, string(c.Timeframe), c.Timestamp,
 				c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source)
 			batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
+			if c.Timeframe == domain.D1 {
+				batch.Queue(updateLastVolumeSQL, c.Symbol, c.Volume, c.Timestamp)
+			}
 		}
 		results := r.pool.SendBatch(ctx, batch)
 		defer results.Close()
-		for range candles {
+		for _, c := range candles {
 			if _, err := results.Exec(); err != nil {
 				return fmt.Errorf("upserting candle batch: %w", err)
 			}
 			if _, err := results.Exec(); err != nil {
 				return fmt.Errorf("upserting watermark batch: %w", err)
+			}
+			if c.Timeframe == domain.D1 {
+				if _, err := results.Exec(); err != nil {
+					return fmt.Errorf("updating last volume: %w", err)
+				}
 			}
 		}
 		return nil
