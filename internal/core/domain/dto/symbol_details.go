@@ -2,10 +2,9 @@ package dto
 
 import "github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 
-// SymbolDetails combina Symbol + Fundamentals en la forma que espera
-// GET /marketdata/symbols/{symbol}/details -- envelope de respuesta puro,
-// ninguno de los dos tipos que envuelve cambia.
+// SymbolDetails combina Symbol + FundamentalData en la forma que espera
+// GET /marketdata/symbols/{symbol}/details -- envelope de respuesta puro.
 type SymbolDetails struct {
-	ActiveEquity    domain.Symbol       `json:"activeEquity"`
-	FundamentalData domain.Fundamentals `json:"fundamentalData"`
+	ActiveEquity    domain.Symbol   `json:"activeEquity"`
+	FundamentalData FundamentalData `json:"fundamentalData"`
 }
