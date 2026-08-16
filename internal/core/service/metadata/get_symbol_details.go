@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
@@ -43,6 +44,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 		FundamentalData: dto.FundamentalData{
 			Symbol:            symbol,
 			IsEtf:             fundamentals.IsEtf,
+			SecurityType:      domain.ClassifySecurityType(symbol, equity.IsEtf, equity.Description),
 			DividendAmount:    fundamentals.DividendAmount,
 			DividendFrequency: fundamentals.DividendFrequency,
 			DayVolume:         snapshot.DayVolume,
@@ -52,6 +54,38 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			PrevClose:         snapshot.PrevClose,
 			PreMarketVolume:   snapshot.PreMarketVolume,
 			PostMarketVolume:  snapshot.PostMarketVolume,
+
+			TradingStatus: fundamentals.TradingStatus,
+
+			MarketCap:                   fundamentals.MarketCap,
+			Eps:                         fundamentals.Eps,
+			Beta:                        fundamentals.Beta,
+			Lendability:                 fundamentals.Lendability,
+			BorrowRate:                  fundamentals.BorrowRate,
+			Liquidity:                   fundamentals.Liquidity,
+			LiquidityRating:             fundamentals.LiquidityRating,
+			ImpliedVolatilityIndex:      fundamentals.ImpliedVolatilityIndex,
+			ImpliedVolatilityRank:       fundamentals.ImpliedVolatilityRank,
+			ImpliedVolatilityPercentile: fundamentals.ImpliedVolatilityPercentile,
+			NextEarningsDate:            fundamentals.NextEarningsDate,
+			DaysUntilEarnings:           daysUntil(fundamentals.NextEarningsDate),
 		},
 	}, nil
+}
+
+// daysUntil calcula dias restantes al vuelo en vez de guardarlo -- guardado
+// se volveria stale al dia siguiente sin un refresco que lo recalcule.
+func daysUntil(isoDate string) int {
+	if isoDate == "" {
+		return 0
+	}
+	target, err := time.Parse("2006-01-02", isoDate)
+	if err != nil {
+		return 0
+	}
+	days := int(time.Until(target).Hours() / 24)
+	if days < 0 {
+		return 0
+	}
+	return days
 }

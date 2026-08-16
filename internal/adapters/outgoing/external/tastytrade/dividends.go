@@ -23,6 +23,9 @@ type marketDataResponse struct {
 			Symbol            string  `json:"symbol"`
 			DividendAmount    *string `json:"dividend-amount"`
 			DividendFrequency *string `json:"dividend-frequency"`
+			IsTradingHalted   *bool   `json:"is-trading-halted"`
+			HaltStartTime     *int64  `json:"halt-start-time"`
+			HaltEndTime       *int64  `json:"halt-end-time"`
 		} `json:"items"`
 	} `json:"data"`
 }
@@ -81,9 +84,29 @@ func (g *Gateway) fetchDividendChunk(ctx context.Context, symbols []string) ([]d
 			Symbol:            item.Symbol,
 			DividendAmount:    parseFloatOrZero(item.DividendAmount),
 			DividendFrequency: parseFloatOrZero(item.DividendFrequency),
+			TradingStatus:     tradingStatusOf(item.IsTradingHalted),
+			HaltStartTime:     int64Or(item.HaltStartTime, -1),
+			HaltEndTime:       int64Or(item.HaltEndTime, -1),
 		})
 	}
 	return result, nil
+}
+
+// tradingStatusOf sigue el mismo mapeo que ya probo el servicio Java contra
+// is-trading-halted real -- ausente en la respuesta (nil) es distinto de
+// "false" pero para nuestro caso ambos significan lo mismo: activo.
+func tradingStatusOf(halted *bool) string {
+	if halted != nil && *halted {
+		return "HALTED"
+	}
+	return "ACTIVE"
+}
+
+func int64Or(v *int64, fallback int64) int64 {
+	if v == nil {
+		return fallback
+	}
+	return *v
 }
 
 func parseFloatOrZero(s *string) float64 {

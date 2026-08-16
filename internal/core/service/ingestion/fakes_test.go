@@ -42,6 +42,10 @@ func (f *fakeGateway) DividendInfo(ctx context.Context, symbols []string) ([]dom
 	return nil, nil
 }
 
+func (f *fakeGateway) MarketMetrics(ctx context.Context, symbols []string) ([]domain.Fundamentals, error) {
+	return nil, nil
+}
+
 func (f *fakeGateway) ResetLiveConnections() {}
 
 type fakeRepo struct {

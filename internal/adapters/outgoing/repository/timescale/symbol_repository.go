@@ -136,6 +136,38 @@ func (r *SymbolRepository) Search(ctx context.Context, query string, markets []s
 	return symbols, total, rows.Err()
 }
 
+// topSymbolsPerMarketSQL usa el mismo last_volume ya denormalizado que
+// ordena /symbols/search (ver Save()) para elegir, por mercado, los
+// simbolos con mas actividad real -- ni una fila nueva, ni tocar el
+// hypertable de candles.
+const topSymbolsPerMarketSQL = `
+	SELECT symbol, market, description, is_etf FROM (
+		SELECT symbol, market, description, is_etf,
+			ROW_NUMBER() OVER (PARTITION BY market ORDER BY last_volume DESC, symbol ASC) AS rank
+		FROM tracked_symbols
+		WHERE is_active = TRUE
+	) ranked
+	WHERE rank <= $1
+`
+
+func (r *SymbolRepository) TopSymbolsPerMarket(ctx context.Context, n int) ([]domain.Symbol, error) {
+	rows, err := r.pool.Query(ctx, topSymbolsPerMarketSQL, n)
+	if err != nil {
+		return nil, fmt.Errorf("querying top symbols per market: %w", err)
+	}
+	defer rows.Close()
+
+	var symbols []domain.Symbol
+	for rows.Next() {
+		var s domain.Symbol
+		if err := rows.Scan(&s.Symbol, &s.Market, &s.Description, &s.IsEtf); err != nil {
+			return nil, fmt.Errorf("scanning top symbol row: %w", err)
+		}
+		symbols = append(symbols, s)
+	}
+	return symbols, rows.Err()
+}
+
 const deactivateSymbolsSQL = `UPDATE tracked_symbols SET is_active = FALSE WHERE symbol = ANY($1)`
 
 // Deactivate no borra ninguna vela ya guardada -- solo saca al simbolo de

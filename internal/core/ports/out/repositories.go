@@ -30,9 +30,14 @@ type SymbolRepository interface {
 	Search(ctx context.Context, query string, markets []string, page, size int) (symbols []domain.Symbol, totalElements int64, err error)
 	Deactivate(ctx context.Context, symbols []string) error
 	Markets(ctx context.Context) ([]string, error)
+	// TopSymbolsPerMarket devuelve hasta n simbolos por mercado, ordenados
+	// por last_volume descendente -- universo acotado para el refresco de
+	// fundamentales via REST (no todo el universo rastreado de una).
+	TopSymbolsPerMarket(ctx context.Context, n int) ([]domain.Symbol, error)
 }
 
 type FundamentalsRepository interface {
 	Get(ctx context.Context, symbol string) (domain.Fundamentals, error)
 	UpsertDividends(ctx context.Context, fundamentals []domain.Fundamentals) error
+	UpsertMarketMetrics(ctx context.Context, fundamentals []domain.Fundamentals) error
 }

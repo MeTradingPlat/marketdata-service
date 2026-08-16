@@ -92,3 +92,26 @@ CREATE TABLE IF NOT EXISTS dividends (
     dividend_frequency DOUBLE PRECISION NOT NULL DEFAULT 0,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Resto de fundamentales de TastyTrade (/market-data/by-type +
+-- /market-metrics, ver tastytrade/market_metrics.go), agregadas a la misma
+-- tabla en vez de crear una nueva -- mismo symbol_id, mismo ciclo de vida.
+-- Columnas separadas por endpoint de origen para que cada refresco solo
+-- toque las suyas via UPSERT (ver FundamentalsRepository).
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS trading_status TEXT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS halt_start_time BIGINT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS halt_end_time BIGINT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS market_data_updated_at TIMESTAMPTZ;
+
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS market_cap DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS eps DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS beta DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS lendability TEXT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS borrow_rate DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS liquidity DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS liquidity_rating INT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS implied_volatility_index DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS implied_volatility_rank DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS implied_volatility_percentile DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS next_earnings_date TEXT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS metrics_updated_at TIMESTAMPTZ;

@@ -17,6 +17,9 @@ type MarketDataGateway interface {
 	ActiveSymbols(ctx context.Context) ([]domain.Symbol, error)
 	CurrentCandle(symbol string) (domain.Candle, bool)
 	DividendInfo(ctx context.Context, symbols []string) ([]domain.Fundamentals, error)
+	// MarketMetrics trae market-cap/beta/liquidez/IV/proximo earnings --
+	// fuente separada de DividendInfo (otro endpoint REST), se llama aparte.
+	MarketMetrics(ctx context.Context, symbols []string) ([]domain.Fundamentals, error)
 	// ResetLiveConnections cierra todas las conexiones DxLink pooled -- se
 	// llama entre fases del barrido (D1->H1->M1) para que ninguna arrastre
 	// sesiones de la fase anterior justo cuando la siguiente abre varias
