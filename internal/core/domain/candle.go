@@ -2,18 +2,20 @@ package domain
 
 import "time"
 
+// Tags json en el formato exacto que ya esperaba el frontend del servicio
+// Java (HistoricalCandleDTO: symbol/timestamp/open/high/low/close/volume/vwap).
 type Candle struct {
-	Symbol     string
-	Timeframe  Timeframe
-	Timestamp  time.Time
-	Open       float64
-	High       float64
-	Low        float64
-	Close      float64
-	Volume     int64
-	TradeCount int
-	VWAP       float64
-	Source     string
+	Symbol     string    `json:"symbol"`
+	Timeframe  Timeframe `json:"timeframe"`
+	Timestamp  time.Time `json:"timestamp"`
+	Open       float64   `json:"open"`
+	High       float64   `json:"high"`
+	Low        float64   `json:"low"`
+	Close      float64   `json:"close"`
+	Volume     int64     `json:"volume"`
+	TradeCount int       `json:"tradeCount"`
+	VWAP       float64   `json:"vwap"`
+	Source     string    `json:"source"`
 }
 
 func (c Candle) IsComplete() bool {
