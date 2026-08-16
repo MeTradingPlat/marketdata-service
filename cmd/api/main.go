@@ -17,6 +17,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/injector"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
+	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/discovery"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog"
@@ -39,6 +40,7 @@ func main() {
 		candleRepo out.CandleRepository,
 		symbols out.SymbolRepository,
 		ingest in.IngestCandlesService,
+		discoveryClient *discovery.Client,
 		e *echo.Echo,
 		r *router.Router,
 	) {
@@ -85,6 +87,7 @@ func main() {
 				log.Fatal().Err(err).Msg("server stopped unexpectedly")
 			}
 		}()
+		go discovery.Run(ctx, discoveryClient)
 
 		<-ctx.Done()
 		log.Info().Msg("shutdown signal received, closing down")

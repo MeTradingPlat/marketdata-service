@@ -3,6 +3,7 @@ package injector
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
@@ -16,8 +17,14 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/server"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/storage"
+	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/discovery"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/dig"
+)
+
+const (
+	eurekaAppName    = "MARKETDATA-SERVICE"
+	eurekaVipAddress = "marketdata-service"
 )
 
 func BuildContainer() *dig.Container {
@@ -28,6 +35,8 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideCandleRepository))
 	checkErr(container.Provide(provideSymbolRepository))
 	checkErr(container.Provide(provideFundamentalsRepository))
+
+	checkErr(container.Provide(provideDiscoveryClient))
 
 	checkErr(container.Provide(provideOAuth))
 	checkErr(container.Provide(tastytrade.NewQuoteToken))
@@ -74,6 +83,15 @@ func provideSymbolRepository(pool *pgxpool.Pool) out.SymbolRepository {
 
 func provideFundamentalsRepository(pool *pgxpool.Pool) out.FundamentalsRepository {
 	return timescale.NewFundamentalsRepository(pool)
+}
+
+func provideDiscoveryClient(cfg *configs.Config) (*discovery.Client, error) {
+	port, err := strconv.Atoi(cfg.ServerPort)
+	if err != nil {
+		return nil, fmt.Errorf("parsing server port for eureka registration: %w", err)
+	}
+	baseURL := fmt.Sprintf("http://%s:%s/eureka", cfg.EurekaHost, cfg.EurekaPort)
+	return discovery.NewClient(baseURL, eurekaAppName, eurekaVipAddress, port)
 }
 
 func provideOAuth(cfg *configs.Config) *tastytrade.OAuth {
