@@ -35,12 +35,12 @@ func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol str
 		snap.CurrentPrice = current.Close
 		snap.CurrentVolume = current.Volume
 		mergeFormingCandle(&snap, current)
-	} else if lastM1, err := s.repo.GetCandles(ctx, symbol, domain.M1, 1); err == nil && len(lastM1) > 0 {
+	} else if lastM1, err := s.repo.GetCandles(ctx, symbol, domain.M1, 1, nil); err == nil && len(lastM1) > 0 {
 		snap.CurrentPrice = lastM1[0].Close
 		snap.CurrentVolume = lastM1[0].Volume
 	}
 
-	prevDay, err := s.repo.GetCandles(ctx, symbol, domain.D1, 1)
+	prevDay, err := s.repo.GetCandles(ctx, symbol, domain.D1, 1, nil)
 	if err != nil {
 		return domain.IntradaySnapshot{}, fmt.Errorf("getting previous close for %s: %w", symbol, err)
 	}

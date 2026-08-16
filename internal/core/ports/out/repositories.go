@@ -9,7 +9,9 @@ import (
 
 type CandleRepository interface {
 	Save(ctx context.Context, candles []domain.Candle) error
-	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int) ([]domain.Candle, error)
+	// before es nil para las barras mas recientes, o un limite exclusivo
+	// para paginar hacia atras (ver CandleRepository.GetCandles).
+	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error)
 	GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error)
 	SymbolsWithData(ctx context.Context, timeframe domain.Timeframe) (map[string]struct{}, error)
 	// GetIntradaySessions agrega las velas M1 de hoy por sesion (pre-market,

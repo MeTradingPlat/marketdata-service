@@ -2,6 +2,7 @@ package in
 
 import (
 	"context"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
@@ -14,7 +15,9 @@ type IngestCandlesService interface {
 }
 
 type GetCandlesService interface {
-	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int) ([]domain.Candle, error)
+	// before es nil para las barras mas recientes, o un limite exclusivo
+	// para paginar hacia atras (scroll a la izquierda del chart).
+	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error)
 }
 
 type GetIntradaySnapshotService interface {

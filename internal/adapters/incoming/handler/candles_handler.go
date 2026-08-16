@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
@@ -33,7 +34,16 @@ func (h *CandlesHandler) GetCandles(c echo.Context) error {
 		bars = parsed
 	}
 
-	candles, err := h.service.GetCandles(c.Request().Context(), symbol, timeframe, bars)
+	var before *time.Time
+	if raw := c.QueryParam("endDate"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid endDate")
+		}
+		before = &parsed
+	}
+
+	candles, err := h.service.GetCandles(c.Request().Context(), symbol, timeframe, bars, before)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}

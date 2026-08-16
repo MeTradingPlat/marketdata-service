@@ -76,7 +76,7 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 		return
 	}
 
-	candles, err := s.getCandles.GetCandles(ctx, symbol, tf, initialHistoryBars)
+	candles, err := s.getCandles.GetCandles(ctx, symbol, tf, initialHistoryBars, nil)
 	if err != nil {
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "no se pudo cargar el historial"})
 		return
