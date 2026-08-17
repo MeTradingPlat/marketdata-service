@@ -121,9 +121,13 @@ const getCandlesSQL = `
 
 // maxWindowWidenAttempts/windowWidenFactor: ver el loop de ensanchamiento
 // en GetCandles -- las zonas muertas grandes (fines de semana) dejaban la
-// paginacion del frontend clavada en 0 barras.
+// paginacion del frontend clavada en 0 barras. Bajado de 6 a 4 tras
+// confirmar en vivo: cada intento extra de un simbolo ralo escaneaba
+// chunks comprimidos mas viejos con decompresion vectorizada, y 10 queries
+// asi en paralelo (30-90s cada una, ~7k locks) ahogaban el lock manager
+// de postgres y todo el servicio se sentia lento.
 const (
-	maxWindowWidenAttempts = 6
+	maxWindowWidenAttempts = 4
 	windowWidenFactor      = 4
 )
 

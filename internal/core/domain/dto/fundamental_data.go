@@ -41,6 +41,7 @@ type FundamentalData struct {
 	ShortRatio                  *float64 `json:"shortRatio,omitempty"`
 	Eps                         float64  `json:"eps"`
 	Beta                        float64  `json:"beta"`
+	OpenInterest                *float64 `json:"openInterest,omitempty"`
 	Lendability                 string   `json:"lendability"`
 	BorrowRate                  float64  `json:"borrowRate"`
 	Liquidity                   float64  `json:"liquidity"`

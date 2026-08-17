@@ -13,10 +13,11 @@ type getSymbolDetailsService struct {
 	symbols      out.SymbolRepository
 	fundamentals out.FundamentalsRepository
 	intraday     in.GetIntradaySnapshotService
+	openInterest out.OpenInterestGateway
 }
 
-func NewGetSymbolDetailsService(symbols out.SymbolRepository, fundamentals out.FundamentalsRepository, intraday in.GetIntradaySnapshotService) in.GetSymbolDetailsService {
-	return &getSymbolDetailsService{symbols: symbols, fundamentals: fundamentals, intraday: intraday}
+func NewGetSymbolDetailsService(symbols out.SymbolRepository, fundamentals out.FundamentalsRepository, intraday in.GetIntradaySnapshotService, openInterest out.OpenInterestGateway) in.GetSymbolDetailsService {
+	return &getSymbolDetailsService{symbols: symbols, fundamentals: fundamentals, intraday: intraday, openInterest: openInterest}
 }
 
 func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol string) (dto.SymbolDetails, error) {
@@ -72,6 +73,9 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 		},
 	}
 	applyExternalFundamentals(&details.FundamentalData, fundamentals)
+	if oi, ok := s.openInterest.OpenInterest(ctx, symbol); ok && oi > 0 {
+		details.FundamentalData.OpenInterest = &oi
+	}
 	return details, nil
 }
 

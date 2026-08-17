@@ -11,14 +11,17 @@ import (
 var ProbeFromTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 var _ out.MarketDataGateway = (*Gateway)(nil)
+var _ out.OpenInterestGateway = (*Gateway)(nil)
 
 type Gateway struct {
 	oauth *OAuth
 	pool  *CandlePool
+
+	openInterestCache openInterestCache
 }
 
 func NewGateway(oauth *OAuth, pool *CandlePool) *Gateway {
-	return &Gateway{oauth: oauth, pool: pool}
+	return &Gateway{oauth: oauth, pool: pool, openInterestCache: openInterestCache{entries: make(map[string]openInterestEntry)}}
 }
 
 func (g *Gateway) GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, from time.Time) ([]domain.Candle, error) {

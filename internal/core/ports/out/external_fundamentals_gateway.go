@@ -43,3 +43,11 @@ type ShortInterestGateway interface {
 type ProfileSharesGateway interface {
 	FetchProfileShares(ctx context.Context, symbols []string) map[string]int64
 }
+
+// OpenInterestGateway trae el open interest del vencimiento mensual mas
+// cercano via las cadenas de opciones de TastyTrade (REST, cacheado por el
+// adaptador) -- devuelve (0, false) cuando el simbolo no tiene opciones,
+// para que el llamador omita el campo en vez de escribir un 0.
+type OpenInterestGateway interface {
+	OpenInterest(ctx context.Context, symbol string) (float64, bool)
+}

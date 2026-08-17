@@ -48,6 +48,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideBeneficialOwnersGateway))
 	checkErr(container.Provide(provideShortInterestGateway))
 	checkErr(container.Provide(provideProfileSharesGateway))
+	checkErr(container.Provide(provideOpenInterestGateway))
 
 	checkErr(container.Provide(provideOAuth))
 	checkErr(container.Provide(tastytrade.NewQuoteToken))
@@ -165,4 +166,11 @@ func provideShortInterestGateway() out.ShortInterestGateway {
 
 func provideProfileSharesGateway(pool *tastytrade.CandlePool) out.ProfileSharesGateway {
 	return pool
+}
+
+// provideOpenInterestGateway expone el mismo adaptador Gateway bajo el
+// puerto de open interest -- un solo objeto, dos puertos (mismo patron que
+// provideProfileSharesGateway con el pool).
+func provideOpenInterestGateway(g out.MarketDataGateway) out.OpenInterestGateway {
+	return g.(out.OpenInterestGateway)
 }
