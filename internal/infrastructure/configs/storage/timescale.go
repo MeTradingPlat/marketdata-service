@@ -13,6 +13,9 @@ import (
 var (
 	once     sync.Once
 	instance *pgxpool.Pool
+
+	writeOnce     sync.Once
+	writeInstance *pgxpool.Pool
 )
 
 func ConnInstanceTimescale(cfg *configs.Config) *pgxpool.Pool {
@@ -20,6 +23,39 @@ func ConnInstanceTimescale(cfg *configs.Config) *pgxpool.Pool {
 		instance = connect(cfg)
 	})
 	return instance
+}
+
+// writePoolConns: pool DEDICADO a escrituras (velas del streaming M1) --
+// 4 conexiones que nunca compiten con las lecturas de charts por slots:
+// confirmado en vivo que 24 consultas de agregacion lentas ocupaban las 25
+// conexiones del pool general y las escrituras de velas hacian fila detras
+// (watermark M1 clavado 10+ minutos con el mercado abierto). NO se subio el
+// limite general (pool_max_conns=80 ya rompio max_locks_per_transaction en
+// el pasado, ver comentario de connect): 4 conexiones de escritura extra
+// son inocuas para locks y memoria.
+const writePoolConns = 4
+
+func WritePoolInstanceTimescale(cfg *configs.Config) *pgxpool.Pool {
+	writeOnce.Do(func() {
+		writeInstance = connectWithSize(cfg, writePoolConns)
+	})
+	return writeInstance
+}
+
+func connect(cfg *configs.Config) *pgxpool.Pool {
+	return connectWithSize(cfg, cfg.DBMaxConns)
+}
+
+func connectWithSize(cfg *configs.Config, maxConns int) *pgxpool.Pool {
+	dsn := fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=disable pool_max_conns=%d",
+		cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBUser, cfg.DBPassword, maxConns)
+
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to TimescaleDB")
+	}
+	log.Info().Msg("TimescaleDB connected successfully")
+	return pool
 }
 
 // DSN en formato key=value, no URL -- una password con caracteres como
@@ -34,14 +70,3 @@ func ConnInstanceTimescale(cfg *configs.Config) *pgxpool.Pool {
 // default implicito (~4, max(4, NumCPU)) sin acercarse al techo que rompio
 // todo -- ajustar de nuevo solo junto con max_locks_per_transaction del
 // lado de Postgres, no por separado.
-func connect(cfg *configs.Config) *pgxpool.Pool {
-	dsn := fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=disable pool_max_conns=%d",
-		cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBUser, cfg.DBPassword, cfg.DBMaxConns)
-
-	pool, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to connect to TimescaleDB")
-	}
-	log.Info().Msg("TimescaleDB connected successfully")
-	return pool
-}

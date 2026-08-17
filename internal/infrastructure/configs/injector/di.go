@@ -35,6 +35,7 @@ func BuildContainer() *dig.Container {
 
 	checkErr(container.Provide(configs.Load))
 	checkErr(container.Provide(provideTimescalePool))
+	checkErr(container.Provide(provideTimescaleWritePool))
 	checkErr(container.Provide(provideCandleRepository))
 	checkErr(container.Provide(provideSymbolRepository))
 	checkErr(container.Provide(provideFundamentalsRepository))
@@ -91,8 +92,19 @@ func provideTimescalePool(cfg *configs.Config) *pgxpool.Pool {
 	return storage.ConnInstanceTimescale(cfg)
 }
 
-func provideCandleRepository(pool *pgxpool.Pool) out.CandleRepository {
-	return timescale.NewCandleRepository(pool)
+// writePool es un tipo nominal para que dig distinga el pool de escritura
+// del de lectura -- ambos son *pgxpool.Pool por debajo, y sin un tipo
+// distinto dig inyectaria el mismo pool en los dos parametros.
+type writePool struct{ pool *pgxpool.Pool }
+
+// provideTimescaleWritePool es el pool chico dedicado a escrituras de velas
+// (ver storage.writePoolConns).
+func provideTimescaleWritePool(cfg *configs.Config) writePool {
+	return writePool{pool: storage.WritePoolInstanceTimescale(cfg)}
+}
+
+func provideCandleRepository(pool *pgxpool.Pool, writePool writePool) out.CandleRepository {
+	return timescale.NewCandleRepository(pool, writePool.pool)
 }
 
 func provideSymbolRepository(pool *pgxpool.Pool) out.SymbolRepository {

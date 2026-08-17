@@ -15,10 +15,16 @@ import (
 
 type CandleRepository struct {
 	pool *pgxpool.Pool
+	// writePool es un pool chico DEDICADO a Save() -- las escrituras del
+	// streaming M1 nunca compiten por slots con las lecturas de charts (ver
+	// storage.writePoolConns): confirmado en vivo que 24 consultas de
+	// agregacion lentas ocupaban todas las conexiones del pool general y las
+	// escrituras de velas hacian fila detras con el mercado abierto.
+	writePool *pgxpool.Pool
 }
 
-func NewCandleRepository(pool *pgxpool.Pool) *CandleRepository {
-	return &CandleRepository{pool: pool}
+func NewCandleRepository(pool, writePool *pgxpool.Pool) *CandleRepository {
+	return &CandleRepository{pool: pool, writePool: writePool}
 }
 
 const deadlockRetries = 5
@@ -90,7 +96,7 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) er
 				batch.Queue(updateLastVolumeSQL, c.Symbol, c.Volume, c.Timestamp)
 			}
 		}
-		results := r.pool.SendBatch(ctx, batch)
+		results := r.writePool.SendBatch(ctx, batch)
 		defer results.Close()
 		for _, c := range candles {
 			if _, err := results.Exec(); err != nil {
