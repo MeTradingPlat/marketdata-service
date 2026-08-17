@@ -65,7 +65,14 @@ func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, 
 				}
 				occurred, predicted := domain.LastEarningsReport(reports)
 				f := domain.Fundamentals{Symbol: symbol, OccurredDate: occurred}
-				if predicted != "" {
+				// Solo se escribe la prediccion si cae a FUTURO: una
+				// prediccion en el pasado (cadencia real distinta a la
+				// mediana historica, ej. MDXH reportando semi-anual)
+				// pisaria la fecha de TastyTrade con un dato peor. En ese
+				// caso el simbolo queda en el lote de "stale" y se
+				// re-predice cada noche hasta que el reporte real aterrice
+				// en el historial y la prediccion vuelva a ser futura.
+				if predicted != "" && domain.DaysUntil(predicted) > 0 {
 					f.NextEarningsDate = predicted
 				}
 				mu.Lock()
