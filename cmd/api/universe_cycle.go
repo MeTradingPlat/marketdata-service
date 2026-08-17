@@ -37,15 +37,19 @@ func refreshWithRetry(name string, fn func() error) {
 	}
 }
 
-// StartUniverseCycle corre el ciclo completo del universo -- D1 fase 1, H1
-// fase 2, M1 fase 3 -- una vez al arrancar (nada esta en vivo todavia, no
-// hace falta desconectar nada) y despues en cada ventana de mantenimiento
-// (mercado cerrado): ahi si cierra todas las conexiones DxLink primero
-// (ver CandlePool.CloseAllConnections, tambien usado entre D1->H1 y H1->M1
-// dentro de RunSweep) para que cada fase arranque con cero sesiones
-// abiertas ante TastyTrade, y vuelve a suscribir M1 al terminar -- cada
-// simbolo retoma desde su propio watermark, sin hueco real porque el
-// mercado estuvo cerrado.
+// StartUniverseCycle corre el ciclo completo del universo una vez al
+// arrancar y despues en cada ventana de mantenimiento (mercado cerrado).
+//
+// Arranque en frio: M1 en vivo PRIMERO (retoma desde el watermark de cada
+// simbolo con replay de lo perdido -- velas al dia en ~1 min sin importar
+// cuanto estuvo caido el servicio), despues el barrido D1/H1 en lotes
+// compartiendo el pool, y el resto de refrescos. Ventana de mantenimiento:
+// cierra todas las conexiones DxLink primero (ver CandlePool.
+// CloseAllConnections, tambien usado entre D1->H1 y H1->M1 dentro de
+// RunSweep) para que cada fase arranque con cero sesiones abiertas ante
+// TastyTrade, y vuelve a suscribir M1 al terminar -- cada simbolo retoma
+// desde su propio watermark, sin hueco real porque el mercado estuvo
+// cerrado.
 //
 // catchup.RefreshFundamentals (REST a /market-data/by-type y
 // /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
@@ -67,17 +71,30 @@ func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Ma
 }
 
 func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, firstRun bool) {
-	if !firstRun {
-		gateway.ResetLiveConnections()
-	}
-
-	tracked := catchup.RunSweep(ctx, gateway, symbols, candles, ingest, cfg.SweepWorkers)
+	tracked := catchup.ReconcileAndTracked(ctx, gateway, symbols)
 	if len(tracked) == 0 {
 		log.Error().Msg("universe sweep returned no symbols, skipping live M1 rollout")
 		return
 	}
 
-	startLiveUniverse(ctx, ingest, tracked)
+	// Arranque en frio: M1 en vivo PRIMERO -- cada simbolo retoma desde su
+	// watermark y dxLink hace replay de lo perdido, asi que las velas al dia
+	// vuelven en ~1 min sin importar cuanto tiempo estuvo caido el servicio
+	// (a pedido explicito del usuario: un deploy/restart no puede dejar M1
+	// abajo mientras corre el barrido pesado). El barrido D1/H1 corre
+	// DESPUES, en lotes, compartiendo el pool con el streaming sin cerrar
+	// conexiones (resetBetweenPhases=false).
+	if firstRun {
+		startLiveUniverse(ctx, ingest, tracked)
+	} else {
+		gateway.ResetLiveConnections()
+	}
+
+	catchup.RunSweep(ctx, gateway, candles, ingest, tracked, cfg.SweepWorkers, !firstRun)
+
+	if !firstRun {
+		startLiveUniverse(ctx, ingest, tracked)
+	}
 	catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
 	catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
 	// RefreshBeta va despues de RefreshMarketMetrics: este acaba de escribir

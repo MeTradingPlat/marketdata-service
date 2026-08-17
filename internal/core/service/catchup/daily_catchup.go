@@ -251,7 +251,11 @@ func backfillWithRetry(ctx context.Context, ingest in.IngestCandlesService, j jo
 // despues de StopAllLive), ver cmd/api. Devuelve la lista de simbolos
 // rastreados para que el llamador pueda resuscribir M1 sobre el mismo
 // conjunto sin pedirlo de nuevo.
-func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, ingest in.IngestCandlesService, workers int) []domain.Symbol {
+// ReconcileAndTracked reconcilia el universo con TastyTrade y devuelve la
+// lista rastreada -- separado del barrido porque el arranque en frio
+// necesita la lista ANTES del barrido para reanudar el M1 en vivo de
+// inmediato (ver StartUniverseCycle en cmd/api).
+func ReconcileAndTracked(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository) []domain.Symbol {
 	if err := reconcileUniverse(ctx, gateway, symbols); err != nil {
 		log.Error().Err(err).Msg("failed to reconcile symbol universe, sweeping last known tracked list")
 	}
@@ -259,6 +263,13 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sy
 	tracked, err := symbols.Tracked(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to list tracked symbols for universe sweep")
+		return nil
+	}
+	return tracked
+}
+
+func RunSweep(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, tracked []domain.Symbol, workers int, resetBetweenPhases bool) []domain.Symbol {
+	if len(tracked) == 0 {
 		return nil
 	}
 
@@ -273,8 +284,13 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sy
 	// Cierra todas las conexiones DxLink entre fases -- confirmado en vivo
 	// que arrastrar las conexiones de D1 justo cuando H1/M1 abren varias de
 	// golpe puede superar el limite de sesiones concurrentes de TastyTrade.
-	// Cada fase arranca desde cero sesiones.
-	gateway.ResetLiveConnections()
+	// Cada fase arranca desde cero sesiones. SOLO en la ventana de
+	// mantenimiento (mercado cerrado, M1 detenido): en el arranque en frio
+	// el M1 en vivo ya esta corriendo (se reanuda ANTES del barrido, ver
+	// StartUniverseCycle) y cerrar las conexiones aqui lo mataria.
+	if resetBetweenPhases {
+		gateway.ResetLiveConnections()
+	}
 
 	withH1, err := candles.SymbolsWithData(ctx, domain.H1)
 	if err != nil {
@@ -284,7 +300,9 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sy
 	uncoveredH1, coveredH1 := phaseJobs(tracked, domain.H1, withH1)
 	runPhase(ctx, gateway, candles, ingest, uncoveredH1, coveredH1, domain.H1, workers)
 
-	gateway.ResetLiveConnections()
+	if resetBetweenPhases {
+		gateway.ResetLiveConnections()
+	}
 
 	return tracked
 }
