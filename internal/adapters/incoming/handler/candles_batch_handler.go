@@ -9,7 +9,14 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-const candlesBatchWorkers = 20
+// candlesBatchWorkers: bajado de 20 a 4 tras confirmar en vivo que cada poll
+// del batch de signal-processing (2,929 simbolos x timeframe derivado)
+// disparaba ~20 agregaciones time_bucket concurrentes sobre M1 comprimida
+// que saturaban el CPU del host (laptop 2011) y dejaban al barrido y al
+// frontend esperando detras. 4 workers alargan el poll del batch unos
+// segundos pero dejan CPU y conexiones para el resto -- la carga del
+// servidor manda (diseno del usuario).
+const candlesBatchWorkers = 4
 
 type candlesBatchRequest struct {
 	Symbols   []string `json:"symbols"`
