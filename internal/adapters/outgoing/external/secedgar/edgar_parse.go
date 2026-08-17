@@ -19,7 +19,7 @@ func parseCompanyFactsZip(zipPath string, cikToSymbols map[string][]string, tota
 			break
 		}
 		matched, ok := cikToSymbols[extractCik(entry.Name)]
-		if !ok || len(matched) != 1 {
+		if !ok {
 			continue
 		}
 
@@ -34,7 +34,14 @@ func parseCompanyFactsZip(zipPath string, cikToSymbols map[string][]string, tota
 		}
 
 		if shares := parseSharesOutstanding(data); shares != nil {
-			result[matched[0]] = *shares
+			// El SO es de la entidad (CIK), no del ticker: se aplica a todos
+			// los tickers del CIK (el principal y sus warrants/preferentes).
+			// Antes se descartaba el CIK entero con mas de un ticker, y el
+			// principal legitimo quedaba NULL -- confirmado en vivo: T, SMCI,
+			// OPEN y BBD sin shares por compartir CIK con TBB/SMCIP/OPENW/BBDO.
+			for _, symbol := range matched {
+				result[symbol] = *shares
+			}
 		}
 	}
 	return result

@@ -38,18 +38,12 @@ func (c *EdgarClient) FetchSharesOutstanding(ctx context.Context, symbols []stri
 		return map[string]int64{}
 	}
 
-	// sharesOutstanding es una cifra por-entidad (CIK), no por-ticker. Cuando
-	// varios tickers comparten un CIK (series de preferentes, warrants, ETNs
-	// de un mismo banco emisor) no hay forma de saber a cual le pertenece
-	// ese numero -- se descarta el CIK entero en vez de aplicarlo a ciegas
-	// (confirmado con datos reales de Java: 394 CIKs / 1014 tickers
-	// afectados).
-	var totalTargets int
-	for _, syms := range cikToSymbols {
-		if len(syms) == 1 {
-			totalTargets++
-		}
-	}
+	// sharesOutstanding es una cifra por-entidad (CIK), no por-ticker: se
+	// aplica a todos los tickers del CIK (el principal y sus warrants/
+	// preferentes del mismo emisor). Descartar el CIK con mas de un ticker
+	// dejaba al principal legitimo sin shares (T, SMCI, OPEN, BBD), peor que
+	// asignar el SO del emisor a sus instrumentos.
+	totalTargets := len(cikToSymbols)
 
 	zipPath, err := c.ensureCachedZip(ctx)
 	if err != nil {

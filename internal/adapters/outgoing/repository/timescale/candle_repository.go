@@ -240,7 +240,12 @@ func (r *CandleRepository) GetPreviousSessionClose(ctx context.Context, symbol s
 	for d := 1; d <= prevSessionCloseDays; d++ {
 		day := dayStart.AddDate(0, 0, -d)
 		from := day.Add(15*time.Hour + 58*time.Minute)
-		to := day.Add(16*time.Hour + 2*time.Minute)
+		// to = 16:01 ET (no 16:02): la barra ts=16:00 es la subasta de cierre
+		// regular, la ts=16:01 ya es after-hours -- con la ventana [15:58,16:02)
+		// el ORDER BY ts DESC tomaba la vela post-cierre como prevClose cuando
+		// el simbolo opera despues del cierre (confirmado en vivo con MDXH:
+		// subasta 0.7998 vs 0.7548 de la barra 16:01).
+		to := day.Add(16*time.Hour + time.Minute)
 		windows = append(windows, fmt.Sprintf("($%d::timestamptz <= c.ts AND c.ts < $%d::timestamptz)", len(args)+1, len(args)+2))
 		args = append(args, from, to)
 	}
