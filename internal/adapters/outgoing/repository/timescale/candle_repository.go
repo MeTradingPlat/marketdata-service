@@ -152,6 +152,48 @@ const (
 // (ver endDate en loadMoreHistory). Sin este parametro toda pagina
 // devolvia siempre las mismas N barras mas recientes, asi que llegar al
 // borde izquierdo nunca traia nada nuevo.
+// GetSeries lee hasta bars velas por simbolo para un lote de simbolos en
+// UNA query (row_number por particion de simbolo) -- el refresh de beta
+// corria 13k queries individuales de 1300 barras D1 y saturaba la CPU de
+// postgres ~40 min; con el mercado abierto las escrituras M1 en vivo hacian
+// fila detras de la saturacion. Cada serie se devuelve ordenada por ts
+// ascendente (mismo contenido que GetCandles por-simbolo).
+func (r *CandleRepository) GetSeries(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
+	if len(symbols) == 0 {
+		return map[string][]domain.Candle{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT symbol, ts, open, high, low, close, volume, source
+		FROM (
+			SELECT s.symbol, c.ts, c.open, c.high, c.low, c.close, c.volume, c.source,
+			       row_number() OVER (PARTITION BY c.symbol_id ORDER BY c.ts DESC) AS rn
+			FROM candles c
+			JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+			WHERE c.timeframe = $1 AND s.symbol = ANY($2)
+		) t
+		WHERE rn <= $3
+		ORDER BY symbol, ts`,
+		string(timeframe), symbols, bars)
+	if err != nil {
+		return nil, fmt.Errorf("loading %s series for %d symbols: %w", timeframe, len(symbols), err)
+	}
+	defer rows.Close()
+
+	result := make(map[string][]domain.Candle)
+	for rows.Next() {
+		var c domain.Candle
+		if err := rows.Scan(&c.Symbol, &c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.Source); err != nil {
+			return nil, fmt.Errorf("scanning series candle: %w", err)
+		}
+		c.Timeframe = timeframe
+		result[c.Symbol] = append(result[c.Symbol], c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating series rows: %w", err)
+	}
+	return result, nil
+}
+
 func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
 	if source, bucket, approxPeriod, ok := timeframe.Aggregation(); ok {
 		return r.getAggregatedCandles(ctx, symbol, timeframe, source, bucket, approxPeriod, bars, before)

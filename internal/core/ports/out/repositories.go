@@ -12,6 +12,11 @@ type CandleRepository interface {
 	// before es nil para las barras mas recientes, o un limite exclusivo
 	// para paginar hacia atras (ver CandleRepository.GetCandles).
 	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error)
+	// GetSeries lee hasta bars velas por simbolo para un lote de simbolos en
+	// una sola query -- los refrescos masivos (beta) no deben correr una
+	// query por simbolo: satura postgres y las escrituras M1 en vivo hacen
+	// fila detras (ver RefreshBeta).
+	GetSeries(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error)
 	GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error)
 	SymbolsWithData(ctx context.Context, timeframe domain.Timeframe) (map[string]struct{}, error)
 	// GetIntradaySessions agrega las velas M1 de hoy por sesion (pre-market,

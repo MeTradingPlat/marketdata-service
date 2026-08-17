@@ -3,7 +3,6 @@ package catchup
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -11,19 +10,19 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// betaWorkers: el calculo es CPU+DB por simbolo (una query D1 de ~1300
-// barras cada uno), un pool chico alcanza sin ahogar al host compartido --
-// bajado de 20 a 8 tras confirmar en vivo que 20 workers concurrentes
-// sobre la hypertable mas el resto del barrido empujaban a postgres al
-// tope de memoria (4GiB) hasta reiniciarse en recovery mode a mitad del
-// upsert. Aun con 8 workers el refresh de beta volvio a OOM-matarlo
-// (2026-08-17 16:43Z, el mismo dia, con el tope de 4GiB lleno de page
-// cache de las lecturas) -- se baja a 4 para reducir la amplitud del
-// churn de cache; la proteccion real es memory.high en el cgroup (ver
-// .github/workflows/cd.yml).
-const betaWorkers = 4
-
+// providerBetaChunk: lotes de a mil simbolos para la lectura del beta de
+// TastyTrade -- una sola consulta con los 13k en el IN aportaba pico de
+// memoria a postgres (confirmado en vivo: recovery mode a mitad del barrido).
 const providerBetaChunk = 1000
+
+// betaSymbolChunk: las series D1 se leen en lotes de a mil simbolos con
+// GetSeries (una query por lote) -- el refresh anterior corria una query de
+// ~1300 barras POR SIMBOLO (13k queries): saturaba la CPU de postgres ~40
+// min y, con el mercado abierto, las escrituras M1 en vivo hacian fila
+// detras de la saturacion (las velas del grafico llegaban con minutos de
+// lag). Pico de memoria por lote: ~1000 x 1300 barras, holgado en el
+// contenedor.
+const betaSymbolChunk = 1000
 
 // betaHistoryBars: 5 anios de velas D1 (~252 por anio) es la convencion
 // estandar para beta mensual (ver stockanalysis/Yahoo), y deja meses de
@@ -61,8 +60,8 @@ func RefreshBeta(ctx context.Context, candles out.CandleRepository, symbols out.
 
 	// El beta del proveedor se lee una sola vez para el universo entero,
 	// en lotes de a mil -- una sola consulta con los 13k simbolos en el IN
-	// aportaba pico de memoria a postgres justo cuando los workers arrancan
-	// (confirmado en vivo: recovery mode a mitad del barrido).
+	// aportaba pico de memoria a postgres (confirmado en vivo: recovery
+	// mode a mitad del barrido).
 	providerBeta := map[string]float64{}
 	for i := 0; i < len(jobSymbols); i += providerBetaChunk {
 		end := min(i+providerBetaChunk, len(jobSymbols))
@@ -73,42 +72,35 @@ func RefreshBeta(ctx context.Context, candles out.CandleRepository, symbols out.
 		}
 	}
 
-	jobs := make(chan string, len(jobSymbols))
-	for _, symbol := range jobSymbols {
-		jobs <- symbol
-	}
-	close(jobs)
-
-	var mu sync.Mutex
+	// Las series D1 del universo entero se leen en lotes de a mil (ver
+	// betaSymbolChunk) y el calculo es CPU puro en memoria: el refresh
+	// completo baja de ~40 min a pocos minutos, sin workers y sin
+	// saturar postgres.
 	var updates []domain.Fundamentals
-	var wg sync.WaitGroup
-	for i := 0; i < betaWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for symbol := range jobs {
-				symbolCandles, err := candles.GetCandles(ctx, symbol, domain.D1, betaHistoryBars, nil)
-				if err != nil || len(symbolCandles) == 0 {
-					continue
-				}
-				beta := domain.MonthlyBeta(symbolCandles, marketCandles)
-				if beta == nil && providerBeta[symbol] == 0 {
-					// Fallback beta 1Y con la mejor serie disponible -- un beta
-					// real de 12 meses es mejor que N/A para los simbolos
-					// cortos SIN beta del proveedor. Con beta real del
-					// proveedor se conserva el suyo.
-					beta = domain.MonthlyBetaMin(symbolCandles, marketCandles, domain.BetaFallbackMonths)
-				}
-				if beta == nil {
-					continue
-				}
-				mu.Lock()
-				updates = append(updates, domain.Fundamentals{Symbol: symbol, Beta: *beta})
-				mu.Unlock()
+	for i := 0; i < len(jobSymbols); i += betaSymbolChunk {
+		end := min(i+betaSymbolChunk, len(jobSymbols))
+		series, err := candles.GetSeries(ctx, jobSymbols[i:end], domain.D1, betaHistoryBars)
+		if err != nil {
+			return fmt.Errorf("loading D1 series batch: %w", err)
+		}
+		for symbol, symbolCandles := range series {
+			if len(symbolCandles) == 0 {
+				continue
 			}
-		}()
+			beta := domain.MonthlyBeta(symbolCandles, marketCandles)
+			if beta == nil && providerBeta[symbol] == 0 {
+				// Fallback beta 1Y con la mejor serie disponible -- un beta
+				// real de 12 meses es mejor que N/A para los simbolos
+				// cortos SIN beta del proveedor. Con beta real del
+				// proveedor se conserva el suyo.
+				beta = domain.MonthlyBetaMin(symbolCandles, marketCandles, domain.BetaFallbackMonths)
+			}
+			if beta == nil {
+				continue
+			}
+			updates = append(updates, domain.Fundamentals{Symbol: symbol, Beta: *beta})
+		}
 	}
-	wg.Wait()
 
 	if err := fundamentalsRepo.UpsertBeta(ctx, updates); err != nil {
 		return fmt.Errorf("upserting beta batch: %w", err)

@@ -69,6 +69,10 @@ func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle) error {
 	return nil
 }
 
+func (f *fakeRepo) GetSeries(ctx context.Context, symbols []string, tf domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
+	return map[string][]domain.Candle{}, nil
+}
+
 func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
 	return f.getResult, nil
 }
