@@ -25,7 +25,12 @@ type CurrentCandleService struct {
 	gateway out.MarketDataGateway
 }
 
-func NewCurrentCandleService(candles in.GetCandlesService, gateway out.MarketDataGateway) *CurrentCandleService {
+// El provider devuelve la INTERFAZ (patron dig del proyecto, igual que
+// NewGetCandlesService): dig no resuelve una interfaz desde un provider de
+// tipo concreto -- con el return concreto el arranque paniqueaba con
+// "missing type: in.GetCurrentCandleService (did you mean
+// *livecandles.CurrentCandleService?)".
+func NewCurrentCandleService(candles in.GetCandlesService, gateway out.MarketDataGateway) in.GetCurrentCandleService {
 	return &CurrentCandleService{candles: candles, gateway: gateway}
 }
 
