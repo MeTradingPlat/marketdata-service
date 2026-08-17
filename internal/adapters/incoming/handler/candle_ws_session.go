@@ -92,14 +92,20 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 
 	// La vela en formacion se siembra al instante desde el servicio (M1 del
 	// pool, derivados agregando las M1 del periodo, plana al ultimo cierre
-	// si el periodo no tiene datos) -- el grafico NO espera al primer tick
-	// para dibujarla. La agregacion en vivo sigue desde ahi (forwardLive).
+	// si el periodo no tiene datos) y se ENVIA como bar apenas suscrito --
+	// el grafico NO espera al primer tick para dibujarla (sin esto, la
+	// semilla solo quedaba como estado interno del agregador y un simbolo
+	// con ticks espaciados mostraba la grafica sin vela en formacion
+	// durante minutos). La agregacion en vivo sigue desde ahi (forwardLive).
 	var seed *dto.CandleBar
 	if s.current != nil {
 		seed, err = s.current.GetCurrentCandle(ctx, symbol, tf)
 		if err != nil {
 			seed = nil
 		}
+	}
+	if seed != nil && seed.Time >= lastTime {
+		s.sendBar(symbol, timeframe, *seed, false)
 	}
 
 	ch, cancel := s.broadcaster.Subscribe(symbol)
