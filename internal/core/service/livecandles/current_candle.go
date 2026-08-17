@@ -29,7 +29,12 @@ func NewCurrentCandleService(candles in.GetCandlesService, gateway out.MarketDat
 	return &CurrentCandleService{candles: candles, gateway: gateway}
 }
 
-func (s *CurrentCandleService) GetCurrent(ctx context.Context, symbol string, tf domain.Timeframe) (*dto.CandleBar, error) {
+// var _ pin en tiempo de compilacion: dig falla en RUNTIME si el metodo no
+// matchea la interfaz (panic "missing dependencies" en el arranque -- paso
+// en el deploy a6b8789), esto lo atrapa en build.
+var _ in.GetCurrentCandleService = (*CurrentCandleService)(nil)
+
+func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol string, tf domain.Timeframe) (*dto.CandleBar, error) {
 	period := FormingPeriodStart(time.Now(), tf)
 	end := FormingPeriodEnd(period, tf)
 
