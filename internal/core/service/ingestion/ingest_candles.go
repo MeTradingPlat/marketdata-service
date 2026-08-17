@@ -23,12 +23,13 @@ func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepos
 	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, retryBuffer: newSaveRetryBuffer()}
 }
 
-// incrementalMargin son barras de mas antes del watermark que se vuelven a
+// IncrementalMargin son barras de mas antes del watermark que se vuelven a
 // pedir aposta -- de sobra (Save() las UPSERTea, pedir de mas es gratis) y
 // cubre cualquier borde raro (ej. el watermark se capturo a mitad de un
 // guardado). Sugerido por el usuario al ver que sin esto, cada backfill
-// repetia toda la profundidad historica sin necesidad.
-const incrementalMargin = 10
+// repetia toda la profundidad historica sin necesidad. Exportado para que
+// el barrido en lote (catchup) use el mismo margen sin duplicarlo.
+const IncrementalMargin = 10
 
 func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error {
 	candles, err := s.fetchForBackfill(ctx, symbol, timeframe)
@@ -68,10 +69,10 @@ func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol stri
 	if err != nil {
 		return nil, fmt.Errorf("getting duration for %s: %w", timeframe, err)
 	}
-	if !hasNewClosedBar(*newest, duration) {
+	if !HasNewClosedBar(*newest, duration) {
 		return nil, nil
 	}
-	from := newest.Add(-incrementalMargin * duration)
+	from := newest.Add(-IncrementalMargin * duration)
 	candles, err := s.gateway.GetCandles(ctx, symbol, timeframe, from)
 	if err != nil {
 		return nil, fmt.Errorf("fetching incremental candles for %s %s: %w", symbol, timeframe, err)
@@ -79,12 +80,14 @@ func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol stri
 	return candles, nil
 }
 
-// hasNewClosedBar dice si ya cerro al menos un periodo nuevo despues del
+// HasNewClosedBar dice si ya cerro al menos un periodo nuevo despues del
 // watermark -- si el siguiente periodo todavia no termina (comun en D1/H1,
 // donde la mayoria de los reinicios caen a mitad del dia/hora actual), no
 // hay nada que pedir todavia. Evita ocupar un canal/conexion real de DxLink
 // para una peticion que de antemano sabemos que no va a traer nada nuevo.
-func hasNewClosedBar(watermark time.Time, duration time.Duration) bool {
+// Exportado para el barrido en lote (catchup), que arma los lotes con el
+// mismo criterio sin pasar por Backfill uno por uno.
+func HasNewClosedBar(watermark time.Time, duration time.Duration) bool {
 	nextBar := watermark.Add(duration)
 	return !nextBar.Add(duration).After(time.Now())
 }

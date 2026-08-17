@@ -9,6 +9,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
 	"github.com/rs/zerolog/log"
 )
 
@@ -90,14 +91,15 @@ type job struct {
 	tf     domain.Timeframe
 }
 
-// phaseJobs ordena una sola fase: los simbolos sin datos primero, los que
-// ya tienen algo despues -- un chequeo con al menos una barra nueva cuesta
-// lo mismo en red que traer la profundidad completa de un simbolo nuevo
-// (no es proporcional a cuantas barras trae), asi que sin esta prioridad
-// una fase gasta su tiempo re-chequeando simbolos que ya estan al dia antes
-// de llegar siquiera a los que nunca se tocaron.
-func phaseJobs(tracked []domain.Symbol, tf domain.Timeframe, withData map[string]struct{}) []job {
-	var uncovered, covered []job
+// phaseJobs separa una fase en los simbolos sin datos todavia (uncovered,
+// van por el probe de profundidad individual) y los que ya tienen algo
+// (covered, van por lotes de una sola suscripcion DxLink) -- un chequeo con
+// al menos una barra nueva cuesta lo mismo en red que traer la profundidad
+// completa de un simbolo nuevo (no es proporcional a cuantas barras trae),
+// asi que sin esta prioridad una fase gasta su tiempo re-chequeando
+// simbolos que ya estan al dia antes de llegar siquiera a los que nunca se
+// tocaron.
+func phaseJobs(tracked []domain.Symbol, tf domain.Timeframe, withData map[string]struct{}) (uncovered, covered []job) {
 	for _, s := range tracked {
 		j := job{symbol: s.Symbol, tf: tf}
 		if _, ok := withData[s.Symbol]; ok {
@@ -106,7 +108,7 @@ func phaseJobs(tracked []domain.Symbol, tf domain.Timeframe, withData map[string
 			uncovered = append(uncovered, j)
 		}
 	}
-	return append(uncovered, covered...)
+	return uncovered, covered
 }
 
 const (
@@ -114,19 +116,31 @@ const (
 	backfillRetryDelay  = 5 * time.Second
 )
 
+// sweepBatchSize es el tamano de lote del barrido -- el agrupamiento
+// original del pool de Java (100 simbolos por suscripcion DxLink): con
+// esto la fase D1 pasa de 13k round-trips de add/remove a ~130 mensajes.
+const sweepBatchSize = 100
+
 // runPhase corre UN timeframe hasta el final -- todos los workers drenan la
 // cola y terminan (wg.Wait) antes de que el llamador pueda arrancar la
 // fase siguiente. Barrera estricta a proposito: nada de H1 empieza mientras
 // quede un solo D1 pendiente, ni al reves.
-func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, tf domain.Timeframe, workers int) {
+//
+// Los simbolos sin datos todavia (uncovered) siguen por el backfill
+// individual (probe de profundidad maxima), que son pocos. El resto se
+// agrupa en lotes de sweepBatchSize: una sola suscripcion DxLink por lote
+// con el FromTime de cada simbolo -- confirmado en vivo que la version
+// anterior (una suscripcion por simbolo) hacia el barrido 100 veces mas
+// lento en mensajes y se sentia si corria en horario de mercado.
+func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, uncovered, covered []job, tf domain.Timeframe, workers int) {
 	start := time.Now()
-	queue := make(chan job, len(jobs))
-	for _, j := range jobs {
+
+	var wg sync.WaitGroup
+	queue := make(chan job, len(uncovered))
+	for _, j := range uncovered {
 		queue <- j
 	}
 	close(queue)
-
-	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -138,8 +152,72 @@ func runPhase(ctx context.Context, ingest in.IngestCandlesService, jobs []job, t
 	}
 	wg.Wait()
 
-	log.Info().Str("timeframe", string(tf)).Int("symbols", len(jobs)).Dur("elapsed", time.Since(start)).
+	batches := make(chan []job, len(covered)/sweepBatchSize+1)
+	for i := 0; i < len(covered); i += sweepBatchSize {
+		end := min(i+sweepBatchSize, len(covered))
+		batches <- covered[i:end]
+	}
+	close(batches)
+
+	duration, err := tf.Duration()
+	if err != nil {
+		log.Error().Err(err).Str("timeframe", string(tf)).Msg("universe sweep: resolving timeframe duration")
+		return
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for batch := range batches {
+				backfillBatchWithRetry(ctx, gateway, candles, ingest, batch, tf, duration)
+			}
+		}()
+	}
+	wg.Wait()
+
+	log.Info().Str("timeframe", string(tf)).Int("symbols", len(uncovered)+len(covered)).Dur("elapsed", time.Since(start)).
 		Msg("universe sweep phase finished")
+}
+
+// backfillBatchWithRetry arma el lote: lee el watermark de cada simbolo,
+// descarta los que no tienen nada nuevo cerrado todavia (HasNewClosedBar)
+// y pide el resto en UNA suscripcion con el margen incremental de cada uno.
+// Si el fetch del lote falla, cae al backfill individual con reintentos --
+// peor lento que dejar un lote sin datos.
+func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) {
+	froms := make(map[string]time.Time, len(batch))
+	for _, j := range batch {
+		newest, err := candles.GetWatermark(ctx, j.symbol, tf)
+		if err != nil || newest == nil || !ingestion.HasNewClosedBar(*newest, duration) {
+			continue
+		}
+		froms[j.symbol] = newest.Add(-ingestion.IncrementalMargin * duration)
+	}
+	if len(froms) == 0 {
+		return
+	}
+
+	result, err := gateway.GetCandlesBatch(ctx, tf, froms)
+	if err != nil {
+		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(froms)).
+			Msg("universe sweep batch fetch failed, falling back to per-symbol backfill")
+		for symbol := range froms {
+			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
+		}
+		return
+	}
+
+	for symbol, candlesFetched := range result {
+		closed := domain.ClosedCandles(candlesFetched, time.Now())
+		if len(closed) == 0 {
+			continue
+		}
+		if err := candles.Save(ctx, closed); err != nil {
+			log.Warn().Err(err).Str("symbol", symbol).Str("timeframe", string(tf)).
+				Msg("universe sweep batch save failed, falling back to per-symbol backfill")
+			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
+		}
+	}
 }
 
 // backfillWithRetry reintenta un trabajo de backfill fallido -- confirmado en
@@ -189,7 +267,8 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sy
 		log.Error().Err(err).Msg("failed to check which symbols already have D1 data, treating all as uncovered")
 		withD1 = map[string]struct{}{}
 	}
-	runPhase(ctx, ingest, phaseJobs(tracked, domain.D1, withD1), domain.D1, workers)
+	uncoveredD1, coveredD1 := phaseJobs(tracked, domain.D1, withD1)
+	runPhase(ctx, gateway, candles, ingest, uncoveredD1, coveredD1, domain.D1, workers)
 
 	// Cierra todas las conexiones DxLink entre fases -- confirmado en vivo
 	// que arrastrar las conexiones de D1 justo cuando H1/M1 abren varias de
@@ -202,7 +281,8 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, symbols out.Sy
 		log.Error().Err(err).Msg("failed to check which symbols already have H1 data, treating all as uncovered")
 		withH1 = map[string]struct{}{}
 	}
-	runPhase(ctx, ingest, phaseJobs(tracked, domain.H1, withH1), domain.H1, workers)
+	uncoveredH1, coveredH1 := phaseJobs(tracked, domain.H1, withH1)
+	runPhase(ctx, gateway, candles, ingest, uncoveredH1, coveredH1, domain.H1, workers)
 
 	gateway.ResetLiveConnections()
 

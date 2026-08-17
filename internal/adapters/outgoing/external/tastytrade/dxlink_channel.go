@@ -228,6 +228,44 @@ func (c *dxLinkChannel) subscribeHistory(symbol string, tf domain.Timeframe, fro
 	})
 }
 
+// subscribeHistoryBatch manda el historial de MUCHOS simbolos en un solo
+// mensaje FEED_SUBSCRIPTION (cada item con su propio FromTime) -- es el
+// agrupamiento original del pool de Java: el barrido pide lotes enteros
+// en vez de una suscripcion por simbolo (ver CandlePool.FetchHistoryBatch).
+func (c *dxLinkChannel) subscribeHistoryBatch(symbols []string, tf domain.Timeframe, froms map[string]time.Time) error {
+	items := make([]feedSubscriptionItem, 0, len(symbols))
+	for _, symbol := range symbols {
+		sym, err := candleSymbol(symbol, tf)
+		if err != nil {
+			return err
+		}
+		fromMs := froms[symbol].UnixMilli()
+		items = append(items, feedSubscriptionItem{Symbol: sym, Type: "Candle", FromTime: &fromMs})
+	}
+	return c.client.send(feedSubscriptionMessage{Type: "FEED_SUBSCRIPTION", Channel: c.id, Add: items})
+}
+
+// unsubscribeHistoryBatch manda la baja del lote entero en un solo
+// mensaje, con las dos formas del simbolo por item (ver unsubscribe).
+func (c *dxLinkChannel) unsubscribeHistoryBatch(symbols []string, tf domain.Timeframe) error {
+	items := make([]feedSubscriptionItem, 0, len(symbols)*2)
+	for _, symbol := range symbols {
+		sym, err := candleSymbol(symbol, tf)
+		if err != nil {
+			return err
+		}
+		normalizedSym, err := candleSymbolNormalized(symbol, tf)
+		if err != nil {
+			return err
+		}
+		items = append(items,
+			feedSubscriptionItem{Symbol: sym, Type: "Candle"},
+			feedSubscriptionItem{Symbol: normalizedSym, Type: "Candle"},
+		)
+	}
+	return c.client.send(feedSubscriptionMessage{Type: "FEED_SUBSCRIPTION", Channel: c.id, Remove: items})
+}
+
 // unsubscribe manda la baja en las dos formas posibles del simbolo --
 // "AAPL{=1d}" (la que usamos para suscribirnos) y "AAPL{=d}" (la
 // normalizada que el servidor devuelve en los eventos). No sabemos con

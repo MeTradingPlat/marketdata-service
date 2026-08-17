@@ -3,6 +3,7 @@ package tastytrade
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -354,6 +355,81 @@ func (p *CandlePool) CurrentCandle(symbol string) (domain.Candle, bool) {
 	defer p.currentMu.Unlock()
 	c, ok := p.current[symbol]
 	return c, ok
+}
+
+// FetchHistoryBatch pide el historial de un LOTE de simbolos en una sola
+// suscripcion DxLink (cada uno con su propio FromTime) -- es el
+// agrupamiento original del pool de Java (100 simbolos por canal) que el
+// barrido nocturno usa para no pagar 13k round-trips de add/remove por
+// timeframe. Mismo ciclo que FetchHistory: add del lote, rafaga, remove
+// del lote, dispatch por simbolo para enrutar cada evento al collector.
+func (p *CandlePool) FetchHistoryBatch(ctx context.Context, tf domain.Timeframe, froms map[string]time.Time) (map[string][]domain.Candle, error) {
+	if len(froms) == 0 {
+		return map[string][]domain.Candle{}, nil
+	}
+	symbols := make([]string, 0, len(froms))
+	for symbol := range froms {
+		symbols = append(symbols, symbol)
+	}
+	sort.Strings(symbols)
+
+	// Mismo lock por clave que FetchHistory, en orden lexicografico para
+	// no interbloquearse con un FetchHistory por-simbolo concurrente.
+	unlockAll := func() {
+		for _, symbol := range symbols {
+			if lockVal, ok := p.historyLocks.Load(candleKey(symbol, tf)); ok {
+				lockVal.(*sync.Mutex).Unlock()
+			}
+		}
+	}
+	for _, symbol := range symbols {
+		lockVal, _ := p.historyLocks.LoadOrStore(candleKey(symbol, tf), &sync.Mutex{})
+		lockVal.(*sync.Mutex).Lock()
+	}
+
+	ch, err := p.allocator.allocate(ctx)
+	if err != nil {
+		unlockAll()
+		return nil, fmt.Errorf("allocating channel for %s history batch: %w", tf, err)
+	}
+
+	for _, symbol := range symbols {
+		ch.occupy(candleKey(symbol, tf))
+	}
+
+	collector := newBatchHistoryCollector(tf)
+	dispatchIDs := make(map[string]uint64, len(symbols))
+	for _, symbol := range symbols {
+		sym := symbol
+		dispatchIDs[symbol] = p.registerDispatch(symbol, tf, "history-batch", func(ev rawCandleEvent) { collector.onCandle(sym, ev) })
+	}
+
+	cleanup := func() {
+		for _, symbol := range symbols {
+			ch.release(candleKey(symbol, tf))
+		}
+		_ = ch.channel.unsubscribeHistoryBatch(symbols, tf)
+		time.AfterFunc(unsubscribeDrainPeriod, func() {
+			for _, symbol := range symbols {
+				p.unregisterDispatchIfCurrent(symbol, tf, dispatchIDs[symbol], "history-batch")
+			}
+		})
+	}
+
+	if err := ch.channel.subscribeHistoryBatch(symbols, tf, froms); err != nil {
+		cleanup()
+		unlockAll()
+		return nil, fmt.Errorf("subscribing history batch: %w", err)
+	}
+	if err := waitForData(ctx, collector.settled, historyDefaultWait); err != nil {
+		cleanup()
+		unlockAll()
+		return nil, err
+	}
+	result := collector.complete()
+	cleanup()
+	unlockAll()
+	return result, nil
 }
 
 // FetchHistoryDeep es el probe de profundidad maxima -- misma logica que

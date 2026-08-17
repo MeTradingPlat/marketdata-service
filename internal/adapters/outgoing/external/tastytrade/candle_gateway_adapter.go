@@ -28,6 +28,10 @@ func (g *Gateway) GetCandles(ctx context.Context, symbol string, timeframe domai
 	return g.pool.FetchHistory(ctx, symbol, timeframe, from)
 }
 
+func (g *Gateway) GetCandlesBatch(ctx context.Context, timeframe domain.Timeframe, froms map[string]time.Time) (map[string][]domain.Candle, error) {
+	return g.pool.FetchHistoryBatch(ctx, timeframe, froms)
+}
+
 // ProbeMaxDepth pide toda la profundidad real que TastyTrade entregue, sin
 // el tope de 2000 velas que tenia el CandleCacheStore del servicio Java --
 // confirmado que ese tope truncaba D1/M1 antes de la profundidad real.

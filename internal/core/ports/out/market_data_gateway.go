@@ -12,6 +12,14 @@ import (
 // implemente esta interfaz, sin tocar core/.
 type MarketDataGateway interface {
 	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, from time.Time) ([]domain.Candle, error)
+	// GetCandlesBatch pide historial para muchos simbolos en UNA sola
+	// suscripcion DxLink (con su propio fromTime cada uno) -- es el
+	// agrupamiento original del pool de Java (100 simbolos por canal) que
+	// el barrido usa para no pagar 13k round-trips de add/remove por
+	// timeframe (confirmado en vivo: una suscripcion por simbolo hacia el
+	// barrido 26k mensajes y 17 minutos -- en lotes son ~130 mensajes y
+	// segundos).
+	GetCandlesBatch(ctx context.Context, timeframe domain.Timeframe, froms map[string]time.Time) (map[string][]domain.Candle, error)
 	ProbeMaxDepth(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error)
 	SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onCandle func(domain.Candle)) error
 	ActiveSymbols(ctx context.Context) ([]domain.Symbol, error)

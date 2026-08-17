@@ -86,3 +86,7 @@ func (f *fakeRepo) GetIntradaySessions(ctx context.Context, symbol string) (doma
 func (f *fakeRepo) GetPreviousSessionClose(ctx context.Context, symbol string, before time.Time) (*float64, error) {
 	return nil, nil
 }
+
+func (f *fakeGateway) GetCandlesBatch(ctx context.Context, timeframe domain.Timeframe, froms map[string]time.Time) (map[string][]domain.Candle, error) {
+	return nil, nil
+}

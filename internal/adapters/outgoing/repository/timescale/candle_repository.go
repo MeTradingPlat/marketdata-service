@@ -59,7 +59,7 @@ const upsertWatermarkSQL = `
 
 // updateLastVolumeSQL solo se encola para velas D1 -- la comparacion contra
 // last_volume_ts evita que el re-fetch defensivo del catch-up nocturno
-// (10 dias hacia atras, ver incrementalMargin) pise el volumen mas
+// (10 dias hacia atras, ver ingestion.IncrementalMargin) pise el volumen mas
 // reciente con uno mas viejo si llega despues en el mismo batch.
 const updateLastVolumeSQL = `
 	UPDATE tracked_symbols SET last_volume = $2, last_volume_ts = $3
