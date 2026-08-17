@@ -6,9 +6,17 @@ import (
 )
 
 // recentSettlementDates genera las fechas candidatas de settlement quincenal
-// (mitad de mes + fin de mes, ajustadas al dia habil mas cercano) de los
-// ultimos `count` meses, mas recientes primero -- FINRA no publica en un
-// dia fijo exacto, asi que probamos varias hasta que una exista.
+// (mitad de mes + fin de mes) de los ultimos `count` meses, mas recientes
+// primero -- FINRA no publica en un dia fijo exacto, asi que probamos
+// varias hasta que una exista.
+//
+// El settlement de mediados de mes es "el 15, o el dia habil ANTERIOR si
+// el 15 cae en fin de semana/feriado" (calendario oficial de FINRA, Rule
+// 4560). Ajustar hacia ADELANTE generaba el 17 en vez del 14 -- y cuando
+// el archivo del 14 se publica (ej. shrt20260814.csv), probar el 17 y
+// fallar dejaba al descargador en el archivo del mes ANTERIOR (confirmado
+// contra la lista oficial de archivos de FINRA). Hacia atras coincide
+// exactamente con el nombre de archivo que FINRA publica.
 func recentSettlementDates(count int) []time.Time {
 	seen := make(map[string]bool)
 	var dates []time.Time
@@ -20,7 +28,7 @@ func recentSettlementDates(count int) []time.Time {
 		if daysInMonth(cursor) < midDay {
 			midDay = daysInMonth(cursor)
 		}
-		midMonth := nearestBusinessDay(time.Date(cursor.Year(), cursor.Month(), midDay, 0, 0, 0, 0, time.UTC), false)
+		midMonth := nearestBusinessDay(time.Date(cursor.Year(), cursor.Month(), midDay, 0, 0, 0, 0, time.UTC), true)
 		endMonth := lastBusinessDayOfMonth(cursor)
 
 		if !midMonth.After(today) {

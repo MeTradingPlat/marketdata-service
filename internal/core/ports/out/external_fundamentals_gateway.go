@@ -35,3 +35,11 @@ type BeneficialOwnersGateway interface {
 type ShortInterestGateway interface {
 	DownloadLatest(ctx context.Context) map[string]domain.ShortInterestRecord
 }
+
+// ProfileSharesGateway resuelve sharesOutstanding en vivo via el evento
+// Profile de DxLink ("shares") -- reusa las conexiones ya abiertas del
+// pool de velas, no abre sesiones nuevas (TastyTrade limita las sesiones
+// concurrentes y el pool ya esta al tope).
+type ProfileSharesGateway interface {
+	FetchProfileShares(ctx context.Context, symbols []string) map[string]int64
+}

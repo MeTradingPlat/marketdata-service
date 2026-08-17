@@ -31,13 +31,21 @@ func isFinraStale(settlementDate string) bool {
 	return time.Since(t) > maxFinraSettlementAge
 }
 
-func buildExternalFundamentals(symbols []string, sharesOutstanding map[string]int64, insiderData map[string]domain.InsiderOwnership, finraData map[string]domain.ShortInterestRecord) []domain.Fundamentals {
+func buildExternalFundamentals(symbols []string, profileShares, sharesOutstanding map[string]int64, insiderData map[string]domain.InsiderOwnership, finraData map[string]domain.ShortInterestRecord) []domain.Fundamentals {
 	updates := make([]domain.Fundamentals, 0, len(symbols))
 	for _, symbol := range symbols {
 		f := domain.Fundamentals{Symbol: symbol}
 		hasUpdate := false
 
-		if shares, ok := sharesOutstanding[symbol]; ok {
+		// DxLink gana cuando trae un valor real (>0): es el dato en vivo.
+		// EDGAR queda de fallback (symbols que DxLink no cubre o devuelve
+		// 0, tipico en clases secundarias y OTC).
+		if shares, ok := profileShares[symbol]; ok && shares > 0 {
+			f.SharesOutstanding = &shares
+			heuristic := int64(math.Round(float64(shares) * heuristicFloatRatio))
+			f.FloatShares = &heuristic
+			hasUpdate = true
+		} else if shares, ok := sharesOutstanding[symbol]; ok {
 			f.SharesOutstanding = &shares
 			heuristic := int64(math.Round(float64(shares) * heuristicFloatRatio))
 			f.FloatShares = &heuristic

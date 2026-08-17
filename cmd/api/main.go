@@ -45,6 +45,7 @@ func main() {
 		insiders out.InsiderOwnershipGateway,
 		beneficialOwners out.BeneficialOwnersGateway,
 		finra out.ShortInterestGateway,
+		profileShares out.ProfileSharesGateway,
 		discoveryClient *discovery.Client,
 		e *echo.Echo,
 		r *router.Router,
@@ -82,7 +83,7 @@ func main() {
 		// Ciclo del universo completo -- D1 fase 1, H1 fase 2, M1 fase 3 --
 		// corre en background (no bloquea el arranque del servidor HTTP) y se
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
-		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra)
+		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares)
 		StartSaveRetryLoop(ctx, ingest)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo)

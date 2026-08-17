@@ -12,6 +12,14 @@ import (
 
 var candleEventFields = []string{"eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility"}
 
+// profileEventFields: el feed retail de TastyTrade solo entrega estos 5
+// campos del evento Profile de forma confiable -- confirmado empiricamente
+// contra 60,000+ eventos reales (freeFloat/beta/tradingStatus/statusReason/
+// haltStartTime/haltEndTime nunca llegan poblados via DxLink pese a estar
+// documentados en el schema de dxFeed). Pedir solo lo que de verdad llega
+// mantiene el payload liviano para lotes de miles de simbolos.
+var profileEventFields = []string{"eventSymbol", "shares"}
+
 type dxLinkChannel struct {
 	id     int
 	client *DxLinkConn
@@ -19,8 +27,9 @@ type dxLinkChannel struct {
 	readyOnce sync.Once
 	ready     chan struct{}
 
-	mu       sync.RWMutex
-	onCandle func(rawCandleEvent)
+	mu        sync.RWMutex
+	onCandle  func(rawCandleEvent)
+	onProfile func(rawProfileEvent)
 }
 
 func newDxLinkChannel(id int, client *DxLinkConn) *dxLinkChannel {
@@ -44,7 +53,7 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 func (c *dxLinkChannel) handleOpened() error {
 	return c.client.send(feedSetupMessage{
 		Type: "FEED_SETUP", Channel: c.id, AcceptAggregationPeriod: 0.1, AcceptDataFormat: "COMPACT",
-		AcceptEventFields: map[string][]string{"Candle": candleEventFields},
+		AcceptEventFields: map[string][]string{"Candle": candleEventFields, "Profile": profileEventFields},
 	})
 }
 
@@ -64,10 +73,17 @@ func (c *dxLinkChannel) handleData(data []interface{}) {
 			i++
 			continue
 		}
-		if typeName == "Candle" {
+		switch typeName {
+		case "Candle":
 			if batch, ok := data[i+1].([]interface{}); ok {
 				for _, ev := range parseCandleBatch(batch) {
 					c.dispatchCandle(ev)
+				}
+			}
+		case "Profile":
+			if batch, ok := data[i+1].([]interface{}); ok {
+				for _, ev := range parseProfileBatch(batch) {
+					c.dispatchProfile(ev)
 				}
 			}
 		}
@@ -84,6 +100,21 @@ func (c *dxLinkChannel) setOnCandle(fn func(rawCandleEvent)) {
 func (c *dxLinkChannel) dispatchCandle(ev rawCandleEvent) {
 	c.mu.RLock()
 	fn := c.onCandle
+	c.mu.RUnlock()
+	if fn != nil {
+		fn(ev)
+	}
+}
+
+func (c *dxLinkChannel) setOnProfile(fn func(rawProfileEvent)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onProfile = fn
+}
+
+func (c *dxLinkChannel) dispatchProfile(ev rawProfileEvent) {
+	c.mu.RLock()
+	fn := c.onProfile
 	c.mu.RUnlock()
 	if fn != nil {
 		fn(ev)
@@ -227,4 +258,24 @@ func (c *dxLinkChannel) unsubscribe(symbol string, tf domain.Timeframe) error {
 
 func (c *dxLinkChannel) close() error {
 	return c.client.send(channelCancelMessage{Type: "CHANNEL_CANCEL", Channel: c.id})
+}
+
+// subscribeProfile manda TODOS los simbolos del lote en un solo mensaje
+// FEED_SUBSCRIPTION -- a diferencia de las velas (una suscripcion viva por
+// simbolo), Profile es un pedido puntual de snapshot para un lote entero,
+// asi que no hace falta un mensaje por simbolo.
+func (c *dxLinkChannel) subscribeProfile(symbols []string) error {
+	items := make([]feedSubscriptionItem, len(symbols))
+	for i, s := range symbols {
+		items[i] = feedSubscriptionItem{Symbol: s, Type: "Profile"}
+	}
+	return c.client.send(feedSubscriptionMessage{Type: "FEED_SUBSCRIPTION", Channel: c.id, Add: items})
+}
+
+func (c *dxLinkChannel) unsubscribeProfile(symbols []string) error {
+	items := make([]feedSubscriptionItem, len(symbols))
+	for i, s := range symbols {
+		items[i] = feedSubscriptionItem{Symbol: s, Type: "Profile"}
+	}
+	return c.client.send(feedSubscriptionMessage{Type: "FEED_SUBSCRIPTION", Channel: c.id, Remove: items})
 }
