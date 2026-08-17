@@ -19,6 +19,12 @@ type CandleRepository interface {
 	// IntradaySnapshot, el resto (precio/volumen actual, prevClose) los
 	// completa el caso de uso desde otras fuentes.
 	GetIntradaySessions(ctx context.Context, symbol string) (domain.IntradaySnapshot, error)
+	// GetPreviousSessionClose devuelve el cierre REGULAR (subasta 16:00 ET)
+	// de la sesion anterior a before -- busca la ultima vela M1 cuya hora ET
+	// cae en [15:58, 16:02) de alguno de los ultimos 10 dias de calendario,
+	// asi que salta fines de semana y feriados por construccion (no hay
+	// aritmetica de "dia anterior"). (nil, nil) si no existe ninguno.
+	GetPreviousSessionClose(ctx context.Context, symbol string, before time.Time) (*float64, error)
 }
 
 type SymbolRepository interface {

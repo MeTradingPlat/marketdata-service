@@ -96,18 +96,10 @@ func hasNewClosedBar(watermark time.Time, duration time.Duration) bool {
 // del dia de trading). El backfill es historico por definicion, nunca
 // debe incluir la barra que todavia se esta formando.
 func closedCandles(candles []domain.Candle, tf domain.Timeframe) ([]domain.Candle, error) {
-	duration, err := tf.Duration()
-	if err != nil {
+	if _, err := tf.Duration(); err != nil {
 		return nil, fmt.Errorf("getting duration for %s: %w", tf, err)
 	}
-	now := time.Now()
-	closed := make([]domain.Candle, 0, len(candles))
-	for _, c := range candles {
-		if !c.Timestamp.Add(duration).After(now) {
-			closed = append(closed, c)
-		}
-	}
-	return closed, nil
+	return domain.ClosedCandles(candles, time.Now()), nil
 }
 
 // StreamLive arranca la unica suscripcion M1 del simbolo desde el ultimo

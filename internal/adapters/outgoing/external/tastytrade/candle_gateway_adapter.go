@@ -28,8 +28,11 @@ func (g *Gateway) GetCandles(ctx context.Context, symbol string, timeframe domai
 // ProbeMaxDepth pide toda la profundidad real que TastyTrade entregue, sin
 // el tope de 2000 velas que tenia el CandleCacheStore del servicio Java --
 // confirmado que ese tope truncaba D1/M1 antes de la profundidad real.
+// Usa FetchHistoryDeep: sin watermark que acote, la rafaga historica de un
+// simbolo profundo puede superar la espera del fetch incremental (ver
+// historyDeepWait en candle_pool.go) y quedar truncada para siempre.
 func (g *Gateway) ProbeMaxDepth(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error) {
-	return g.pool.FetchHistory(ctx, symbol, timeframe, ProbeFromTime)
+	return g.pool.FetchHistoryDeep(ctx, symbol, timeframe, ProbeFromTime)
 }
 
 // SubscribeLiveCandles trata "from" en cero (sin watermark todavia, simbolo

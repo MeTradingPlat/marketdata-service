@@ -102,7 +102,7 @@ func applyDividendAndHalt(out *dto.FundamentalRealtime, f domain.Fundamentals) {
 }
 
 func applyMarketMetrics(out *dto.FundamentalRealtime, f domain.Fundamentals, snap domain.IntradaySnapshot) {
-	marketCap := domain.LiveMarketCap(f.MarketCap, snap)
+	marketCap := domain.MarketCapLive(f.MarketCap, f.SharesOutstanding, snap)
 	out.MarketCap = &marketCap
 	eps := f.Eps
 	out.Eps = &eps

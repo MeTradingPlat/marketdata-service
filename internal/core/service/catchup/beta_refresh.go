@@ -30,7 +30,15 @@ const betaMarketProxy = "SPY"
 // historia conservan el beta del proveedor. Corre en el barrido nocturno
 // despues de RefreshMarketMetrics (que acaba de escribir los betas de
 // TastyTrade): este pasa por encima solo con el valor mejor.
-func RefreshBeta(ctx context.Context, candles out.CandleRepository, symbols out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) {
+//
+// Si un simbolo tiene datos D1 pero no llega a los 24 meses que exige
+// MonthlyBeta, re-probea la profundidad maxima con FetchHistoryDeep antes
+// de darse por vencido -- confirmado en vivo: el primer backfill de algunos
+// simbolos quedo truncado (MDXH con 405 barras D1 y beta imposible) porque
+// la espera corta del fetch incremental cortaba la rafaga historica
+// completa, y el incremental solo trae barras nuevas, nunca re-probea hacia
+// atras -- el simbolo quedaba truncado para siempre.
+func RefreshBeta(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, symbols out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) {
 	tracked, err := symbols.Tracked(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("beta refresh: failed to list tracked symbols")
@@ -44,9 +52,25 @@ func RefreshBeta(ctx context.Context, candles out.CandleRepository, symbols out.
 	}
 
 	start := time.Now()
-	jobs := make(chan string, len(tracked))
-	for _, s := range tracked {
-		jobs <- s.Symbol
+	jobSymbols := make([]string, len(tracked))
+	for i, s := range tracked {
+		jobSymbols[i] = s.Symbol
+	}
+
+	// El beta del proveedor se lee una sola vez para el universo entero:
+	// el fallback de 12 meses (beta 1Y) solo debe pisar al proveedor cuando
+	// este NO trae beta (0) -- si TastyTrade tiene un beta real para un
+	// simbolo con historia corta, se conserva el suyo.
+	providerBeta := map[string]float64{}
+	if fundBySymbol, ferr := fundamentalsRepo.GetBatch(ctx, jobSymbols); ferr == nil {
+		for symbol, f := range fundBySymbol {
+			providerBeta[symbol] = f.Beta
+		}
+	}
+
+	jobs := make(chan string, len(jobSymbols))
+	for _, symbol := range jobSymbols {
+		jobs <- symbol
 	}
 	close(jobs)
 
@@ -63,6 +87,29 @@ func RefreshBeta(ctx context.Context, candles out.CandleRepository, symbols out.
 					continue
 				}
 				beta := domain.MonthlyBeta(symbolCandles, marketCandles)
+				if beta == nil {
+					// Re-probea la profundidad maxima (FetchHistoryDeep) por si
+					// el primer backfill quedo truncado -- ver el comentario
+					// de la funcion. Se guarda SOLO lo cerrado (la vela D1 en
+					// formacion no entra a la BD por esta via) y se recalcula
+					// desde la BD, que es la serie limpia.
+					if deep, derr := gateway.ProbeMaxDepth(ctx, symbol, domain.D1); derr == nil {
+						closed := domain.ClosedCandles(deep, time.Now())
+						if len(closed) > len(symbolCandles) && candles.Save(ctx, closed) == nil {
+							if fresh, ferr := candles.GetCandles(ctx, symbol, domain.D1, betaHistoryBars, nil); ferr == nil {
+								beta = domain.MonthlyBeta(fresh, marketCandles)
+								symbolCandles = fresh
+							}
+						}
+					}
+				}
+				if beta == nil && providerBeta[symbol] == 0 {
+					// Ultimo recurso: beta 1Y con la mejor serie disponible --
+					// un beta real de 12 meses es mejor que N/A para los
+					// simbolos cortos SIN beta del proveedor. Con beta real
+					// del proveedor se conserva el suyo.
+					beta = domain.MonthlyBetaMin(symbolCandles, marketCandles, domain.BetaFallbackMonths)
+				}
 				if beta == nil {
 					continue
 				}

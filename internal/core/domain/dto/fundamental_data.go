@@ -20,12 +20,16 @@ type FundamentalData struct {
 	DividendAmount    float64 `json:"dividendAmount"`
 	DividendFrequency float64 `json:"dividendFrequency"`
 	DayVolume         int64   `json:"dayVolume"`
-	Open              float64 `json:"open"`
-	High              float64 `json:"high"`
-	Low               float64 `json:"low"`
-	PrevClose         float64 `json:"prevClose"`
-	PreMarketVolume   int64   `json:"preMarketVolume"`
-	PostMarketVolume  int64   `json:"postMarketVolume"`
+	// Open/High/Low/PrevClose son punteros (omitempty) como el resto de campos
+	// opcionales de este DTO: en pre-market la sesion regular todavia no abrio
+	// y estos valores NO existen -- serializar 0 los confundia con "abrio en
+	// 0" en el frontend (confirmado en vivo con MDXH antes del open).
+	Open             *float64 `json:"open,omitempty"`
+	High             *float64 `json:"high,omitempty"`
+	Low              *float64 `json:"low,omitempty"`
+	PrevClose        *float64 `json:"prevClose,omitempty"`
+	PreMarketVolume  int64    `json:"preMarketVolume"`
+	PostMarketVolume int64    `json:"postMarketVolume"`
 
 	TradingStatus string `json:"tradingStatus"`
 

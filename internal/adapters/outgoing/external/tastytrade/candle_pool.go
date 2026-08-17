@@ -13,6 +13,13 @@ import (
 
 const (
 	historyDefaultWait = 15 * time.Second
+	// historyDeepWait es para el probeo de profundidad MAXIMA (sin watermark
+	// todavia, p. ej. FetchHistoryDeep): una rafaga de miles de velas D1/H1
+	// puede tardar mas que los 15s del fetch incremental de 10 dias --
+	// confirmado en vivo: la espera corta cortaba la historia de simbolos
+	// con mucha profundidad y dejaba el backfill truncado para siempre (el
+	// incremental solo trae barras NUEVAS, nunca re-probea hacia atras).
+	historyDeepWait = 90 * time.Second
 
 	// unsubscribeDrainPeriod: dxLink no confirma cuando un FEED_SUBSCRIPTION
 	// remove ya surtio efecto del lado del servidor (verificado contra la
@@ -349,7 +356,19 @@ func (p *CandlePool) CurrentCandle(symbol string) (domain.Candle, bool) {
 	return c, ok
 }
 
+// FetchHistoryDeep es el probe de profundidad maxima -- misma logica que
+// FetchHistory pero con historyDeepWait: sin un watermark que acote, la
+// rafaga historica completa de un simbolo profundo puede superar los 15s
+// del fetch incremental (ver historyDeepWait).
+func (p *CandlePool) FetchHistoryDeep(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time) ([]domain.Candle, error) {
+	return p.fetchHistory(ctx, symbol, tf, from, historyDeepWait)
+}
+
 func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time) ([]domain.Candle, error) {
+	return p.fetchHistory(ctx, symbol, tf, from, historyDefaultWait)
+}
+
+func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time, wait time.Duration) ([]domain.Candle, error) {
 	// Un fetch M1 puntual para un simbolo que YA esta en vivo competiria por
 	// la MISMA suscripcion server-side (dxFeed fusiona el "add" de esta
 	// peticion con el "add" en vivo en un solo tema), y el "remove" del
@@ -397,7 +416,7 @@ func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.
 		cleanup()
 		return nil, fmt.Errorf("subscribing history: %w", err)
 	}
-	if err := waitForData(ctx, collector.settled, historyDefaultWait); err != nil {
+	if err := waitForData(ctx, collector.settled, wait); err != nil {
 		cleanup()
 		return nil, err
 	}

@@ -18,6 +18,19 @@ func LiveMarketCap(stored float64, snapshot IntradaySnapshot) float64 {
 	return stored * (snapshot.CurrentPrice / snapshot.PrevClose)
 }
 
+// MarketCapLive es el market cap EXACTO cuando hay sharesOutstanding real
+// (SEC EDGAR o DxLink): acciones x precio vivo -- sin depender del valor
+// que TastyTrade congela entre refrescos ni del escalado por prevClose, que
+// daba dos numeros distintos segun el endpoint (confirmado en vivo: MDXH
+// saltaba entre 42M crudo y 37M escalado). Sin shares, cae al escalado de
+// LiveMarketCap y de ahi al valor crudo -- misma cadena que antes.
+func MarketCapLive(stored float64, shares *int64, snapshot IntradaySnapshot) float64 {
+	if shares != nil && *shares > 0 && snapshot.CurrentPrice != 0 {
+		return float64(*shares) * snapshot.CurrentPrice
+	}
+	return LiveMarketCap(stored, snapshot)
+}
+
 // DaysUntil calcula dias restantes al vuelo en vez de guardarlo -- guardado
 // se volveria stale al dia siguiente sin un refresco que lo recalcule.
 func DaysUntil(isoDate string) int {

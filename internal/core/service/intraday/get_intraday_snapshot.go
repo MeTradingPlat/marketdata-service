@@ -40,6 +40,21 @@ func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol str
 		snap.CurrentVolume = lastM1[0].Volume
 	}
 
+	// prevClose = cierre REGULAR de la sesion anterior (subasta 16:00 ET)
+	// sacado de M1 -- la vela D1 que se guardaba antes cierra a las 20:00 ET
+	// con el post-market incluido, que no es el cierre oficial que usa el
+	// resto de la industria (y que esperan los calculos de % del dia). Si no
+	// hay vela de subasta (media sesion, simbolo sin profundidad M1), cae a
+	// la D1 mas reciente -- mejor un cierre extendido que nada.
+	loc, err := time.LoadLocation("America/New_York")
+	if err == nil {
+		nowET := time.Now().In(loc)
+		openET := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
+		if prev, perr := s.repo.GetPreviousSessionClose(ctx, symbol, openET); perr == nil && prev != nil {
+			snap.PrevClose = *prev
+			return snap, nil
+		}
+	}
 	prevDay, err := s.repo.GetCandles(ctx, symbol, domain.D1, 1, nil)
 	if err != nil {
 		return domain.IntradaySnapshot{}, fmt.Errorf("getting previous close for %s: %w", symbol, err)

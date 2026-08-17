@@ -47,16 +47,16 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			DividendAmount:    fundamentals.DividendAmount,
 			DividendFrequency: fundamentals.DividendFrequency,
 			DayVolume:         snapshot.DayVolume,
-			Open:              snapshot.Open,
-			High:              snapshot.High,
-			Low:               snapshot.Low,
-			PrevClose:         snapshot.PrevClose,
+			Open:              nonzeroOrNil(snapshot.Open),
+			High:              nonzeroOrNil(snapshot.High),
+			Low:               nonzeroOrNil(snapshot.Low),
+			PrevClose:         nonzeroOrNil(snapshot.PrevClose),
 			PreMarketVolume:   snapshot.PreMarketVolume,
 			PostMarketVolume:  snapshot.PostMarketVolume,
 
 			TradingStatus: fundamentals.TradingStatus,
 
-			MarketCap:                   domain.LiveMarketCap(fundamentals.MarketCap, snapshot),
+			MarketCap:                   domain.MarketCapLive(fundamentals.MarketCap, fundamentals.SharesOutstanding, snapshot),
 			Eps:                         fundamentals.Eps,
 			Beta:                        fundamentals.Beta,
 			Lendability:                 fundamentals.Lendability,
@@ -73,6 +73,17 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 	}
 	applyExternalFundamentals(&details.FundamentalData, fundamentals)
 	return details, nil
+}
+
+// nonzeroOrNil es el mismo criterio de "0 no es un dato" que toRealtime()
+// en el paquete fundamentals: OHLC/precio en 0 significa que esa sesion
+// todavia no empezo, no un precio real -- el campo se omite del JSON y el
+// frontend muestra "N/A" en vez de un 0 que parece un dato.
+func nonzeroOrNil(v float64) *float64 {
+	if v == 0 {
+		return nil
+	}
+	return &v
 }
 
 // applyExternalFundamentals solo llena sharesOutstanding/floatShares/

@@ -6,6 +6,13 @@ package domain
 // antes que un numero que depende de 6 observaciones.
 const betaMinAlignedMonths = 24
 
+// BetaFallbackMonths es el minimo relajado (beta 1Y, convencion valida en
+// la industria para simbolos con historia corta) que el refresh usa solo
+// cuando ni la historia propia llega a 2 anios ni TastyTrade trae beta --
+// un beta 1Y real es mejor que N/A (confirmado en vivo: MDXH, ADR con ~19
+// meses de D1, quedaba sin beta del todo).
+const BetaFallbackMonths = 12
+
 // MonthlyBeta calcula el beta clasico (cov(simbolo, mercado)/var(mercado))
 // sobre retornos MENSUALES de cierres D1 -- la misma convencion de la
 // industria (5Y monthly, ver fuentes de stockanalysis/Yahoo), no la
@@ -15,9 +22,19 @@ const betaMinAlignedMonths = 24
 // symbolCandles y marketCandles son velas D1 en orden ascendente. Si no
 // hay al menos betaMinAlignedMonths meses solapados, devuelve nil.
 func MonthlyBeta(symbolCandles, marketCandles []Candle) *float64 {
+	return monthlyBetaMin(symbolCandles, marketCandles, betaMinAlignedMonths)
+}
+
+// MonthlyBetaMin es la misma covarianza mensual con un minimo de meses
+// explicito (ver betaFallbackMonths para el caso de uso).
+func MonthlyBetaMin(symbolCandles, marketCandles []Candle, minMonths int) *float64 {
+	return monthlyBetaMin(symbolCandles, marketCandles, minMonths)
+}
+
+func monthlyBetaMin(symbolCandles, marketCandles []Candle, minMonths int) *float64 {
 	symbol := monthlyCloses(symbolCandles)
 	market := monthlyCloses(marketCandles)
-	if len(symbol) < betaMinAlignedMonths || len(market) < betaMinAlignedMonths {
+	if len(symbol) < minMonths || len(market) < minMonths {
 		return nil
 	}
 
@@ -35,7 +52,7 @@ func MonthlyBeta(symbolCandles, marketCandles []Candle) *float64 {
 		xs = append(xs, mClose/prevM-1)
 		ys = append(ys, sClose/prevS-1)
 	}
-	if len(xs) < betaMinAlignedMonths {
+	if len(xs) < minMonths {
 		return nil
 	}
 

@@ -82,3 +82,7 @@ func (f *fakeRepo) SymbolsWithData(ctx context.Context, tf domain.Timeframe) (ma
 func (f *fakeRepo) GetIntradaySessions(ctx context.Context, symbol string) (domain.IntradaySnapshot, error) {
 	return domain.IntradaySnapshot{}, nil
 }
+
+func (f *fakeRepo) GetPreviousSessionClose(ctx context.Context, symbol string, before time.Time) (*float64, error) {
+	return nil, nil
+}
