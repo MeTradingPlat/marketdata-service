@@ -68,6 +68,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			ImpliedVolatilityPercentile: fundamentals.ImpliedVolatilityPercentile,
 			NextEarningsDate:            fundamentals.NextEarningsDate,
 			DaysUntilEarnings:           domain.DaysUntil(fundamentals.NextEarningsDate),
+			OccurredDate:                fundamentals.OccurredDate,
 		},
 	}
 	applyExternalFundamentals(&details.FundamentalData, fundamentals)

@@ -55,4 +55,13 @@ type Fundamentals struct {
 	InsiderShares  *int64     `json:"-"`
 	InsiderCiks    []string   `json:"-"`
 	FloatUpdatedAt *time.Time `json:"-"`
+
+	// OccurredDate es la fecha del ultimo reporte de earnings REAL (con EPS
+	// ya publicado, no estimado) -- endpoint separado de TastyTrade
+	// (historic-corporate-events/earnings-reports), por-simbolo. "" (no
+	// puntero) sigue el mismo criterio que NextEarningsDate: una fecha ISO
+	// nunca es la cadena vacia, asi que "" ya distingue sin ambiguedad
+	// "todavia no se busco" de un dato real.
+	OccurredDate      string     `json:"-"`
+	EarningsUpdatedAt *time.Time `json:"-"`
 }

@@ -53,4 +53,12 @@ type FundamentalsRepository interface {
 	// sharesOutstanding+insiderShares ya conocidos pero floatShares real
 	// menos reciente -- ver RefreshBeneficialOwners.
 	GetSymbolsDueForFloatRefresh(ctx context.Context, limit int) ([]domain.Fundamentals, error)
+	// UpsertEarningsHistory cubre occurredDate (ultimo reporte real) y,
+	// cuando hay una prediccion valida, nextEarningsDate -- ver
+	// RefreshEarningsHistory.
+	UpsertEarningsHistory(ctx context.Context, fundamentals []domain.Fundamentals) error
+	// GetSymbolsWithStaleEarnings trae los simbolos sin nextEarningsDate o
+	// con uno ya vencido -- el endpoint de earnings history es por-simbolo,
+	// esto acota el refresco a los que de verdad lo necesitan.
+	GetSymbolsWithStaleEarnings(ctx context.Context) ([]string, error)
 }

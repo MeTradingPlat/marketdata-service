@@ -20,6 +20,11 @@ type MarketDataGateway interface {
 	// MarketMetrics trae market-cap/beta/liquidez/IV/proximo earnings --
 	// fuente separada de DividendInfo (otro endpoint REST), se llama aparte.
 	MarketMetrics(ctx context.Context, symbols []string) ([]domain.Fundamentals, error)
+	// EarningsReports trae el historial de reportes de earnings REALES (con
+	// EPS ya publicado) de un simbolo -- endpoint separado, por-simbolo, sin
+	// batch. Usado para saber la fecha del ultimo reporte y predecir el
+	// proximo cuando MarketMetrics no trae uno vigente.
+	EarningsReports(ctx context.Context, symbol string) ([]domain.EarningsReportItem, error)
 	// ResetLiveConnections cierra todas las conexiones DxLink pooled -- se
 	// llama entre fases del barrido (D1->H1->M1) para que ninguna arrastre
 	// sesiones de la fase anterior justo cuando la siguiente abre varias

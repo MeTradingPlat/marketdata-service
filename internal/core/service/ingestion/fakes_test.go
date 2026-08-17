@@ -46,6 +46,10 @@ func (f *fakeGateway) MarketMetrics(ctx context.Context, symbols []string) ([]do
 	return nil, nil
 }
 
+func (f *fakeGateway) EarningsReports(ctx context.Context, symbol string) ([]domain.EarningsReportItem, error) {
+	return nil, nil
+}
+
 func (f *fakeGateway) ResetLiveConnections() {}
 
 type fakeRepo struct {

@@ -29,7 +29,8 @@ const fundamentalsSelectSQL = `
 	COALESCE(d.implied_volatility_index, 0), COALESCE(d.implied_volatility_rank, 0),
 	COALESCE(d.implied_volatility_percentile, 0), COALESCE(d.next_earnings_date, ''),
 	d.metrics_updated_at,
-	d.shares_outstanding, d.float_shares, d.short_interest, d.short_ratio, d.external_updated_at, d.float_updated_at
+	d.shares_outstanding, d.float_shares, d.short_interest, d.short_ratio, d.external_updated_at, d.float_updated_at,
+	COALESCE(d.occurred_date, '')
 `
 
 const getFundamentalsSQL = `
@@ -49,6 +50,7 @@ func scanFundamentals(row pgx.Row, f *domain.Fundamentals) error {
 		&f.ImpliedVolatilityIndex, &f.ImpliedVolatilityRank,
 		&f.ImpliedVolatilityPercentile, &f.NextEarningsDate, &f.MetricsUpdatedAt,
 		&f.SharesOutstanding, &f.FloatShares, &f.ShortInterest, &f.ShortRatio, &f.ExternalUpdatedAt, &f.FloatUpdatedAt,
+		&f.OccurredDate,
 	)
 }
 
@@ -96,6 +98,7 @@ func (r *FundamentalsRepository) GetBatch(ctx context.Context, symbols []string)
 			&f.ImpliedVolatilityIndex, &f.ImpliedVolatilityRank,
 			&f.ImpliedVolatilityPercentile, &f.NextEarningsDate, &f.MetricsUpdatedAt,
 			&f.SharesOutstanding, &f.FloatShares, &f.ShortInterest, &f.ShortRatio, &f.ExternalUpdatedAt, &f.FloatUpdatedAt,
+			&f.OccurredDate,
 		); err != nil {
 			return nil, fmt.Errorf("scanning fundamentals batch row: %w", err)
 		}
@@ -222,6 +225,73 @@ func (r *FundamentalsRepository) UpsertExternalFundamentals(ctx context.Context,
 		}
 	}
 	return nil
+}
+
+// upsertEarningsHistorySQL cubre occurred_date (ultimo reporte real) y,
+// solo cuando hay una prediccion valida, next_earnings_date -- NULLIF
+// convierte "" (nuestro "no hay dato" para estos dos campos de texto, ver
+// domain.Fundamentals) en SQL NULL antes del COALESCE, para no pisar un
+// next_earnings_date que MarketMetrics ya haya puesto esa misma noche.
+const upsertEarningsHistorySQL = `
+	INSERT INTO dividends (symbol_id, occurred_date, next_earnings_date, earnings_updated_at)
+	SELECT symbol_id, NULLIF($2, ''), NULLIF($3, ''), now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET
+		occurred_date = COALESCE(EXCLUDED.occurred_date, dividends.occurred_date),
+		next_earnings_date = COALESCE(EXCLUDED.next_earnings_date, dividends.next_earnings_date),
+		earnings_updated_at = EXCLUDED.earnings_updated_at
+`
+
+func (r *FundamentalsRepository) UpsertEarningsHistory(ctx context.Context, fundamentals []domain.Fundamentals) error {
+	if len(fundamentals) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, f := range fundamentals {
+		batch.Queue(upsertEarningsHistorySQL, f.Symbol, f.OccurredDate, f.NextEarningsDate)
+	}
+	results := r.pool.SendBatch(ctx, batch)
+	defer results.Close()
+	for range fundamentals {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("upserting earnings history batch: %w", err)
+		}
+	}
+	return nil
+}
+
+// getSymbolsWithStaleEarningsSQL: un simbolo esta "debido" si nunca se
+// busco (next_earnings_date NULL/vacio) o si la fecha que tenemos ya paso
+// -- el endpoint de historic-corporate-events es por-simbolo (sin batch),
+// asi que acotar a los que de verdad lo necesitan evita pedirle esto a
+// TastyTrade para el universo entero cada noche cuando earnings solo
+// cambia ~4 veces al año por emisor.
+const getSymbolsWithStaleEarningsSQL = `
+	SELECT s.symbol
+	FROM tracked_symbols s
+	LEFT JOIN dividends d ON d.symbol_id = s.symbol_id
+	WHERE s.is_active = TRUE
+	AND (
+		d.next_earnings_date IS NULL OR d.next_earnings_date = ''
+		OR (d.next_earnings_date ~ '^\d{4}-\d{2}-\d{2}$' AND d.next_earnings_date::date <= CURRENT_DATE)
+	)
+`
+
+func (r *FundamentalsRepository) GetSymbolsWithStaleEarnings(ctx context.Context) ([]string, error) {
+	rows, err := r.pool.Query(ctx, getSymbolsWithStaleEarningsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("querying symbols with stale earnings: %w", err)
+	}
+	defer rows.Close()
+
+	var symbols []string
+	for rows.Next() {
+		var symbol string
+		if err := rows.Scan(&symbol); err != nil {
+			return nil, fmt.Errorf("scanning stale earnings symbol row: %w", err)
+		}
+		symbols = append(symbols, symbol)
+	}
+	return symbols, rows.Err()
 }
 
 // getSymbolsDueForFloatRefreshSQL trae el lote de simbolos con

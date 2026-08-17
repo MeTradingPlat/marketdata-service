@@ -57,6 +57,12 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	startLiveUniverse(ctx, ingest, tracked)
 	catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
 	catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
+	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
+	// que pisa next_earnings_date con el dato vigente de TastyTrade, asi que
+	// el lote de "vencidos o nunca buscados" que queda despues es chico (solo
+	// emisores cuyo earnings ya paso o que TastyTrade no cubre) -- el
+	// COALESCE del upsert nunca pisa una fecha vigente con una prediccion.
+	catchup.RefreshEarningsHistory(ctx, gateway, fundamentals)
 
 	// En background: descarga+parseo del companyfacts.zip de SEC EDGAR
 	// (~1.5GB, hasta 20 min la primera vez del dia) y de los ZIPs

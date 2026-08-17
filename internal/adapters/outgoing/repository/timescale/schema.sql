@@ -140,3 +140,9 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS external_updated_at TIMESTAMPTZ;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS insider_shares BIGINT;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS insider_ciks TEXT[];
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS float_updated_at TIMESTAMPTZ;
+-- occurred_date es la fecha del ultimo reporte de earnings REAL (con EPS
+-- ya publicado) -- viene de un endpoint separado de TastyTrade
+-- (historic-corporate-events/earnings-reports), por-simbolo, sin batch.
+-- earnings_updated_at marca cuando corrio ese refresco por ultima vez.
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS occurred_date TEXT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS earnings_updated_at TIMESTAMPTZ;

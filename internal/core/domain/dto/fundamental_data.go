@@ -46,4 +46,9 @@ type FundamentalData struct {
 	ImpliedVolatilityPercentile float64  `json:"impliedVolatilityPercentile"`
 	NextEarningsDate            string   `json:"nextEarningsDate"`
 	DaysUntilEarnings           int      `json:"daysUntilEarnings"`
+	// OccurredDate es la fecha del ultimo reporte de earnings REAL (con EPS
+	// ya publicado) -- el frontend la muestra como "Last Report Date".
+	// "" (no puntero) es consistente con el resto de campos de texto de
+	// este DTO: una fecha ISO nunca es la cadena vacia.
+	OccurredDate string `json:"occurredDate"`
 }
