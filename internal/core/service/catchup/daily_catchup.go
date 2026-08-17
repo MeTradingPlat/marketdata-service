@@ -268,7 +268,7 @@ func ReconcileAndTracked(ctx context.Context, gateway out.MarketDataGateway, sym
 	return tracked
 }
 
-func RunSweep(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, tracked []domain.Symbol, workers int, resetBetweenPhases bool) []domain.Symbol {
+func RunSweep(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, tracked []domain.Symbol, workers int) []domain.Symbol {
 	if len(tracked) == 0 {
 		return nil
 	}
@@ -281,16 +281,14 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 	uncoveredD1, coveredD1 := phaseJobs(tracked, domain.D1, withD1)
 	runPhase(ctx, gateway, candles, ingest, uncoveredD1, coveredD1, domain.D1, workers)
 
-	// Cierra todas las conexiones DxLink entre fases -- confirmado en vivo
-	// que arrastrar las conexiones de D1 justo cuando H1/M1 abren varias de
-	// golpe puede superar el limite de sesiones concurrentes de TastyTrade.
-	// Cada fase arranca desde cero sesiones. SOLO en la ventana de
-	// mantenimiento (mercado cerrado, M1 detenido): en el arranque en frio
-	// el M1 en vivo ya esta corriendo (se reanuda ANTES del barrido, ver
-	// StartUniverseCycle) y cerrar las conexiones aqui lo mataria.
-	if resetBetweenPhases {
-		gateway.ResetLiveConnections()
-	}
+	// Cierra todas las conexiones DxLink entre fases -- diseno original del
+	// usuario para minimizar carga en el servidor: D1 termina, se desuscribe
+	// y se cierran las conexiones para asegurarse de que la fase termino;
+	// H1 arranca desde cero sesiones; M1 es lo ultimo y se queda suscrito.
+	// Confirmado en vivo que arrastrar las conexiones de D1 justo cuando H1
+	// abre varias de golpe puede superar el limite de sesiones concurrentes
+	// de TastyTrade.
+	gateway.ResetLiveConnections()
 
 	withH1, err := candles.SymbolsWithData(ctx, domain.H1)
 	if err != nil {
@@ -300,9 +298,7 @@ func RunSweep(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 	uncoveredH1, coveredH1 := phaseJobs(tracked, domain.H1, withH1)
 	runPhase(ctx, gateway, candles, ingest, uncoveredH1, coveredH1, domain.H1, workers)
 
-	if resetBetweenPhases {
-		gateway.ResetLiveConnections()
-	}
+	gateway.ResetLiveConnections()
 
 	return tracked
 }
