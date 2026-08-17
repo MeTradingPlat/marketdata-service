@@ -40,7 +40,7 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 			return nil, fmt.Errorf("checking watermark for %s %s: %w", symbol, source, err)
 		}
 		if newest == nil {
-			return nil, nil
+			return []domain.Candle{}, nil
 		}
 		anchor = newest
 	}
@@ -52,7 +52,10 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 	}
 	defer rows.Close()
 
-	var candles []domain.Candle
+	// candles arranca como slice vacio, no nil -- ver el mismo comentario en
+	// GetCandles (candle_repository.go): un nil slice serializa como "null"
+	// en JSON en vez de "[]", rompiendo al frontend en loadMoreHistory.
+	candles := make([]domain.Candle, 0)
 	for rows.Next() {
 		c := domain.Candle{Symbol: symbol, Timeframe: timeframe, Source: "aggregated"}
 		if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount); err != nil {

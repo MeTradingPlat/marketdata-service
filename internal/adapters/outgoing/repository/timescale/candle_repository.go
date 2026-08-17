@@ -144,7 +144,7 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 			return nil, fmt.Errorf("checking watermark for %s %s: %w", symbol, timeframe, err)
 		}
 		if newest == nil {
-			return nil, nil
+			return []domain.Candle{}, nil
 		}
 		anchor = newest
 	}
@@ -160,7 +160,12 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 	}
 	defer rows.Close()
 
-	var candles []domain.Candle
+	// candles arranca como slice vacio, no nil -- un query sin filas (ej. al
+	// scrollear hacia atras mas alla del historial real, ver loadMoreHistory
+	// del frontend) debe serializar como "[]" en la respuesta JSON, no como
+	// "null" (confirmado en vivo: un nil slice le rompia el `.length` al
+	// frontend, "Cannot read properties of null").
+	candles := make([]domain.Candle, 0)
 	for rows.Next() {
 		c := domain.Candle{Symbol: symbol, Timeframe: timeframe}
 		if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount, &c.VWAP, &c.Source); err != nil {

@@ -38,7 +38,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 		snapshot = domain.IntradaySnapshot{}
 	}
 
-	return dto.SymbolDetails{
+	details := dto.SymbolDetails{
 		ActiveEquity: equity,
 		FundamentalData: dto.FundamentalData{
 			Symbol:            symbol,
@@ -69,5 +69,29 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			NextEarningsDate:            fundamentals.NextEarningsDate,
 			DaysUntilEarnings:           domain.DaysUntil(fundamentals.NextEarningsDate),
 		},
-	}, nil
+	}
+	applyExternalFundamentals(&details.FundamentalData, fundamentals)
+	return details, nil
+}
+
+// applyExternalFundamentals solo llena sharesOutstanding/floatShares/
+// shortInterest/shortRatio si ExternalUpdatedAt esta seteado -- misma
+// disciplina null-vs-0 que toRealtime() en el paquete fundamentals (ver
+// realtime_mapper.go), para no mostrar "0" donde en realidad nunca se
+// corrio el refresco de SEC EDGAR/FINRA para este simbolo.
+func applyExternalFundamentals(out *dto.FundamentalData, f domain.Fundamentals) {
+	if f.ExternalUpdatedAt == nil {
+		return
+	}
+	out.SharesOutstanding = f.SharesOutstanding
+	out.FloatShares = f.FloatShares
+	out.ShortInterest = f.ShortInterest
+	out.ShortRatio = f.ShortRatio
+	if f.FloatShares != nil {
+		source := "ESTIMATED"
+		if f.FloatUpdatedAt != nil {
+			source = "SEC_EDGAR"
+		}
+		out.FloatSource = &source
+	}
 }
