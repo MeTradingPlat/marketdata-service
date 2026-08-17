@@ -14,6 +14,29 @@ import (
 
 const liveRolloutWorkers = 20
 
+const (
+	refreshMaxAttempts = 3
+	refreshRetryDelay  = 3 * time.Minute
+)
+
+// refreshWithRetry reintenta un refresh idempotente del barrido nocturno --
+// confirmado en vivo: postgres cayo en recovery mode justo durante el upsert
+// de beta (SQLSTATE 57P03) y con un solo intento se perdieron beta, earnings
+// y el refresh externo de SEC/FINRA hasta la ventana del dia siguiente. Un
+// fallo transitorio de BD no deberia costar una noche entera de datos.
+func refreshWithRetry(name string, fn func() error) {
+	for attempt := 1; attempt <= refreshMaxAttempts; attempt++ {
+		if err := fn(); err != nil {
+			log.Error().Err(err).Int("attempt", attempt).Str("refresh", name).Msg("nightly refresh failed")
+			if attempt < refreshMaxAttempts {
+				time.Sleep(refreshRetryDelay)
+			}
+			continue
+		}
+		return
+	}
+}
+
 // StartUniverseCycle corre el ciclo completo del universo -- D1 fase 1, H1
 // fase 2, M1 fase 3 -- una vez al arrancar (nada esta en vivo todavia, no
 // hace falta desconectar nada) y despues en cada ventana de mantenimiento
@@ -60,20 +83,26 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// RefreshBeta va despues de RefreshMarketMetrics: este acaba de escribir
 	// los betas de TastyTrade, y el nuestro pasa por encima solo donde se
 	// pudo calcular (5Y monthly desde velas propias, ver domain.MonthlyBeta).
-	catchup.RefreshBeta(ctx, gateway, candles, symbols, fundamentals)
+	refreshWithRetry("beta", func() error {
+		return catchup.RefreshBeta(ctx, gateway, candles, symbols, fundamentals)
+	})
 	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
 	// que pisa next_earnings_date con el dato vigente de TastyTrade, asi que
 	// el lote de "vencidos o nunca buscados" que queda despues es chico (solo
 	// emisores cuyo earnings ya paso o que TastyTrade no cubre) -- el
 	// COALESCE del upsert nunca pisa una fecha vigente con una prediccion.
-	catchup.RefreshEarningsHistory(ctx, gateway, fundamentals)
+	refreshWithRetry("earnings history", func() error {
+		return catchup.RefreshEarningsHistory(ctx, gateway, fundamentals)
+	})
 
 	// En background: descarga+parseo del companyfacts.zip de SEC EDGAR
 	// (~1.5GB, hasta 20 min la primera vez del dia) y de los ZIPs
 	// trimestrales de insiders no deben demorar el arranque de la ventana
 	// de mantenimiento ni bloquear la siguiente vuelta del ciclo -- mismo
 	// patron que CompletableFuture.runAsync en la version Java.
-	go catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals)
+	go refreshWithRetry("external fundamentals", func() error {
+		return catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals)
+	})
 }
 
 // startLiveUniverse suscribe M1 en vivo para todo el universo con un pool

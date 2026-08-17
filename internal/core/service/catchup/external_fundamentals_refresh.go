@@ -2,6 +2,7 @@ package catchup
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
@@ -18,11 +19,10 @@ import (
 // holders institucionales 5%+) lo completa RefreshBeneficialOwners por
 // separado en un loop continuo, ya que ese si es por-simbolo y no cabe en
 // una sola pasada nocturna para 13k+ simbolos.
-func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) {
+func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) error {
 	tracked, err := symbolsRepo.Tracked(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("external fundamentals refresh: failed to list tracked symbols")
-		return
+		return fmt.Errorf("listing tracked symbols: %w", err)
 	}
 	symbols := toSymbolStrings(tracked)
 	start := time.Now()
@@ -45,8 +45,8 @@ func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandin
 
 	updates := buildExternalFundamentals(symbols, profileShares, sharesOutstanding, insiderData, finraData)
 	if err := fundamentalsRepo.UpsertExternalFundamentals(ctx, updates); err != nil {
-		log.Error().Err(err).Msg("upserting external fundamentals refresh failed")
-		return
+		return fmt.Errorf("upserting external fundamentals batch: %w", err)
 	}
 	log.Info().Int("symbols", len(updates)).Dur("elapsed", time.Since(start)).Msg("external fundamentals refresh finished")
+	return nil
 }

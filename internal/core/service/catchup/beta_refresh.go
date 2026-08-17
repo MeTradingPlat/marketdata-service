@@ -2,6 +2,7 @@ package catchup
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -11,8 +12,14 @@ import (
 )
 
 // betaWorkers: el calculo es CPU+DB por simbolo (una query D1 de ~1300
-// barras cada uno), un pool chico alcanza sin ahogar al host compartido.
-const betaWorkers = 20
+// barras cada uno), un pool chico alcanza sin ahogar al host compartido --
+// bajado de 20 a 8 tras confirmar en vivo que 20 workers concurrentes
+// sobre la hypertable mas el resto del barrido empujaban a postgres al
+// tope de memoria (4GiB) hasta reiniciarse en recovery mode a mitad del
+// upsert, matando tambien earnings y el refresh externo.
+const betaWorkers = 8
+
+const providerBetaChunk = 1000
 
 // betaHistoryBars: 5 anios de velas D1 (~252 por anio) es la convencion
 // estandar para beta mensual (ver stockanalysis/Yahoo), y deja meses de
@@ -38,17 +45,15 @@ const betaMarketProxy = "SPY"
 // la espera corta del fetch incremental cortaba la rafaga historica
 // completa, y el incremental solo trae barras nuevas, nunca re-probea hacia
 // atras -- el simbolo quedaba truncado para siempre.
-func RefreshBeta(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, symbols out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) {
+func RefreshBeta(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, symbols out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) error {
 	tracked, err := symbols.Tracked(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("beta refresh: failed to list tracked symbols")
-		return
+		return fmt.Errorf("listing tracked symbols: %w", err)
 	}
 
 	marketCandles, err := candles.GetCandles(ctx, betaMarketProxy, domain.D1, betaHistoryBars, nil)
 	if err != nil || len(marketCandles) < betaHistoryBars/2 {
-		log.Error().Err(err).Str("symbol", betaMarketProxy).Msg("beta refresh: failed to load market proxy history")
-		return
+		return fmt.Errorf("loading market proxy history for %s: %w", betaMarketProxy, err)
 	}
 
 	start := time.Now()
@@ -57,14 +62,17 @@ func RefreshBeta(ctx context.Context, gateway out.MarketDataGateway, candles out
 		jobSymbols[i] = s.Symbol
 	}
 
-	// El beta del proveedor se lee una sola vez para el universo entero:
-	// el fallback de 12 meses (beta 1Y) solo debe pisar al proveedor cuando
-	// este NO trae beta (0) -- si TastyTrade tiene un beta real para un
-	// simbolo con historia corta, se conserva el suyo.
+	// El beta del proveedor se lee una sola vez para el universo entero,
+	// en lotes de a mil -- una sola consulta con los 13k simbolos en el IN
+	// aportaba pico de memoria a postgres justo cuando los workers arrancan
+	// (confirmado en vivo: recovery mode a mitad del barrido).
 	providerBeta := map[string]float64{}
-	if fundBySymbol, ferr := fundamentalsRepo.GetBatch(ctx, jobSymbols); ferr == nil {
-		for symbol, f := range fundBySymbol {
-			providerBeta[symbol] = f.Beta
+	for i := 0; i < len(jobSymbols); i += providerBetaChunk {
+		end := min(i+providerBetaChunk, len(jobSymbols))
+		if fundBySymbol, ferr := fundamentalsRepo.GetBatch(ctx, jobSymbols[i:end]); ferr == nil {
+			for symbol, f := range fundBySymbol {
+				providerBeta[symbol] = f.Beta
+			}
 		}
 	}
 
@@ -122,8 +130,8 @@ func RefreshBeta(ctx context.Context, gateway out.MarketDataGateway, candles out
 	wg.Wait()
 
 	if err := fundamentalsRepo.UpsertBeta(ctx, updates); err != nil {
-		log.Error().Err(err).Msg("upserting beta refresh failed")
-		return
+		return fmt.Errorf("upserting beta batch: %w", err)
 	}
 	log.Info().Int("symbols", len(updates)).Dur("elapsed", time.Since(start)).Msg("beta refresh finished")
+	return nil
 }

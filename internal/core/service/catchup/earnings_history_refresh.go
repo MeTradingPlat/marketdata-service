@@ -2,6 +2,7 @@ package catchup
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -30,14 +31,13 @@ const earningsHistoryWorkers = 4
 // quien pisa next_earnings_date con el dato fresco de TastyTrade cuando
 // existe) -- el COALESCE del upsert nunca pisa una fecha vigente con una
 // prediccion, y los ya al dia ni siquiera entran en el lote de este job.
-func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, fundamentalsRepo out.FundamentalsRepository) {
+func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, fundamentalsRepo out.FundamentalsRepository) error {
 	stale, err := fundamentalsRepo.GetSymbolsWithStaleEarnings(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("earnings history refresh: failed to select stale symbols")
-		return
+		return fmt.Errorf("selecting stale symbols: %w", err)
 	}
 	if len(stale) == 0 {
-		return
+		return nil
 	}
 
 	start := time.Now()
@@ -84,8 +84,8 @@ func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, 
 	wg.Wait()
 
 	if err := fundamentalsRepo.UpsertEarningsHistory(ctx, updates); err != nil {
-		log.Error().Err(err).Msg("upserting earnings history refresh failed")
-		return
+		return fmt.Errorf("upserting earnings history batch: %w", err)
 	}
 	log.Info().Int("symbols", len(updates)).Dur("elapsed", time.Since(start)).Msg("earnings history refresh finished")
+	return nil
 }
