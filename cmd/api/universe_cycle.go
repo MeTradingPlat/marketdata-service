@@ -95,7 +95,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// los betas de TastyTrade, y el nuestro pasa por encima solo donde se
 	// pudo calcular (5Y monthly desde velas propias, ver domain.MonthlyBeta).
 	refreshWithRetry("beta", func() error {
-		return catchup.RefreshBeta(ctx, gateway, candles, symbols, fundamentals)
+		return catchup.RefreshBeta(ctx, candles, symbols, fundamentals)
 	})
 	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
 	// que pisa next_earnings_date con el dato vigente de TastyTrade, asi que
