@@ -44,27 +44,39 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 		}
 		anchor = newest
 	}
-	from := anchor.Add(-time.Duration(bars*2+30) * approxPeriod)
-
-	rows, err := r.pool.Query(ctx, getAggregatedCandlesSQL, symbol, string(source), bucket, from, before, bars)
-	if err != nil {
-		return nil, fmt.Errorf("querying aggregated candles for %s %s: %w", symbol, timeframe, err)
-	}
-	defer rows.Close()
-
-	// candles arranca como slice vacio, no nil -- ver el mismo comentario en
-	// GetCandles (candle_repository.go): un nil slice serializa como "null"
-	// en JSON en vez de "[]", rompiendo al frontend en loadMoreHistory.
 	candles := make([]domain.Candle, 0)
-	for rows.Next() {
-		c := domain.Candle{Symbol: symbol, Timeframe: timeframe, Source: "aggregated"}
-		if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount); err != nil {
-			return nil, fmt.Errorf("scanning aggregated candle row: %w", err)
+	window := time.Duration(bars*2+30) * approxPeriod
+	// Mismo ensanchamiento de ventana que GetCandles (ver
+	// candle_repository.go): una zona muerta grande deja la pagina en 0
+	// velas y el frontend corta la paginacion creyendo que no hay mas.
+	for attempt := 0; ; attempt++ {
+		from := anchor.Add(-window)
+		rows, err := r.pool.Query(ctx, getAggregatedCandlesSQL, symbol, string(source), bucket, from, before, bars)
+		if err != nil {
+			return nil, fmt.Errorf("querying aggregated candles for %s %s: %w", symbol, timeframe, err)
 		}
-		candles = append(candles, c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		// candles arranca como slice vacio, no nil -- ver el mismo
+		// comentario en GetCandles (candle_repository.go): un nil slice
+		// serializa como "null" en JSON en vez de "[]", rompiendo al
+		// frontend en loadMoreHistory.
+		candles = candles[:0]
+		for rows.Next() {
+			c := domain.Candle{Symbol: symbol, Timeframe: timeframe, Source: "aggregated"}
+			if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning aggregated candle row: %w", err)
+			}
+			candles = append(candles, c)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(candles) >= bars || attempt >= maxWindowWidenAttempts {
+			break
+		}
+		window *= windowWidenFactor
 	}
 
 	for i, j := 0, len(candles)-1; i < j; i, j = i+1, j-1 {

@@ -118,13 +118,22 @@ const getCandlesSQL = `
 	) recent ORDER BY ts ASC
 `
 
+// maxWindowWidenAttempts/windowWidenFactor: ver el loop de ensanchamiento
+// en GetCandles -- las zonas muertas grandes (fines de semana) dejaban la
+// paginacion del frontend clavada en 0 barras.
+const (
+	maxWindowWidenAttempts = 6
+	windowWidenFactor      = 4
+)
+
 // GetCandles arranca leyendo el watermark (la tabla chica, ver comentario
 // de Save()) para calcular un piso de fecha real antes de tocar la
 // hypertable -- sin eso, "dame las ultimas N barras" no le daba a Postgres
 // ningun rango que excluir y sufria el mismo problema que GetWatermark
 // antes de arreglarse: hasta planear la consulta bloqueaba chunks de mas.
-// El margen (2x bars + 30 periodos) cubre fines de semana/feriados/halts
-// sin volver a un scan sin limite.
+// El margen base (2x bars + 30 periodos) cubre fines de semana/feriados/
+// halts normales; zonas muertas mas largas se absorben ensanchando la
+// ventana (ver el loop de abajo).
 //
 // before es nil para el chart inicial (las N barras mas recientes hasta el
 // watermark) y no-nil para "cargar mas historial" al scrollear a la
@@ -152,28 +161,48 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 	if err != nil {
 		return nil, fmt.Errorf("getting duration for %s: %w", timeframe, err)
 	}
-	from := anchor.Add(-time.Duration(bars*2+30) * duration)
 
-	rows, err := r.pool.Query(ctx, getCandlesSQL, symbol, string(timeframe), from, before, bars)
-	if err != nil {
-		return nil, fmt.Errorf("querying candles for %s %s: %w", symbol, timeframe, err)
-	}
-	defer rows.Close()
-
-	// candles arranca como slice vacio, no nil -- un query sin filas (ej. al
-	// scrollear hacia atras mas alla del historial real, ver loadMoreHistory
-	// del frontend) debe serializar como "[]" en la respuesta JSON, no como
-	// "null" (confirmado en vivo: un nil slice le rompia el `.length` al
-	// frontend, "Cannot read properties of null").
 	candles := make([]domain.Candle, 0)
-	for rows.Next() {
-		c := domain.Candle{Symbol: symbol, Timeframe: timeframe}
-		if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount, &c.VWAP, &c.Source); err != nil {
-			return nil, fmt.Errorf("scanning candle row: %w", err)
+	window := time.Duration(bars*2+30) * duration
+	// La ventana base (2x bars + 30 periodos) cubre feriados/halts normales,
+	// pero una zona muerta LARGA (un fin de semana entero, pausas de
+	// cotizacion en un simbolo iliquido) hace que la pagina caiga entera en
+	// cero velas -- y el frontend interpreta "pagina vacia" como "no hay mas
+	// historia" (hasMoreHistory=false, confirmado en vivo: el loadMore de
+	// MDXH M1 un domingo devolvia 0 barras con 951 velas del viernes justo
+	// detras). Por eso, si la pagina viene corta, se ensancha la ventana
+	// (x4) y se reintenta -- los simbolos densos pagan un solo query, los
+	// huecos cuestan un par de queries extra como mucho.
+	for attempt := 0; ; attempt++ {
+		from := anchor.Add(-window)
+		rows, err := r.pool.Query(ctx, getCandlesSQL, symbol, string(timeframe), from, before, bars)
+		if err != nil {
+			return nil, fmt.Errorf("querying candles for %s %s: %w", symbol, timeframe, err)
 		}
-		candles = append(candles, c)
+		// candles arranca como slice vacio, no nil -- un query sin filas
+		// (ej. al scrollear mas alla del historial real) debe serializar
+		// como "[]" en la respuesta JSON, no como "null" (confirmado en
+		// vivo: un nil slice le rompia el `.length` al frontend, "Cannot
+		// read properties of null").
+		candles = candles[:0]
+		for rows.Next() {
+			c := domain.Candle{Symbol: symbol, Timeframe: timeframe}
+			if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount, &c.VWAP, &c.Source); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning candle row: %w", err)
+			}
+			candles = append(candles, c)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(candles) >= bars || attempt >= maxWindowWidenAttempts {
+			return candles, nil
+		}
+		window *= windowWidenFactor
 	}
-	return candles, rows.Err()
 }
 
 // watermarkSQL lee de la tabla watermarks (una fila por simbolo+timeframe,
