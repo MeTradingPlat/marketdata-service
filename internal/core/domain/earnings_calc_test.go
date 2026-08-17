@@ -18,7 +18,7 @@ func TestLastEarningsReport(t *testing.T) {
 		{
 			name: "fecha invalida se ignora",
 			reports: []EarningsReportItem{
-				{OccurredDate: "no-es-fecha", Eps: 1},
+				{OccurredDate: "no-es-fecha"},
 			},
 			wantOccurred: "",
 			wantNext:     "",
@@ -26,10 +26,10 @@ func TestLastEarningsReport(t *testing.T) {
 		{
 			name: "ciclo trimestral regular",
 			reports: []EarningsReportItem{
-				{OccurredDate: "2025-01-30", Eps: 1},
-				{OccurredDate: "2025-04-30", Eps: 1},
-				{OccurredDate: "2025-07-31", Eps: 1},
-				{OccurredDate: "2025-10-30", Eps: 1},
+				{OccurredDate: "2025-01-30"},
+				{OccurredDate: "2025-04-30"},
+				{OccurredDate: "2025-07-31"},
+				{OccurredDate: "2025-10-30"},
 			},
 			wantOccurred: "2025-10-30",
 			wantNext:     "2026-01-29",
@@ -37,9 +37,9 @@ func TestLastEarningsReport(t *testing.T) {
 		{
 			name: "delta corto se descarta (ruido, no ciclo)",
 			reports: []EarningsReportItem{
-				{OccurredDate: "2025-01-30", Eps: 1},
-				{OccurredDate: "2025-02-05", Eps: 1},
-				{OccurredDate: "2025-04-30", Eps: 1},
+				{OccurredDate: "2025-01-30"},
+				{OccurredDate: "2025-02-05"},
+				{OccurredDate: "2025-04-30"},
 			},
 			wantOccurred: "2025-04-30",
 			wantNext:     "2025-07-23",
@@ -47,10 +47,10 @@ func TestLastEarningsReport(t *testing.T) {
 		{
 			name: "desordenado en la fuente",
 			reports: []EarningsReportItem{
-				{OccurredDate: "2025-10-30", Eps: 1},
-				{OccurredDate: "2025-04-30", Eps: 1},
-				{OccurredDate: "2025-07-31", Eps: 1},
-				{OccurredDate: "2025-01-30", Eps: 1},
+				{OccurredDate: "2025-10-30"},
+				{OccurredDate: "2025-04-30"},
+				{OccurredDate: "2025-07-31"},
+				{OccurredDate: "2025-01-30"},
 			},
 			wantOccurred: "2025-10-30",
 			wantNext:     "2026-01-29",
@@ -58,9 +58,9 @@ func TestLastEarningsReport(t *testing.T) {
 		{
 			name: "mediana con cantidad par de deltas",
 			reports: []EarningsReportItem{
-				{OccurredDate: "2025-01-30", Eps: 1},
-				{OccurredDate: "2025-04-30", Eps: 1},
-				{OccurredDate: "2025-07-31", Eps: 1},
+				{OccurredDate: "2025-01-30"},
+				{OccurredDate: "2025-04-30"},
+				{OccurredDate: "2025-07-31"},
 			},
 			wantOccurred: "2025-07-31",
 			wantNext:     "2025-10-30",

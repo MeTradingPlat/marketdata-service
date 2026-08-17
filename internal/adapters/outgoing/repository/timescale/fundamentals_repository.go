@@ -264,12 +264,16 @@ func (r *FundamentalsRepository) UpsertEarningsHistory(ctx context.Context, fund
 // -- el endpoint de historic-corporate-events es por-simbolo (sin batch),
 // asi que acotar a los que de verdad lo necesitan evita pedirle esto a
 // TastyTrade para el universo entero cada noche cuando earnings solo
-// cambia ~4 veces al año por emisor.
+// cambia ~4 veces al año por emisor. Los simbolos con "/" (warrants y
+// units, ej. MTAL/WS) se excluyen de entrada: la barra parte la URL del
+// endpoint (404 garantizado, confirmado en vivo) y esas clases de activo
+// no reportan earnings de todas formas.
 const getSymbolsWithStaleEarningsSQL = `
 	SELECT s.symbol
 	FROM tracked_symbols s
 	LEFT JOIN dividends d ON d.symbol_id = s.symbol_id
 	WHERE s.is_active = TRUE
+	AND s.symbol !~ '/'
 	AND (
 		d.next_earnings_date IS NULL OR d.next_earnings_date = ''
 		OR (d.next_earnings_date ~ '^\d{4}-\d{2}-\d{2}$' AND d.next_earnings_date::date <= CURRENT_DATE)

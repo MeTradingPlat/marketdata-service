@@ -15,8 +15,13 @@ const earningsHistoryLookback = -2 // años
 type earningsReportsResponse struct {
 	Data struct {
 		Items []struct {
-			OccurredDate *string  `json:"occurred-date"`
-			Eps          *float64 `json:"eps"`
+			OccurredDate *string `json:"occurred-date"`
+			// eps llega mezclado: a veces numero JSON, a veces string
+			// ("0.12") -- tiparlo *float64 rompia el decode de TODA la
+			// respuesta para ese simbolo (confirmado en vivo). Solo nos
+			// importa que exista (filtro de "reporte real, no estimado"),
+			// igual que hacia Java con r.get("eps") != null.
+			Eps interface{} `json:"eps"`
 		} `json:"items"`
 	} `json:"data"`
 }
@@ -55,7 +60,7 @@ func (g *Gateway) EarningsReports(ctx context.Context, symbol string) ([]domain.
 		if item.OccurredDate == nil || item.Eps == nil {
 			continue
 		}
-		result = append(result, domain.EarningsReportItem{OccurredDate: *item.OccurredDate, Eps: *item.Eps})
+		result = append(result, domain.EarningsReportItem{OccurredDate: *item.OccurredDate})
 	}
 	return result, nil
 }
