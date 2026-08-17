@@ -83,16 +83,6 @@ func (s *getCandlesService) GetCandles(ctx context.Context, symbol string, timef
 	return candles, nil
 }
 
-// GetCandlesFresh: ver el puerto (ports/in/services.go) -- mismo resultado
-// sin pasar por el cache.
-func (s *getCandlesService) GetCandlesFresh(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
-	candles, err := s.repo.GetCandles(ctx, symbol, timeframe, bars, before)
-	if err != nil {
-		return nil, fmt.Errorf("getting candles for %s %s: %w", symbol, timeframe, err)
-	}
-	return candles, nil
-}
-
 func candleCacheKey(symbol string, timeframe domain.Timeframe, bars int, before *time.Time) string {
 	beforeKey := ""
 	if before != nil {

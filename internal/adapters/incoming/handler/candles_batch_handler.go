@@ -50,7 +50,7 @@ func (h *CandlesHandler) GetCandlesBatch(c echo.Context) error {
 		go func() {
 			defer wg.Done()
 			for symbol := range jobs {
-				candles, err := h.service.GetCandlesFresh(c.Request().Context(), symbol, timeframe, bars, nil)
+				candles, err := h.service.GetCandles(c.Request().Context(), symbol, timeframe, bars, nil)
 				if err != nil || len(candles) == 0 {
 					continue
 				}

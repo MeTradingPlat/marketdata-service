@@ -18,10 +18,6 @@ type GetCandlesService interface {
 	// before es nil para las barras mas recientes, o un limite exclusivo
 	// para paginar hacia atras (scroll a la izquierda del chart).
 	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error)
-	// GetCandlesFresh es la misma lectura SIN el cache de 60s de GetCandles
-	// -- el batch de signal-processing necesita las velas cerradas mas
-	// recientes al instante, no las de hace medio minuto.
-	GetCandlesFresh(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error)
 }
 
 type GetIntradaySnapshotService interface {
