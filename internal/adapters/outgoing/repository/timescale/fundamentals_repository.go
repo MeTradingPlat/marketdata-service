@@ -298,6 +298,34 @@ func (r *FundamentalsRepository) GetSymbolsWithStaleEarnings(ctx context.Context
 	return symbols, rows.Err()
 }
 
+// upsertBetaSQL solo toca beta -- el beta calculado con velas propias
+// (5Y monthly, ver domain.MonthlyBeta) es mejor que el de TastyTrade
+// (ventana corta, da valores raros en ADRs), pero solo se manda para los
+// simbolos donde se pudo calcular; el resto conserva el de TastyTrade.
+const upsertBetaSQL = `
+	INSERT INTO dividends (symbol_id, beta)
+	SELECT symbol_id, $2 FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET beta = EXCLUDED.beta
+`
+
+func (r *FundamentalsRepository) UpsertBeta(ctx context.Context, fundamentals []domain.Fundamentals) error {
+	if len(fundamentals) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, f := range fundamentals {
+		batch.Queue(upsertBetaSQL, f.Symbol, f.Beta)
+	}
+	results := r.pool.SendBatch(ctx, batch)
+	defer results.Close()
+	for range fundamentals {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("upserting beta batch: %w", err)
+		}
+	}
+	return nil
+}
+
 // getSymbolsDueForFloatRefreshSQL trae el lote de simbolos con
 // sharesOutstanding+insiderShares ya conocidos (condicion para poder
 // calcular floatShares real) ordenados por float_updated_at ascendente --

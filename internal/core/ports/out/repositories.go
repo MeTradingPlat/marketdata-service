@@ -61,4 +61,8 @@ type FundamentalsRepository interface {
 	// con uno ya vencido -- el endpoint de earnings history es por-simbolo,
 	// esto acota el refresco a los que de verdad lo necesitan.
 	GetSymbolsWithStaleEarnings(ctx context.Context) ([]string, error)
+	// UpsertBeta pisa beta con el calculado desde velas propias (5Y monthly
+	// contra SPY, ver domain.MonthlyBeta) SOLO para los simbolos incluidos
+	// -- los que no pudieron calcularse conservan el beta de TastyTrade.
+	UpsertBeta(ctx context.Context, fundamentals []domain.Fundamentals) error
 }

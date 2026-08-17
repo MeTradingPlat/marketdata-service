@@ -57,6 +57,10 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	startLiveUniverse(ctx, ingest, tracked)
 	catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
 	catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
+	// RefreshBeta va despues de RefreshMarketMetrics: este acaba de escribir
+	// los betas de TastyTrade, y el nuestro pasa por encima solo donde se
+	// pudo calcular (5Y monthly desde velas propias, ver domain.MonthlyBeta).
+	catchup.RefreshBeta(ctx, candles, symbols, fundamentals)
 	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
 	// que pisa next_earnings_date con el dato vigente de TastyTrade, asi que
 	// el lote de "vencidos o nunca buscados" que queda despues es chico (solo
