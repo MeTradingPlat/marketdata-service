@@ -29,7 +29,9 @@ const fundamentalsSelectSQL = `
 	COALESCE(d.implied_volatility_index, 0), COALESCE(d.implied_volatility_rank, 0),
 	COALESCE(d.implied_volatility_percentile, 0), COALESCE(d.next_earnings_date, ''),
 	d.metrics_updated_at,
-	d.shares_outstanding, d.float_shares, d.short_interest, d.short_ratio, d.external_updated_at, d.float_updated_at,
+	d.shares_outstanding, d.float_shares, d.short_interest, d.short_ratio,
+	d.short_interest_shares, COALESCE(d.short_interest_settlement, ''),
+	d.external_updated_at, d.float_updated_at,
 	COALESCE(d.occurred_date, '')
 `
 
@@ -49,7 +51,9 @@ func scanFundamentals(row pgx.Row, f *domain.Fundamentals) error {
 		&f.Liquidity, &f.LiquidityRating,
 		&f.ImpliedVolatilityIndex, &f.ImpliedVolatilityRank,
 		&f.ImpliedVolatilityPercentile, &f.NextEarningsDate, &f.MetricsUpdatedAt,
-		&f.SharesOutstanding, &f.FloatShares, &f.ShortInterest, &f.ShortRatio, &f.ExternalUpdatedAt, &f.FloatUpdatedAt,
+		&f.SharesOutstanding, &f.FloatShares, &f.ShortInterest, &f.ShortRatio,
+		&f.ShortInterestShares, &f.ShortInterestSettlement,
+		&f.ExternalUpdatedAt, &f.FloatUpdatedAt,
 		&f.OccurredDate,
 	)
 }
@@ -97,7 +101,9 @@ func (r *FundamentalsRepository) GetBatch(ctx context.Context, symbols []string)
 			&f.Liquidity, &f.LiquidityRating,
 			&f.ImpliedVolatilityIndex, &f.ImpliedVolatilityRank,
 			&f.ImpliedVolatilityPercentile, &f.NextEarningsDate, &f.MetricsUpdatedAt,
-			&f.SharesOutstanding, &f.FloatShares, &f.ShortInterest, &f.ShortRatio, &f.ExternalUpdatedAt, &f.FloatUpdatedAt,
+			&f.SharesOutstanding, &f.FloatShares, &f.ShortInterest, &f.ShortRatio,
+			&f.ShortInterestShares, &f.ShortInterestSettlement,
+			&f.ExternalUpdatedAt, &f.FloatUpdatedAt,
 			&f.OccurredDate,
 		); err != nil {
 			return nil, fmt.Errorf("scanning fundamentals batch row: %w", err)
@@ -195,13 +201,15 @@ func (r *FundamentalsRepository) UpsertMarketMetrics(ctx context.Context, fundam
 // external_updated_at si se pisa siempre -- representa "algo externo se
 // refresco", no un campo puntual.
 const upsertExternalFundamentalsSQL = `
-	INSERT INTO dividends (symbol_id, shares_outstanding, float_shares, short_interest, short_ratio, insider_shares, insider_ciks, float_updated_at, external_updated_at)
-	SELECT symbol_id, $2, $3, $4, $5, $6, $7, $8, now() FROM tracked_symbols WHERE symbol = $1
+	INSERT INTO dividends (symbol_id, shares_outstanding, float_shares, short_interest, short_ratio, short_interest_shares, short_interest_settlement, insider_shares, insider_ciks, float_updated_at, external_updated_at)
+	SELECT symbol_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, now() FROM tracked_symbols WHERE symbol = $1
 	ON CONFLICT (symbol_id) DO UPDATE SET
 		shares_outstanding = COALESCE(EXCLUDED.shares_outstanding, dividends.shares_outstanding),
 		float_shares = COALESCE(EXCLUDED.float_shares, dividends.float_shares),
 		short_interest = COALESCE(EXCLUDED.short_interest, dividends.short_interest),
 		short_ratio = COALESCE(EXCLUDED.short_ratio, dividends.short_ratio),
+		short_interest_shares = COALESCE(EXCLUDED.short_interest_shares, dividends.short_interest_shares),
+		short_interest_settlement = COALESCE(EXCLUDED.short_interest_settlement, dividends.short_interest_settlement),
 		insider_shares = COALESCE(EXCLUDED.insider_shares, dividends.insider_shares),
 		insider_ciks = COALESCE(EXCLUDED.insider_ciks, dividends.insider_ciks),
 		float_updated_at = COALESCE(EXCLUDED.float_updated_at, dividends.float_updated_at),
@@ -215,7 +223,7 @@ func (r *FundamentalsRepository) UpsertExternalFundamentals(ctx context.Context,
 	batch := &pgx.Batch{}
 	for _, f := range fundamentals {
 		batch.Queue(upsertExternalFundamentalsSQL, f.Symbol, f.SharesOutstanding, f.FloatShares, f.ShortInterest, f.ShortRatio,
-			f.InsiderShares, f.InsiderCiks, f.FloatUpdatedAt)
+			f.ShortInterestShares, f.ShortInterestSettlement, f.InsiderShares, f.InsiderCiks, f.FloatUpdatedAt)
 	}
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()

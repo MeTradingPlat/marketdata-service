@@ -40,11 +40,16 @@ type Fundamentals struct {
 	// completo (confirmado contra /market-metrics, /market-data/by-type e
 	// /instruments/equities reales, ninguna los trae). nil hasta que
 	// RefreshExternalFundamentals corra por primera vez para el simbolo.
-	SharesOutstanding *int64     `json:"-"`
-	FloatShares       *int64     `json:"-"`
-	ShortInterest     *float64   `json:"-"`
-	ShortRatio        *float64   `json:"-"`
-	ExternalUpdatedAt *time.Time `json:"-"`
+	SharesOutstanding *int64   `json:"-"`
+	FloatShares       *int64   `json:"-"`
+	ShortInterest     *float64 `json:"-"`
+	ShortRatio        *float64 `json:"-"`
+	// ShortInterestShares es el dato crudo de FINRA (acciones en corto en
+	// la fecha de settlement) -- el porcentaje se calcula al leer contra
+	// el float vigente (ver ShortInterestPercent), no al guardar.
+	ShortInterestShares     *int64     `json:"-"`
+	ShortInterestSettlement string     `json:"-"`
+	ExternalUpdatedAt       *time.Time `json:"-"`
 
 	// InsiderShares/InsiderCiks son intermedios para calcular floatShares
 	// real (ver RefreshBeneficialOwners) -- nunca se exponen en

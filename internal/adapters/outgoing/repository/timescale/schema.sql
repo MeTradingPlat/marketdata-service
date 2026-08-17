@@ -129,6 +129,14 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS shares_outstanding BIGINT;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS float_shares BIGINT;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS short_interest DOUBLE PRECISION;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS short_ratio DOUBLE PRECISION;
+-- short_interest_shares es el dato CRUDO de FINRA (acciones en corto); el
+-- porcentaje se calcula al momento de leer contra el float vigente, para
+-- que nunca quede desincronizado cuando el float cambia despues (ver
+-- domain.ShortInterestPercent). short_interest_settlement permite
+-- descartar releases de FINRA demasiado viejas (publicacion quincenal,
+-- con mas de ~5 semanas de atraso no es dato util).
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS short_interest_shares BIGINT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS short_interest_settlement TEXT;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS external_updated_at TIMESTAMPTZ;
 -- insider_shares/insider_ciks son intermedios de RefreshExternalFundamentals
 -- (Form 3/4/5 bulk) que RefreshBeneficialOwners lee despues para calcular

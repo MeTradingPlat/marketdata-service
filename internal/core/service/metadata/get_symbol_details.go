@@ -86,7 +86,13 @@ func applyExternalFundamentals(out *dto.FundamentalData, f domain.Fundamentals) 
 	}
 	out.SharesOutstanding = f.SharesOutstanding
 	out.FloatShares = f.FloatShares
-	out.ShortInterest = f.ShortInterest
+	// % calculado al leer contra el float vigente -- mismo criterio que
+	// toRealtime() (ver realtime_mapper.go).
+	if computed := domain.ShortInterestPercent(f.ShortInterestShares, f.FloatShares); computed != nil {
+		out.ShortInterest = computed
+	} else {
+		out.ShortInterest = f.ShortInterest
+	}
 	out.ShortRatio = f.ShortRatio
 	if f.FloatShares != nil {
 		source := "ESTIMATED"

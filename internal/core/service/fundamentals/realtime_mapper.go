@@ -32,7 +32,16 @@ func toRealtime(symbol string, equity domain.Symbol, f domain.Fundamentals, snap
 	if f.ExternalUpdatedAt != nil {
 		out.SharesOutstanding = f.SharesOutstanding
 		out.FloatShares = f.FloatShares
-		out.ShortInterest = f.ShortInterest
+		// El % se calcula al leer contra el float VIGENTE (ver
+		// domain.ShortInterestPercent): el float puede corregirse despues
+		// de guardarse el dato crudo de FINRA, y un % persistido quedaria
+		// desincronizado. Fallback al valor legacy almacenado mientras el
+		// proximo refresco de FINRA no haya escrito sharesShorted crudo.
+		if computed := domain.ShortInterestPercent(f.ShortInterestShares, f.FloatShares); computed != nil {
+			out.ShortInterest = computed
+		} else {
+			out.ShortInterest = f.ShortInterest
+		}
 		out.ShortRatio = f.ShortRatio
 	}
 

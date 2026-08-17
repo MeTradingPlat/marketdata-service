@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/rs/zerolog/log"
 )
@@ -34,16 +33,10 @@ func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandin
 	insiderData := insiders.FetchInsiderShares(ctx, symbols)
 	log.Info().Int("symbols", len(insiderData)).Msg("sec insider ownership refresh finished")
 
-	existing, err := fundamentalsRepo.GetBatch(ctx, symbols)
-	if err != nil {
-		log.Error().Err(err).Msg("external fundamentals refresh: failed to load existing floatShares")
-		existing = map[string]domain.Fundamentals{}
-	}
-
 	finraData := finra.DownloadLatest(ctx)
 	log.Info().Int("symbols", len(finraData)).Msg("finra short interest refresh finished")
 
-	updates := buildExternalFundamentals(symbols, sharesOutstanding, insiderData, existing, finraData)
+	updates := buildExternalFundamentals(symbols, sharesOutstanding, insiderData, finraData)
 	if err := fundamentalsRepo.UpsertExternalFundamentals(ctx, updates); err != nil {
 		log.Error().Err(err).Msg("upserting external fundamentals refresh failed")
 		return
