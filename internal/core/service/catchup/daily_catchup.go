@@ -277,37 +277,33 @@ func ReconcileAndTracked(ctx context.Context, gateway out.MarketDataGateway, sym
 	return tracked
 }
 
-func RunSweep(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, tracked []domain.Symbol, workers int) []domain.Symbol {
+// RunSweepPhase ejecuta el barrido de UN timeframe (los pendientes + los
+// cubiertos con margen) y cierra TODAS las conexiones DxLink al terminar --
+// diseno original del usuario: cada fase termina, se desuscribe y se cierran
+// las conexiones para asegurarse de que termino y de no arrastrar sesiones
+// a la fase siguiente (el limite de sesiones de TastyTrade se superaba
+// arrastrando las conexiones de una fase a la otra). El ciclo (ver
+// universe_cycle.go) intercala los calculos de cada fase entre barridos:
+// D1 -> beta/prevClose -> H1 -> M1.
+func RunSweepPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, tracked []domain.Symbol, tf domain.Timeframe, workers int) {
 	if len(tracked) == 0 {
-		return nil
+		return
 	}
 
-	withD1, err := candles.SymbolsWithData(ctx, domain.D1)
+	withData, err := candles.SymbolsWithData(ctx, tf)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to check which symbols already have D1 data, treating all as uncovered")
-		withD1 = map[string]struct{}{}
+		log.Error().Err(err).Str("timeframe", string(tf)).Msg("failed to check which symbols already have data, treating all as uncovered")
+		withData = map[string]struct{}{}
 	}
-	uncoveredD1, coveredD1 := phaseJobs(tracked, domain.D1, withD1)
-	runPhase(ctx, gateway, candles, ingest, uncoveredD1, coveredD1, domain.D1, workers)
-
-	// Cierra todas las conexiones DxLink entre fases -- diseno original del
-	// usuario para minimizar carga en el servidor: D1 termina, se desuscribe
-	// y se cierran las conexiones para asegurarse de que la fase termino;
-	// H1 arranca desde cero sesiones; M1 es lo ultimo y se queda suscrito.
-	// Confirmado en vivo que arrastrar las conexiones de D1 justo cuando H1
-	// abre varias de golpe puede superar el limite de sesiones concurrentes
-	// de TastyTrade.
-	gateway.ResetLiveConnections()
-
-	withH1, err := candles.SymbolsWithData(ctx, domain.H1)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to check which symbols already have H1 data, treating all as uncovered")
-		withH1 = map[string]struct{}{}
-	}
-	uncoveredH1, coveredH1 := phaseJobs(tracked, domain.H1, withH1)
-	runPhase(ctx, gateway, candles, ingest, uncoveredH1, coveredH1, domain.H1, workers)
+	uncovered, covered := phaseJobs(tracked, tf, withData)
+	runPhase(ctx, gateway, candles, ingest, uncovered, covered, tf, workers)
 
 	gateway.ResetLiveConnections()
+}
 
-	return tracked
+// RunSweep conserva el comportamiento original de barrer D1 y H1 seguidos
+// (los llamadores que no necesitan intercalar calculos entre fases).
+func RunSweep(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, tracked []domain.Symbol, workers int) {
+	RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.D1, workers)
+	RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.H1, workers)
 }

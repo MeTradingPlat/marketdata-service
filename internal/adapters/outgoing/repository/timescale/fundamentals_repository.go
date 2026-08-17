@@ -312,9 +312,9 @@ func (r *FundamentalsRepository) GetSymbolsWithStaleEarnings(ctx context.Context
 // (ventana corta, da valores raros en ADRs), pero solo se manda para los
 // simbolos donde se pudo calcular; el resto conserva el de TastyTrade.
 const upsertBetaSQL = `
-	INSERT INTO dividends (symbol_id, beta)
-	SELECT symbol_id, $2 FROM tracked_symbols WHERE symbol = $1
-	ON CONFLICT (symbol_id) DO UPDATE SET beta = EXCLUDED.beta
+	INSERT INTO dividends (symbol_id, beta, beta_updated_at)
+	SELECT symbol_id, $2, now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET beta = EXCLUDED.beta, beta_updated_at = now()
 `
 
 func (r *FundamentalsRepository) UpsertBeta(ctx context.Context, fundamentals []domain.Fundamentals) error {
@@ -361,6 +361,80 @@ func (r *FundamentalsRepository) RecordStepDone(ctx context.Context, step string
 		step, at.UTC())
 	if err != nil {
 		return fmt.Errorf("recording fundamental refresh %s: %w", step, err)
+	}
+	return nil
+}
+
+// GetSymbolsWithStaleBeta trae los simbolos cuyo beta NO se calculo en la
+// ventana de mantenimiento actual (nunca calculado, o con fecha anterior al
+// arranque de ventana) -- el refresh de beta solo calcula estos, no el
+// universo entero: un redeploy a mitad de dia recalcula solo los vencidos
+// (ver refreshFundamentalsOnce y el guard por-simbolo beta_updated_at).
+func (r *FundamentalsRepository) GetSymbolsWithStaleBeta(ctx context.Context, windowStart time.Time) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.symbol
+		FROM tracked_symbols s
+		LEFT JOIN dividends d ON d.symbol_id = s.symbol_id
+		WHERE s.is_active = TRUE
+		  AND (d.beta_updated_at IS NULL OR d.beta_updated_at < $1)
+		ORDER BY s.symbol`, windowStart)
+	if err != nil {
+		return nil, fmt.Errorf("listing symbols with stale beta: %w", err)
+	}
+	defer rows.Close()
+	var symbols []string
+	for rows.Next() {
+		var symbol string
+		if err := rows.Scan(&symbol); err != nil {
+			return nil, fmt.Errorf("scanning stale beta symbol: %w", err)
+		}
+		symbols = append(symbols, symbol)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating stale beta symbols: %w", err)
+	}
+	return symbols, nil
+}
+
+// GetSymbolsWithStalePrevClose es el mismo guard por-simbolo para el
+// prevClose calculado en el backfill (columna prev_close_updated_at).
+func (r *FundamentalsRepository) GetSymbolsWithStalePrevClose(ctx context.Context, windowStart time.Time) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.symbol
+		FROM tracked_symbols s
+		LEFT JOIN dividends d ON d.symbol_id = s.symbol_id
+		WHERE s.is_active = TRUE
+		  AND (d.prev_close_updated_at IS NULL OR d.prev_close_updated_at < $1)
+		ORDER BY s.symbol`, windowStart)
+	if err != nil {
+		return nil, fmt.Errorf("listing symbols with stale prev close: %w", err)
+	}
+	defer rows.Close()
+	var symbols []string
+	for rows.Next() {
+		var symbol string
+		if err := rows.Scan(&symbol); err != nil {
+			return nil, fmt.Errorf("scanning stale prev close symbol: %w", err)
+		}
+		symbols = append(symbols, symbol)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating stale prev close symbols: %w", err)
+	}
+	return symbols, nil
+}
+
+// UpsertPrevClose guarda el prevClose calculado en el backfill con su fecha
+// -- el endpoint de detalles lo prefiere al calculo en vivo (mismo dato,
+// sin repetir la query por cada request).
+func (r *FundamentalsRepository) UpsertPrevClose(ctx context.Context, symbol string, close float64) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO dividends (symbol_id, prev_close, prev_close_updated_at)
+		SELECT symbol_id, $2, now() FROM tracked_symbols WHERE symbol = $1
+		ON CONFLICT (symbol_id) DO UPDATE SET prev_close = EXCLUDED.prev_close, prev_close_updated_at = now()`,
+		symbol, close)
+	if err != nil {
+		return fmt.Errorf("upserting prev close for %s: %w", symbol, err)
 	}
 	return nil
 }

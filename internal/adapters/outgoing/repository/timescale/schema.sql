@@ -165,3 +165,11 @@ CREATE TABLE IF NOT EXISTS fundamental_refresh_log (
     step TEXT PRIMARY KEY,
     done_at TIMESTAMPTZ NOT NULL
 );
+
+-- Guard por-simbolo para el beta y el prevClose calculados en el backfill:
+-- cada simbolo lleva su propia fecha de calculo (el refresh solo recalcula
+-- los vencidos o nunca calculados dentro de la ventana de mantenimiento
+-- actual, ver refreshFundamentalsOnce y RefreshPrevClose).
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS beta_updated_at TIMESTAMPTZ;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close NUMERIC;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close_updated_at TIMESTAMPTZ;

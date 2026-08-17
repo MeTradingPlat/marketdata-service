@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -49,6 +50,7 @@ func main() {
 		discoveryClient *discovery.Client,
 		e *echo.Echo,
 		r *router.Router,
+		backfilling *atomic.Bool,
 	) {
 		// signal.NotifyContext cancela ctx al recibir SIGTERM/SIGINT --
 		// eso apaga limpio el pool de DB, las goroutines en vivo y el catch-up
@@ -83,7 +85,7 @@ func main() {
 		// Ciclo del universo completo -- D1 fase 1, H1 fase 2, M1 fase 3 --
 		// corre en background (no bloquea el arranque del servidor HTTP) y se
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
-		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares)
+		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling)
 		StartSaveRetryLoop(ctx, ingest)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo)

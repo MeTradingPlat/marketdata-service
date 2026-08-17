@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -54,57 +55,75 @@ func refreshWithRetry(name string, fn func() error) {
 // /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
 // (ver topSymbolsPerMarket) despues del rollout M1 -- REST puro, no compite
 // por conexiones DxLink con las fases de velas.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, firstRun bool) {
-	// Orden del barrido (diseno original del usuario): D1 primero, se
-	// desuscribe y se CIERRAN las conexiones para asegurar que la fase
-	// termino, luego H1, y por ultimo M1 que se queda suscrito para
-	// siempre. El agrupamiento de 100 simbolos por suscripcion (el pool de
-	// Java) hace que D1+H1 terminen en minutos, asi que M1 igual llega
-	// rapido al final y retoma desde su watermark con replay de lo perdido.
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, firstRun bool) {
+	// Pipeline del backfill (diseno del usuario): D1 primero, se cierran
+	// las conexiones, se calcula TODO lo que se calcula con D1 (beta y
+	// prevClose, por-simbolo con fecha), luego H1 (se cierra, se calcula lo
+	// suyo), y por ultimo M1 que se queda suscrito; recien ahi el sistema
+	// abre a peticiones. Durante TODO el backfill el servicio responde 503
+	// a peticiones externas (BackfillGate) -- las estrategias nunca leen
+	// velas a medio rellenar.
 	tracked := catchup.ReconcileAndTracked(ctx, gateway, symbols)
 	if len(tracked) == 0 {
 		log.Error().Msg("universe sweep returned no symbols, skipping live M1 rollout")
 		return
 	}
 
+	backfilling.Store(true)
+	defer backfilling.Store(false)
+
 	if !firstRun {
 		gateway.ResetLiveConnections()
 	}
 
-	catchup.RunSweep(ctx, gateway, candles, ingest, tracked, cfg.SweepWorkers)
+	// FASE 1: D1 + sus calculos (beta y prevClose, guard por-simbolo).
+	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.D1, cfg.SweepWorkers)
+	windowStart := catchup.LastMaintenanceWindowStart(time.Now())
+	refreshWithRetry("prev close", func() error {
+		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
+	})
+	// RefreshBeta usa el guard por-simbolo beta_updated_at: solo calcula
+	// los simbolos cuyo beta no se calculo en esta ventana de
+	// mantenimiento (ver beta_refresh.go). Despues de RefreshMarketMetrics
+	// ya no hace falta: los betas de TastyTrade se leen del propio lote.
+	refreshWithRetry("beta", func() error {
+		return catchup.RefreshBeta(ctx, candles, fundamentals, windowStart)
+	})
 
+	// FASE 2: H1, desde cero sesiones (RunSweepPhase cierra al terminar).
+	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.H1, cfg.SweepWorkers)
+
+	// FASE 3: M1 en vivo (se queda suscrito) + verificacion de huecos de
+	// los ultimos dias (backstop del replay).
 	startLiveUniverse(ctx, ingest, tracked)
+	refreshWithRetry("M1 gap fill", func() error {
+		return catchup.FillM1Gaps(ctx, gateway, candles, tracked)
+	})
+
 	catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
 	// Los pasos de abajo son de cadencia diaria (se recalculan tras el
 	// cierre del mercado): la marca fundamental_refresh_log hace que un
 	// reinicio del contenedor dentro de la MISMA ventana de mantenimiento no
 	// los repita -- el done_at se graba en postgres solo al terminar OK, asi
 	// un refresh fallido queda stale y se reintenta en el siguiente arranque.
-	windowStart := catchup.LastMaintenanceWindowStart(time.Now())
 	refreshFundamentalsOnce(ctx, fundamentals, "market metrics", windowStart, func() error {
 		catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
 		return nil
-	})
-	// RefreshBeta va despues de RefreshMarketMetrics: este acaba de escribir
-	// los betas de TastyTrade, y el nuestro pasa por encima solo donde se
-	// pudo calcular (5Y monthly desde velas propias, ver domain.MonthlyBeta).
-	refreshFundamentalsOnce(ctx, fundamentals, "beta", windowStart, func() error {
-		return catchup.RefreshBeta(ctx, candles, symbols, fundamentals)
 	})
 	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
 	// que pisa next_earnings_date con el dato vigente de TastyTrade, asi que

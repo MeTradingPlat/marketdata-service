@@ -34,17 +34,23 @@ const betaHistoryBars = 1300
 // ingiriendo velas D1, no hace falta otra fuente.
 const betaMarketProxy = "SPY"
 
-// RefreshBeta recalcula beta para todo el universo desde las velas D1
-// propias (5Y monthly contra SPY, ver domain.MonthlyBeta) y pisa el de
-// TastyTrade SOLO donde se pudo calcular -- los simbolos sin 2 anios de
-// historia conservan el beta del proveedor, salvo que este no traiga beta
-// (0): ahi entra el fallback de 12 meses (beta 1Y). Corre en el barrido
-// nocturno despues de RefreshMarketMetrics (que acaba de escribir los betas
-// de TastyTrade): este pasa por encima solo con el valor mejor.
-func RefreshBeta(ctx context.Context, candles out.CandleRepository, symbols out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) error {
-	tracked, err := symbols.Tracked(ctx)
+// RefreshBeta recalcula beta desde las velas D1 propias (5Y monthly contra
+// SPY, ver domain.MonthlyBeta) SOLO para los simbolos cuyo beta_updated_at
+// quedo fuera de la ventana de mantenimiento actual (guard por-simbolo con
+// fecha, ver GetSymbolsWithStaleBeta) -- si todos estan calculados no
+// calcula nada. Pisa el beta de TastyTrade solo donde se pudo calcular; los
+// simbolos sin 2 anios de historia conservan el del proveedor, salvo que
+// este no traiga beta (0): ahi entra el fallback de 12 meses (beta 1Y).
+// Corre en el backfill despues del barrido D1 y antes de H1 (ver
+// universe_cycle.go), que es cuando el D1 propio esta fresco.
+func RefreshBeta(ctx context.Context, candles out.CandleRepository, fundamentalsRepo out.FundamentalsRepository, windowStart time.Time) error {
+	stale, err := fundamentalsRepo.GetSymbolsWithStaleBeta(ctx, windowStart)
 	if err != nil {
-		return fmt.Errorf("listing tracked symbols: %w", err)
+		return fmt.Errorf("listing symbols with stale beta: %w", err)
+	}
+	if len(stale) == 0 {
+		log.Info().Msg("beta refresh: all symbols already done for this maintenance window, skipping")
+		return nil
 	}
 
 	marketCandles, err := candles.GetCandles(ctx, betaMarketProxy, domain.D1, betaHistoryBars, nil)
@@ -53,10 +59,7 @@ func RefreshBeta(ctx context.Context, candles out.CandleRepository, symbols out.
 	}
 
 	start := time.Now()
-	jobSymbols := make([]string, len(tracked))
-	for i, s := range tracked {
-		jobSymbols[i] = s.Symbol
-	}
+	jobSymbols := stale
 
 	// El beta del proveedor se lee una sola vez para el universo entero,
 	// en lotes de a mil -- una sola consulta con los 13k simbolos en el IN

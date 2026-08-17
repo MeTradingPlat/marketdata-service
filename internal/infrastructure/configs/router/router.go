@@ -1,6 +1,8 @@
 package router
 
 import (
+	"sync/atomic"
+
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/middleware"
 	"github.com/labstack/echo/v4"
@@ -15,15 +17,17 @@ type Router struct {
 	metadata     *handler.MetadataHandler
 	candleWS     *handler.CandleWSHandler
 	quotes       *handler.QuotesHandler
+	backfilling  *atomic.Bool
 }
 
-func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, quotes *handler.QuotesHandler) *Router {
-	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, quotes: quotes}
+func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, quotes *handler.QuotesHandler, backfilling *atomic.Bool) *Router {
+	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, quotes: quotes, backfilling: backfilling}
 }
 
 func (r *Router) Init() {
 	r.echo.Use(middleware.RequestLogging)
 	r.echo.Use(middleware.GatewayHeaderCheck)
+	r.echo.Use(middleware.BackfillGate(r.backfilling))
 
 	r.echo.GET("/marketdata/health", r.health.Health)
 	r.echo.GET("/marketdata/historical/:symbol", r.candles.GetCandles)

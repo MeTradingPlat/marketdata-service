@@ -17,6 +17,9 @@ type CandleRepository interface {
 	// query por simbolo: satura postgres y las escrituras M1 en vivo hacen
 	// fila detras (ver RefreshBeta).
 	GetSeries(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error)
+	// GetM1DayHoles detecta dias con huecos interiores de M1 (ver
+	// FillM1Gaps) -- la verificacion de huecos del backfill.
+	GetM1DayHoles(ctx context.Context, since time.Time) ([]domain.M1DayHole, error)
 	GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error)
 	SymbolsWithData(ctx context.Context, timeframe domain.Timeframe) (map[string]struct{}, error)
 	// GetIntradaySessions agrega las velas M1 de hoy por sesion (pre-market,
@@ -83,4 +86,12 @@ type FundamentalsRepository interface {
 	// StepDoneAt devuelve cuando se calculo por ultima vez el paso (false
 	// si nunca se calculo).
 	StepDoneAt(ctx context.Context, step string) (time.Time, bool, error)
+	// GetSymbolsWithStaleBeta trae los simbolos cuyo beta no se calculo en
+	// la ventana de mantenimiento actual (guard por-simbolo con fecha).
+	GetSymbolsWithStaleBeta(ctx context.Context, windowStart time.Time) ([]string, error)
+	// GetSymbolsWithStalePrevClose trae los simbolos cuyo prevClose no se
+	// calculo en la ventana actual (mismo guard por-simbolo).
+	GetSymbolsWithStalePrevClose(ctx context.Context, windowStart time.Time) ([]string, error)
+	// UpsertPrevClose guarda el prevClose del backfill con su fecha.
+	UpsertPrevClose(ctx context.Context, symbol string, close float64) error
 }

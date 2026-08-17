@@ -194,6 +194,44 @@ func (r *CandleRepository) GetSeries(ctx context.Context, symbols []string, time
 	return result, nil
 }
 
+// m1HoleMinBars: solo dias con actividad real se verifican -- un dia con
+// 30 velas y 300 minutos de lapso es un simbolo de bajo volumen, no un
+// hueco (sus minutos vacios son legitimos).
+const m1HoleMinBars = 200
+
+// GetM1DayHoles detecta dias con huecos interiores de M1 para todo el
+// universo desde `since` (UTC por dia) -- la verificacion de huecos del
+// backfill (ver FillM1Gaps): el replay de la suscripcion en vivo cubre el
+// hueco reciente, esto detecta lo que el replay no alcanzo.
+func (r *CandleRepository) GetM1DayHoles(ctx context.Context, since time.Time) ([]domain.M1DayHole, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.symbol, date_trunc('day', c.ts) AS day
+		FROM candles c
+		JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+		WHERE c.timeframe = 'M1' AND c.ts >= $1 AND s.is_active = TRUE
+		GROUP BY s.symbol, day
+		HAVING count(*) >= 200
+		   AND count(*) < EXTRACT(EPOCH FROM (max(c.ts) - min(c.ts))) / 60 + 1
+		ORDER BY s.symbol, day`, since)
+	if err != nil {
+		return nil, fmt.Errorf("detecting M1 day holes: %w", err)
+	}
+	defer rows.Close()
+
+	var holes []domain.M1DayHole
+	for rows.Next() {
+		var h domain.M1DayHole
+		if err := rows.Scan(&h.Symbol, &h.Day); err != nil {
+			return nil, fmt.Errorf("scanning M1 day hole: %w", err)
+		}
+		holes = append(holes, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating M1 day holes: %w", err)
+	}
+	return holes, nil
+}
+
 func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
 	if source, bucket, approxPeriod, ok := timeframe.Aggregation(); ok {
 		return r.getAggregatedCandles(ctx, symbol, timeframe, source, bucket, approxPeriod, bars, before)
