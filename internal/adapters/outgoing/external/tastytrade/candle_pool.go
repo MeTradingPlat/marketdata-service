@@ -63,6 +63,11 @@ type CandlePool struct {
 
 	liveMu   sync.Mutex
 	liveSubs map[string]func(domain.Candle)
+	// liveTicks reenvia la vela M1 EN FORMACION tras cada tick -- el canal
+	// que alimenta la vela en formacion de los graficos (M1 directo, H1/D1
+	// por agregacion en candle_ws_session.go). Nil para simbolos sin
+	// suscripcion en vivo.
+	liveTicks map[string]func(domain.Candle)
 
 	currentMu sync.Mutex
 	current   map[string]domain.Candle
@@ -79,7 +84,8 @@ type CandlePool struct {
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
 	p := &CandlePool{
 		dispatch: make(map[string]dispatchEntry),
-		liveSubs: make(map[string]func(domain.Candle)),
+		liveSubs:  make(map[string]func(domain.Candle)),
+		liveTicks: make(map[string]func(domain.Candle)),
 		current:  make(map[string]domain.Candle),
 	}
 	p.allocator = newChannelAllocator(connFactory, p.wireChannel, p.handleConnectionReconnect, maxConnections)
@@ -160,7 +166,7 @@ func (p *CandlePool) unregisterDispatchIfCurrent(symbol string, tf domain.Timefr
 // guardado) y se queda abierta para siempre, sin un FetchHistory M1
 // separado antes ni un remove/add de por medio -- ver el comentario de
 // subscribeLive sobre por que esa secuencia dejaba el streaming mudo.
-func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time.Time, onClosed func(domain.Candle)) error {
+func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time.Time, onClosed func(domain.Candle), onTick func(domain.Candle)) error {
 	ch, err := p.allocator.allocate(ctx)
 	if err != nil {
 		return fmt.Errorf("allocating channel for %s live M1: %w", symbol, err)
@@ -168,6 +174,7 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 
 	p.liveMu.Lock()
 	p.liveSubs[symbol] = onClosed
+	p.liveTicks[symbol] = onTick
 	p.liveMu.Unlock()
 
 	_ = p.registerDispatch(symbol, domain.M1, "live", func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
@@ -181,19 +188,26 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 
 // handleLiveEvent detecta el cierre de una vela: mientras los eventos que
 // llegan comparten el mismo timestamp, son actualizaciones de la vela en
-// formacion; un timestamp nuevo significa que la anterior ya cerro.
+// formacion; un timestamp nuevo significa que la anterior ya cerro. En los
+// dos casos se reenvia la vela en formacion actualizada (dispatchTick) --
+// los graficos la necesitan tick a tick, no solo al cierre.
 func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 	p.currentMu.Lock()
+	var forming domain.Candle
 	prev, exists := p.current[symbol]
 	if exists && !prev.Timestamp.Equal(ev.Timestamp) {
 		closed := prev
 		p.current[symbol] = mergeCandle(domain.Candle{}, ev, symbol, domain.M1)
+		forming = p.current[symbol]
 		p.currentMu.Unlock()
 		p.dispatchClosed(symbol, closed)
+		p.dispatchTick(symbol, forming)
 		return
 	}
-	p.current[symbol] = mergeCandle(prev, ev, symbol, domain.M1)
+	forming = mergeCandle(prev, ev, symbol, domain.M1)
+	p.current[symbol] = forming
 	p.currentMu.Unlock()
+	p.dispatchTick(symbol, forming)
 }
 
 func (p *CandlePool) dispatchClosed(symbol string, c domain.Candle) {
@@ -202,6 +216,21 @@ func (p *CandlePool) dispatchClosed(symbol string, c domain.Candle) {
 	}
 	p.liveMu.Lock()
 	cb := p.liveSubs[symbol]
+	p.liveMu.Unlock()
+	if cb != nil {
+		cb(c)
+	}
+}
+
+// dispatchTick reenvia la vela en formacion tras cada tick -- el suscriptor
+// (StreamLive -> Broadcaster) descarta si su canal va lleno, asi un cliente
+// lento jamas frena el merge de ticks de la conexion DxLink.
+func (p *CandlePool) dispatchTick(symbol string, c domain.Candle) {
+	if !c.IsComplete() {
+		return
+	}
+	p.liveMu.Lock()
+	cb := p.liveTicks[symbol]
 	p.liveMu.Unlock()
 	if cb != nil {
 		cb(c)
@@ -236,11 +265,12 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 	for _, symbol := range symbols {
 		p.liveMu.Lock()
 		cb := p.liveSubs[symbol]
+		tick := p.liveTicks[symbol]
 		p.liveMu.Unlock()
 		if cb == nil {
 			continue
 		}
-		if err := p.SubscribeLive(ctx, symbol, resumeFrom[symbol], cb); err != nil {
+		if err := p.SubscribeLive(ctx, symbol, resumeFrom[symbol], cb, tick); err != nil {
 			log.Error().Err(err).Str("symbol", symbol).Msg("failed to resubscribe live candle after reconnect")
 		}
 	}

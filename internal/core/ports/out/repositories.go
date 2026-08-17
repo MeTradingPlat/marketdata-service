@@ -71,4 +71,11 @@ type FundamentalsRepository interface {
 	// contra SPY, ver domain.MonthlyBeta) SOLO para los simbolos incluidos
 	// -- los que no pudieron calcularse conservan el beta de TastyTrade.
 	UpsertBeta(ctx context.Context, fundamentals []domain.Fundamentals) error
+	// RecordStepDone registra cuando termino un refresh diario de
+	// fundamentales -- el ciclo salta el paso en reinicios dentro de la
+	// misma ventana de mantenimiento (ver refreshFundamentalsOnce).
+	RecordStepDone(ctx context.Context, step string, at time.Time) error
+	// StepDoneAt devuelve cuando se calculo por ultima vez el paso (false
+	// si nunca se calculo).
+	StepDoneAt(ctx context.Context, step string) (time.Time, bool, error)
 }

@@ -154,3 +154,14 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS float_updated_at TIMESTAMPTZ;
 -- earnings_updated_at marca cuando corrio ese refresco por ultima vez.
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS occurred_date TEXT;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS earnings_updated_at TIMESTAMPTZ;
+
+-- Log de cuando se calculo cada refresh diario de fundamentales (beta,
+-- earnings, market metrics, externos) -- un paso se salta en reinicios
+-- dentro de la misma ventana de mantenimiento (cierre de mercado +
+-- postCloseDelay, ver daily_catchup.NextMaintenanceWindowAt): el done_at
+-- persiste en postgres, asi un redeploy a mitad de dia no recalcula lo que
+-- ya se calculo tras el cierre. Solo se registra un paso que termino OK.
+CREATE TABLE IF NOT EXISTS fundamental_refresh_log (
+    step TEXT PRIMARY KEY,
+    done_at TIMESTAMPTZ NOT NULL
+);

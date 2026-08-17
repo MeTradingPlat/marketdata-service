@@ -13,6 +13,7 @@ type fakeGateway struct {
 	subscribed     string
 	subscribedFrom time.Time
 	onCandle       func(domain.Candle)
+	onTickCandle   func(domain.Candle)
 }
 
 func (f *fakeGateway) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time) ([]domain.Candle, error) {
@@ -23,10 +24,11 @@ func (f *fakeGateway) ProbeMaxDepth(ctx context.Context, symbol string, tf domai
 	return f.probeResult, f.probeErr
 }
 
-func (f *fakeGateway) SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onCandle func(domain.Candle)) error {
+func (f *fakeGateway) SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onClosed func(domain.Candle), onTick func(domain.Candle)) error {
 	f.subscribed = symbol
 	f.subscribedFrom = from
-	f.onCandle = onCandle
+	f.onCandle = onClosed
+	f.onTickCandle = onTick
 	return nil
 }
 

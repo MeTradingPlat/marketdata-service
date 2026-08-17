@@ -90,11 +90,20 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 
 	startLiveUniverse(ctx, ingest, tracked)
 	catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
-	catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
+	// Los pasos de abajo son de cadencia diaria (se recalculan tras el
+	// cierre del mercado): la marca fundamental_refresh_log hace que un
+	// reinicio del contenedor dentro de la MISMA ventana de mantenimiento no
+	// los repita -- el done_at se graba en postgres solo al terminar OK, asi
+	// un refresh fallido queda stale y se reintenta en el siguiente arranque.
+	windowStart := catchup.LastMaintenanceWindowStart(time.Now())
+	refreshFundamentalsOnce(ctx, fundamentals, "market metrics", windowStart, func() error {
+		catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
+		return nil
+	})
 	// RefreshBeta va despues de RefreshMarketMetrics: este acaba de escribir
 	// los betas de TastyTrade, y el nuestro pasa por encima solo donde se
 	// pudo calcular (5Y monthly desde velas propias, ver domain.MonthlyBeta).
-	refreshWithRetry("beta", func() error {
+	refreshFundamentalsOnce(ctx, fundamentals, "beta", windowStart, func() error {
 		return catchup.RefreshBeta(ctx, candles, symbols, fundamentals)
 	})
 	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
@@ -102,7 +111,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// el lote de "vencidos o nunca buscados" que queda despues es chico (solo
 	// emisores cuyo earnings ya paso o que TastyTrade no cubre) -- el
 	// COALESCE del upsert nunca pisa una fecha vigente con una prediccion.
-	refreshWithRetry("earnings history", func() error {
+	refreshFundamentalsOnce(ctx, fundamentals, "earnings history", windowStart, func() error {
 		return catchup.RefreshEarningsHistory(ctx, gateway, fundamentals)
 	})
 
@@ -111,8 +120,32 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// trimestrales de insiders no deben demorar el arranque de la ventana
 	// de mantenimiento ni bloquear la siguiente vuelta del ciclo -- mismo
 	// patron que CompletableFuture.runAsync en la version Java.
-	go refreshWithRetry("external fundamentals", func() error {
+	go refreshFundamentalsOnce(ctx, fundamentals, "external fundamentals", windowStart, func() error {
 		return catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals)
+	})
+}
+
+// refreshFundamentalsOnce corre el refresh solo si no se completo ya en la
+// ventana de mantenimiento actual -- la marca fundamental_refresh_log
+// sobrevive reinicios, asi un redeploy a mitad de dia no recalcula los
+// datos diarios (beta, earnings, externos) que ya se calcularon tras el
+// cierre. La ventana nocturna siempre los recalcula: su done_at quedo en
+// la ventana ANTERIOR (el arranque de ventana se avanza cada cierre), asi
+// que la comparacion no confunde "lo de ayer" con "lo de hoy" -- un done_at
+// viejo es anterior a la ventana actual y dispara el recalculo.
+func refreshFundamentalsOnce(ctx context.Context, fundamentals out.FundamentalsRepository, step string, windowStart time.Time, fn func() error) {
+	doneAt, done, err := fundamentals.StepDoneAt(ctx, step)
+	if err != nil {
+		log.Error().Err(err).Str("step", step).Msg("fundamental refresh log check failed, running anyway")
+	} else if done && !doneAt.Before(windowStart) {
+		log.Info().Str("step", step).Time("done_at", doneAt).Msg("fundamental refresh already done for this maintenance window, skipping")
+		return
+	}
+	refreshWithRetry(step, func() error {
+		if err := fn(); err != nil {
+			return err
+		}
+		return fundamentals.RecordStepDone(ctx, step, time.Now())
 	})
 }
 

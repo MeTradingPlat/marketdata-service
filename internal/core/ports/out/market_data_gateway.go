@@ -21,7 +21,10 @@ type MarketDataGateway interface {
 	// segundos).
 	GetCandlesBatch(ctx context.Context, timeframe domain.Timeframe, froms map[string]time.Time) (map[string][]domain.Candle, error)
 	ProbeMaxDepth(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error)
-	SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onCandle func(domain.Candle)) error
+	// SubscribeLiveCandles abre la suscripcion M1 en vivo del simbolo:
+	// onClosed se invoca con cada vela al cerrar, onTick con la vela en
+	// formacion despues de cada tick (siempre que tenga OHLC completo).
+	SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onClosed func(domain.Candle), onTick func(domain.Candle)) error
 	ActiveSymbols(ctx context.Context) ([]domain.Symbol, error)
 	CurrentCandle(symbol string) (domain.Candle, bool)
 	DividendInfo(ctx context.Context, symbols []string) ([]domain.Fundamentals, error)

@@ -128,6 +128,13 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 			s.retryBuffer.add(c)
 		}
 		s.broadcaster.Publish(c)
+	}, func(c domain.Candle) {
+		// La vela M1 en formacion tras cada tick -- el WS de /ws/candles la
+		// usa para dibujar la vela actual (M1 directo, H1/D1 por
+		// agregacion). Sin publicador en el Broadcaster no habria forma de
+		// que una sesion WS vea la vela a medio formar: solo se publicaba
+		// al cerrar.
+		s.broadcaster.Publish(c)
 	})
 }
 

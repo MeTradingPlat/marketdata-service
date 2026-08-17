@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/jackc/pgx/v5"
@@ -347,6 +348,37 @@ const getSymbolsDueForFloatRefreshSQL = `
 	ORDER BY d.float_updated_at ASC NULLS FIRST
 	LIMIT $1
 `
+
+// RecordStepDone registra cuando termino un refresh de fundamentales -- la
+// marca persistida que evita recalcular en cada reinicio del contenedor: un
+// paso se salta si su done_at cae dentro de la ventana de mantenimiento
+// actual (ver LastMaintenanceWindowStart en daily_catchup.go). Solo se
+// registra al terminar OK; un refresh fallido queda stale y se reintenta.
+func (r *FundamentalsRepository) RecordStepDone(ctx context.Context, step string, at time.Time) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO fundamental_refresh_log (step, done_at) VALUES ($1, $2)
+		 ON CONFLICT (step) DO UPDATE SET done_at = EXCLUDED.done_at`,
+		step, at.UTC())
+	if err != nil {
+		return fmt.Errorf("recording fundamental refresh %s: %w", step, err)
+	}
+	return nil
+}
+
+// StepDoneAt devuelve cuando se calculo por ultima vez el paso (false si
+// nunca se calculo -- primer arranque o paso que nunca corrio).
+func (r *FundamentalsRepository) StepDoneAt(ctx context.Context, step string) (time.Time, bool, error) {
+	var at time.Time
+	err := r.pool.QueryRow(ctx,
+		`SELECT done_at FROM fundamental_refresh_log WHERE step = $1`, step).Scan(&at)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("reading fundamental refresh %s: %w", step, err)
+	}
+	return at, true, nil
+}
 
 func (r *FundamentalsRepository) GetSymbolsDueForFloatRefresh(ctx context.Context, limit int) ([]domain.Fundamentals, error) {
 	rows, err := r.pool.Query(ctx, getSymbolsDueForFloatRefreshSQL, limit)

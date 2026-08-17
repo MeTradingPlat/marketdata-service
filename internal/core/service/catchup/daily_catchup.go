@@ -20,6 +20,15 @@ const (
 	marketCloseHourET = 20
 )
 
+// LastMaintenanceWindowStart es el arranque de la ventana de mantenimiento
+// mas reciente (cierre + postCloseDelay) -- la frontera que separa "lo
+// calculado en esta ventana" de "lo calculado antes": un done_at de un
+// refresh de fundamentales posterior a esta marca significa que el paso ya
+// corrio tras el ultimo cierre y no hay que recalcularlo en un reinicio.
+func LastMaintenanceWindowStart(now time.Time) time.Time {
+	return NextMaintenanceWindowAt(now).Add(-24 * time.Hour)
+}
+
 // NextMaintenanceWindowAt es la proxima vez que el mercado (post-market
 // extendido incluido) lleva postCloseDelay sin actividad -- se calcula en
 // hora de Nueva York, no UTC. Con UTC fijo la ventana caia a medianoche UTC,
