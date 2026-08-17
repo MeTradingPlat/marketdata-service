@@ -20,6 +20,14 @@ type GetCandlesService interface {
 	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error)
 }
 
+// GetCurrentCandleService devuelve la vela EN FORMACION del simbolo+timeframe
+// (plana al ultimo cierre si el periodo no tiene datos). Exclusiva del
+// grafico en vivo -- signal-processing consume velas cerradas y no pasa
+// por aca; la vela en formacion nunca se guarda.
+type GetCurrentCandleService interface {
+	GetCurrentCandle(ctx context.Context, symbol string, timeframe domain.Timeframe) (*dto.CandleBar, error)
+}
+
 type GetIntradaySnapshotService interface {
 	GetSnapshot(ctx context.Context, symbol string) (domain.IntradaySnapshot, error)
 }

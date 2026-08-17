@@ -224,9 +224,13 @@ func (p *CandlePool) dispatchClosed(symbol string, c domain.Candle) {
 
 // dispatchTick reenvia la vela en formacion tras cada tick -- el suscriptor
 // (StreamLive -> Broadcaster) descarta si su canal va lleno, asi un cliente
-// lento jamas frena el merge de ticks de la conexion DxLink.
+// lento jamas frena el merge de ticks de la conexion DxLink. El filtro es
+// SOLO "tiene cierre": un tick parcial (minuto sin trades, primer evento
+// del periodo con OHLC incompleto) se dibuja plano en el grafico y el
+// siguiente tick lo completa -- descartarlo por IsComplete dejaba huecos en
+// la serie en vivo (minutos enteros saltados).
 func (p *CandlePool) dispatchTick(symbol string, c domain.Candle) {
-	if !c.IsComplete() {
+	if c.Close == 0 {
 		return
 	}
 	p.liveMu.Lock()

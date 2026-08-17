@@ -28,6 +28,12 @@ func (s *searchSymbolsService) Search(ctx context.Context, query string, markets
 		totalPages = int((total + int64(size) - 1) / int64(size))
 	}
 
+	// Un slice nil serializa a JSON null y el frontend hace symbols().length
+	// sobre data -- el contrato de PaginatedResponse exige array siempre.
+	if results == nil {
+		results = []domain.Symbol{}
+	}
+
 	return dto.PaginatedResponse[domain.Symbol]{
 		Data:          results,
 		Page:          page,

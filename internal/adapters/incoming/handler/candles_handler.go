@@ -12,10 +12,34 @@ import (
 
 type CandlesHandler struct {
 	service in.GetCandlesService
+	current in.GetCurrentCandleService
 }
 
-func NewCandlesHandler(service in.GetCandlesService) *CandlesHandler {
-	return &CandlesHandler{service: service}
+func NewCandlesHandler(service in.GetCandlesService, current in.GetCurrentCandleService) *CandlesHandler {
+	return &CandlesHandler{service: service, current: current}
+}
+
+// GetCurrentCandle sirve la vela EN FORMACION del simbolo+timeframe (query
+// param timeframe, default M1) -- para el grafico en vivo; los consumidores
+// de velas cerradas no la usan. 404 cuando no hay ningun dato previo del
+// simbolo para anclar la vela plana.
+func (h *CandlesHandler) GetCurrentCandle(c echo.Context) error {
+	symbol := c.Param("symbol")
+	timeframe := domain.Timeframe(c.QueryParam("timeframe"))
+	if timeframe == "" {
+		timeframe = domain.M1
+	}
+	if !timeframe.Valid() {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid timeframe")
+	}
+	bar, err := h.current.GetCurrentCandle(c.Request().Context(), symbol, timeframe)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "no se pudo armar la vela en formacion")
+	}
+	if bar == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "sin datos para la vela en formacion")
+	}
+	return c.JSON(http.StatusOK, bar)
 }
 
 func (h *CandlesHandler) GetCandles(c echo.Context) error {

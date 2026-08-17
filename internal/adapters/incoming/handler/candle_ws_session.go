@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
@@ -30,14 +29,15 @@ type wsSession struct {
 	conn        *websocket.Conn
 	writeMu     sync.Mutex
 	getCandles  in.GetCandlesService
+	current     in.GetCurrentCandleService
 	broadcaster *livecandles.Broadcaster
 
 	mu   sync.Mutex
 	subs map[string]func()
 }
 
-func newWSSession(conn *websocket.Conn, getCandles in.GetCandlesService, broadcaster *livecandles.Broadcaster) *wsSession {
-	return &wsSession{conn: conn, getCandles: getCandles, broadcaster: broadcaster, subs: make(map[string]func())}
+func newWSSession(conn *websocket.Conn, getCandles in.GetCandlesService, current in.GetCurrentCandleService, broadcaster *livecandles.Broadcaster) *wsSession {
+	return &wsSession{conn: conn, getCandles: getCandles, current: current, broadcaster: broadcaster, subs: make(map[string]func())}
 }
 
 func (s *wsSession) run(ctx context.Context) {
@@ -90,13 +90,16 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 		lastTime = candles[len(candles)-1].Timestamp.Unix()
 	}
 
-	// La vela en formacion arranca con las M1 del periodo actual ya
-	// guardadas (las del broadcast solo llegan desde el momento de la
-	// suscripcion) -- para M1 es nil: la vela del minuto en curso llega con
-	// el primer tick.
+	// La vela en formacion se siembra al instante desde el servicio (M1 del
+	// pool, derivados agregando las M1 del periodo, plana al ultimo cierre
+	// si el periodo no tiene datos) -- el grafico NO espera al primer tick
+	// para dibujarla. La agregacion en vivo sigue desde ahi (forwardLive).
 	var seed *dto.CandleBar
-	if tf != domain.M1 {
-		seed = s.seedForming(ctx, symbol, tf)
+	if s.current != nil {
+		seed, err = s.current.GetCurrentCandle(ctx, symbol, tf)
+		if err != nil {
+			seed = nil
+		}
 	}
 
 	ch, cancel := s.broadcaster.Subscribe(symbol)
@@ -130,10 +133,13 @@ func (s *wsSession) forwardLive(ch <-chan domain.Candle, symbol, timeframe strin
 	tf := domain.Timeframe(timeframe)
 	agg := seed
 	for c := range ch {
-		if !c.IsComplete() {
+		// Un tick puede traer OHLC parcial (minuto sin trades, primer evento
+		// de un periodo) -- se dibuja igual (plano) y el siguiente tick lo
+		// completa; descartar por OHLC incompleto dejaba huecos en la serie.
+		if c.Close == 0 {
 			continue
 		}
-		period := formingPeriodStart(c.Timestamp, tf).Unix()
+		period := livecandles.FormingPeriodStart(c.Timestamp, tf).Unix()
 		if agg == nil || agg.Time != period {
 			if agg != nil && agg.Time >= lastHistoryTime {
 				s.sendBar(symbol, timeframe, *agg, true)
@@ -153,67 +159,6 @@ func (s *wsSession) forwardLive(ch <-chan domain.Candle, symbol, timeframe strin
 			s.sendBar(symbol, timeframe, *agg, false)
 		}
 	}
-}
-
-// seedForming arma la vela en formacion del timeframe al momento de la
-// suscripcion con las M1 del periodo actual ya guardadas en BD -- sin esto,
-// la primera vela en formacion mostraria solo los ticks posteriores a la
-// conexion (alta/cierre incompletos). GetCandles solo acota por "los N mas
-// recientes" (before es un tope superior, no un minimo), asi que se toman
-// las 2000 M1 mas nuevas y se filtran las del periodo; el periodo D1 actual
-// nunca excede las ~1500 M1 de un dia completo.
-func (s *wsSession) seedForming(ctx context.Context, symbol string, tf domain.Timeframe) *dto.CandleBar {
-	start := formingPeriodStart(time.Now(), tf)
-	candles, err := s.getCandles.GetCandles(ctx, symbol, domain.M1, 2000, nil)
-	if err != nil || len(candles) == 0 {
-		return nil
-	}
-	inPeriod := candles[:0]
-	for _, c := range candles {
-		if !c.Timestamp.Before(start) {
-			inPeriod = append(inPeriod, c)
-		}
-	}
-	if len(inPeriod) == 0 {
-		return nil
-	}
-	first := inPeriod[0]
-	bar := &dto.CandleBar{Time: start.Unix(), Open: first.Open, High: first.High, Low: first.Low, Close: first.Close, Volume: first.Volume, Closed: false}
-	for _, c := range inPeriod[1:] {
-		if c.High > bar.High {
-			bar.High = c.High
-		}
-		if c.Low < bar.Low {
-			bar.Low = c.Low
-		}
-		bar.Close = c.Close
-		bar.Volume += c.Volume
-	}
-	return bar
-}
-
-// formingPeriodStart alinea el timestamp al inicio del periodo del timeframe
-// con la misma convencion que las velas guardadas (dxFeed): intraday y
-// diarios alineados a UTC, semana el lunes 00:00 UTC, mes el dia 1, anio el
-// 1 de enero. La vela en formacion se estampa con este inicio para
-// continuar la serie del historial.
-func formingPeriodStart(t time.Time, tf domain.Timeframe) time.Time {
-	u := t.UTC()
-	switch tf {
-	case domain.W1:
-		daysSinceMonday := (int(u.Weekday()) + 6) % 7
-		return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -daysSinceMonday)
-	case domain.MO1, domain.MO3, domain.MO6:
-		return time.Date(u.Year(), u.Month(), 1, 0, 0, 0, 0, time.UTC)
-	case domain.Y1:
-		return time.Date(u.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
-	}
-	d, err := tf.Duration()
-	if err != nil || d <= 0 {
-		return u
-	}
-	secs := int64(d.Seconds())
-	return time.Unix(u.Unix()-u.Unix()%secs, 0).UTC()
 }
 
 func (s *wsSession) sendBar(symbol, timeframe string, bar dto.CandleBar, closed bool) {

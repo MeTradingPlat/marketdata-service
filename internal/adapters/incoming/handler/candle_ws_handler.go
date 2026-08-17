@@ -12,13 +12,15 @@ import (
 
 type CandleWSHandler struct {
 	getCandles  in.GetCandlesService
+	current     in.GetCurrentCandleService
 	broadcaster *livecandles.Broadcaster
 	upgrader    websocket.Upgrader
 }
 
-func NewCandleWSHandler(getCandles in.GetCandlesService, broadcaster *livecandles.Broadcaster) *CandleWSHandler {
+func NewCandleWSHandler(getCandles in.GetCandlesService, current in.GetCurrentCandleService, broadcaster *livecandles.Broadcaster) *CandleWSHandler {
 	return &CandleWSHandler{
 		getCandles:  getCandles,
+		current:     current,
 		broadcaster: broadcaster,
 		// El chequeo de origen ya lo hace el Gateway (CORS centralizado, ver
 		// CLAUDE.md) -- este servicio nunca recibe conexiones directas del navegador.
@@ -32,7 +34,7 @@ func (h *CandleWSHandler) Handle(c echo.Context) error {
 		log.Error().Err(err).Msg("failed to upgrade candle ws connection")
 		return err
 	}
-	session := newWSSession(conn, h.getCandles, h.broadcaster)
+	session := newWSSession(conn, h.getCandles, h.current, h.broadcaster)
 	session.run(c.Request().Context())
 	return nil
 }
