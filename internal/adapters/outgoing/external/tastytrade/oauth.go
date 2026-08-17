@@ -94,3 +94,34 @@ func (o *OAuth) RefreshAccessToken(ctx context.Context) (string, error) {
 	}
 	return o.accessToken, nil
 }
+
+// LogoutAllSessions cierra las sesiones de TastyTrade del access token
+// actual (incluidas las conexiones dxlink de contenedores anteriores que
+// quedaron vivas server-side tras un kill y saturan el limite de sesiones
+// del usuario). El access token usado queda invalidado: hay que refrescarlo
+// antes del proximo AUTH.
+func (o *OAuth) LogoutAllSessions(ctx context.Context) error {
+	o.mu.RLock()
+	token := o.accessToken
+	o.mu.RUnlock()
+	if token == "" {
+		return nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, o.cfg.BaseURL+"/sessions", nil)
+	if err != nil {
+		return fmt.Errorf("building sessions logout request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("calling sessions logout: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	return fmt.Errorf("sessions logout returned status %d", resp.StatusCode)
+}

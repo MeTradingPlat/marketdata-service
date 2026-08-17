@@ -16,8 +16,12 @@ import (
 // bajado de 20 a 8 tras confirmar en vivo que 20 workers concurrentes
 // sobre la hypertable mas el resto del barrido empujaban a postgres al
 // tope de memoria (4GiB) hasta reiniciarse en recovery mode a mitad del
-// upsert, matando tambien earnings y el refresh externo.
-const betaWorkers = 8
+// upsert. Aun con 8 workers el refresh de beta volvio a OOM-matarlo
+// (2026-08-17 16:43Z, el mismo dia, con el tope de 4GiB lleno de page
+// cache de las lecturas) -- se baja a 4 para reducir la amplitud del
+// churn de cache; la proteccion real es memory.high en el cgroup (ver
+// .github/workflows/cd.yml).
+const betaWorkers = 4
 
 const providerBetaChunk = 1000
 

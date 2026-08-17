@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -113,6 +114,12 @@ func (c *DxLinkConn) handleError(ctx context.Context, env inboundEnvelope) {
 		// forzar authenticated=false aca, checkConnectionHealth nunca lo
 		// detecta y el servicio queda mudo hasta un restart manual.
 		log.Error().Str("message", env.Message).Msg("dxlink UNAUTHORIZED, forcing reconnect")
+		if strings.Contains(env.Message, "sessions") {
+			// "The number of user sessions has exceeded the configured limit":
+			// sesiones huerfanas de conexiones previas saturaron el limite --
+			// la reconexion debe limpiarlas via REST primero (OnSessionReset).
+			c.sessionSaturated.Store(true)
+		}
 		c.mu.Lock()
 		c.authenticated = false
 		c.mu.Unlock()

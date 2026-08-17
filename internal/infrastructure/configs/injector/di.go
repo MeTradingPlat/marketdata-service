@@ -133,13 +133,20 @@ func provideOAuth(cfg *configs.Config) *tastytrade.OAuth {
 	})
 }
 
-func provideCandlePool(cfg *configs.Config, qt *tastytrade.QuoteToken) *tastytrade.CandlePool {
+func provideCandlePool(cfg *configs.Config, qt *tastytrade.QuoteToken, oauth *tastytrade.OAuth) *tastytrade.CandlePool {
 	urlFunc := qt.DxlinkURL
 	if cfg.DxlinkURLOverride != "" {
 		urlFunc = func() string { return cfg.DxlinkURLOverride }
 	}
 	connFactory := func(ctx context.Context) (*tastytrade.DxLinkConn, error) {
 		conn := tastytrade.NewDxLinkConn(urlFunc, qt.Token)
+		conn.OnSessionReset(func(sctx context.Context) error {
+			if err := oauth.LogoutAllSessions(sctx); err != nil {
+				return err
+			}
+			_, err := oauth.RefreshAccessToken(sctx)
+			return err
+		})
 		if err := conn.Connect(ctx); err != nil {
 			return nil, err
 		}

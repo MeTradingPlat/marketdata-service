@@ -46,13 +46,16 @@ jobs:
           # no existen en Postgres plano.
           if [ -z "$(docker ps -a -q -f name=postgres-marketdata)" ]; then
             echo "Creating and starting postgres-marketdata container..."
+            # 4GiB, no 512m: el volumen tiene shared_buffers=1GB dentro de
+            # PGDATA -- con 512m el postmaster ni arranca (falla la
+            # asignacion de memoria compartida y entra en crash loop).
             docker run -d \
               --name "postgres-marketdata" \
               --network "metradingplat-network" \
               --restart "always" \
               --cpus "1.0" \
-              --memory "512m" \
-              --memory-swap "512m" \
+              --memory "4g" \
+              --memory-swap "4g" \
               -e POSTGRES_DB="marketdata_db" \
               -e POSTGRES_USER="user_marketdata" \
               -e POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
@@ -62,6 +65,24 @@ jobs:
             echo "postgres-marketdata container exists, ensuring it is started..."
             docker start postgres-marketdata
           fi
+
+      - name: Harden postgres memory against OOM (memory.high)
+        run: |
+          # El cgroup de postgres se llena de page cache de las lecturas/
+          # escrituras de velas (4GiB de cache bajo un tope duro de 4GiB) --
+          # el refresh de beta OOM-mato a postgres dos veces el 2026-08-17
+          # (recovery mode, SQLSTATE 57P03, sin escrituras durante minutos).
+          # memory.high (cgroup v2) fuerza reclaim temprano del cache a
+          # 3.2GiB, bajo el tope duro, en vez de esperar al OOM killer.
+          # NOTA: se re-aplica en cada deploy porque el scope de systemd se
+          # recrea con cada `docker rm`/`docker run` de postgres.
+          PG_ID=$(docker inspect -f '{{.Id}}' postgres-marketdata)
+          if sudo -n true 2>/dev/null; then
+            echo 3435973836 | sudo tee "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high" >/dev/null
+          else
+            echo 3435973836 > "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
+          fi
+          cat "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
 
       - name: Apply Schema
         run: |

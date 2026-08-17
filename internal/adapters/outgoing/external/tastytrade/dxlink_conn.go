@@ -58,6 +58,16 @@ type DxLinkConn struct {
 
 	onReconnect func(ctx context.Context, c *DxLinkConn)
 
+	// sessionSaturated: el servidor rechazo el AUTH por exceder el limite de
+	// sesiones del usuario -- sesiones de conexiones previas (contenedores
+	// muertos, intentos del storm de reconexion) que quedaron vivas
+	// server-side. La proxima reconexion debe cerrarlas via REST
+	// (onSessionReset) antes de reintentar el handshake, o el ciclo de
+	// "sessions exceeded" se auto-perpetua hasta que expiran solas.
+	sessionSaturated atomic.Bool
+
+	onSessionReset func(ctx context.Context) error
+
 	closing atomic.Bool
 }
 
@@ -83,6 +93,13 @@ func NewDxLinkConn(urlFunc func() string, tokenFunc func() string) *DxLinkConn {
 
 func (c *DxLinkConn) OnReconnect(fn func(ctx context.Context, c *DxLinkConn)) {
 	c.onReconnect = fn
+}
+
+// OnSessionReset registra el hook que limpia las sesiones huerfanas de
+// TastyTrade (DELETE /sessions + refresh del token) antes de reconectar
+// tras un rechazo por limite de sesiones.
+func (c *DxLinkConn) OnSessionReset(fn func(ctx context.Context) error) {
+	c.onSessionReset = fn
 }
 
 func (c *DxLinkConn) Connected() bool {

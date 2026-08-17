@@ -84,6 +84,15 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) {
 	if c.Connected() {
 		return
 	}
+	// Sesiones huerfanas saturando el limite: cerrarlas via REST (logout +
+	// refresh del token) antes del handshake -- si el logout falla se
+	// reintenta igual: el backoff a 5 min y las sesiones que expiran solas
+	// siguen siendo la red de seguridad.
+	if c.sessionSaturated.Swap(false) && c.onSessionReset != nil {
+		if err := c.onSessionReset(ctx); err != nil {
+			log.Error().Err(err).Msg("dxlink session reset failed, retrying anyway")
+		}
+	}
 	c.cleanup()
 	if err := c.Connect(ctx); err != nil {
 		log.Error().Err(err).Msg("dxlink reconnect failed")
