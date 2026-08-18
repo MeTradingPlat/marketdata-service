@@ -113,6 +113,14 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// suscripcion rellena solo el hueco de las horas caidas -- pedir 10
 	// dias era redundante y costoso (una pasada de 25+ min sobre el M1
 	// completo en el primer refill).
+	// El sweep M1 es el REFILL que avanza el watermark M1 -- sin el, el
+	// rollout (StreamLive) guardaba el replay con withWatermark=false y el
+	// watermark nunca avanzaba: cada ciclo re-jugaba ~1.5 dias de M1 por
+	// simbolo (rollout de 11+ min, confirmado en vivo el 2026-08-18). Con el
+	// sweep, el watermark avanza diario y el rollout solo re-juega el hueco
+	// del downtime (~minutos).
+	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.M1, cfg.SweepWorkers)
+
 	startLiveUniverse(ctx, ingest, tracked)
 	refreshWithRetry("prev close", func() error {
 		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
