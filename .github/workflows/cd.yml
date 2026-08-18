@@ -106,6 +106,15 @@ jobs:
           echo "All pull attempts failed. Docker daemon might need a manual restart."
           exit 1
 
+      - name: Fix EDGAR cache volume ownership
+        run: |
+          # El volumen nombrado se crea root:root por defecto y el app corre
+          # como UID 100/GID 101 (Alpine adduser -S) -- sin este chown el
+          # cache de SEC EDGAR no es escribible y el refresh externo da
+          # "permission denied" (confirmado en vivo 2026-08-18).
+          docker volume create secedgar_cache 2>/dev/null || true
+          docker run --rm -v secedgar_cache:/cache alpine chown -R 100:101 /cache
+
       - name: Delete Old Application Container
         run: |
           docker stop marketdata-service 2>/dev/null || true
