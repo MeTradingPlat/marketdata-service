@@ -2,6 +2,7 @@ package catchup
 
 import (
 	"context"
+	"strings"
 	"fmt"
 	"sync"
 	"time"
@@ -16,6 +17,18 @@ import (
 // acota -- un pool chico con throttling amable le da prioridad a no
 // ahogar la sesion REST de TastyTrade frente al tiempo total del job.
 const earningsHistoryWorkers = 4
+
+// isQuarterEndPlaceholder detecta el cierre de trimestre que TastyTrade
+// devuelve como occurred-date para miles de simbolos (placeholder, no la
+// fecha real del reporte): la prediccion sobre el placeholder fabrica la
+// misma fecha falsa para todos (confirmado en vivo: 3,962 simbolos con
+// 06-30-2026 y 3,978 con 2026-09-29 como proximo earnings).
+func isQuarterEndPlaceholder(date string) bool {
+	return strings.HasSuffix(date, "-03-31") ||
+		strings.HasSuffix(date, "-06-30") ||
+		strings.HasSuffix(date, "-09-30") ||
+		strings.HasSuffix(date, "-12-31")
+}
 
 // RefreshEarningsHistory re-chequea SOLO los simbolos cuyo
 // next_earnings_date ya vencio (o nunca se busco) contra el endpoint de
@@ -72,7 +85,13 @@ func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, 
 				// caso el simbolo queda en el lote de "stale" y se
 				// re-predice cada noche hasta que el reporte real aterrice
 				// en el historial y la prediccion vuelva a ser futura.
-				if predicted != "" && domain.DaysUntil(predicted) > 0 {
+				// Ademas: el endpoint de TastyTrade devuelve el CIERRE DE
+				// TRIMESTRE como occurred-date para miles de simbolos
+				// (placeholder, no la fecha real del reporte -- confirmado
+				// en vivo: 3,962 simbolos con 06-30-2026) -- predecir sobre
+				// el placeholder fabrica la misma fecha falsa para todos
+				// (3,978 con 2026-09-29). Sin fecha real, no hay prediccion.
+				if predicted != "" && domain.DaysUntil(predicted) > 0 && !isQuarterEndPlaceholder(occurred) {
 					f.NextEarningsDate = predicted
 				}
 				mu.Lock()
