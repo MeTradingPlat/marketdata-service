@@ -16,9 +16,13 @@ import (
 
 const (
 	postCloseDelay = 5 * time.Minute
-	// marketCloseHourET es el fin del post-market extendido -- despues de
-	// esto no llegan ticks nuevos hasta el pre-market del dia siguiente.
-	marketCloseHourET = 20
+	// marketCloseHourET es el cierre REGULAR de 16:00 ET -- el refill arranca
+	// postCloseDelay despues (20:05 UTC), cuando la barra D1 de hoy ya cerro
+	// y el prevClose de la subasta [15:58,16:01) ET esta completo. Usar el fin
+	// del post-market (20:00 ET) atrasaba el refill 4 horas (confirmado en
+	// vivo el 2026-08-18: el usuario esperaba el refill a las 20:05 UTC y no
+	// habia movimiento porque la ventana caia a las 00:05 UTC).
+	marketCloseHourET = 16
 )
 
 // LastMaintenanceWindowStart es el arranque de la ventana de mantenimiento
