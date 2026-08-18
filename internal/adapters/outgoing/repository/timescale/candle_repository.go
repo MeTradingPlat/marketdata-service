@@ -173,16 +173,17 @@ func (r *CandleRepository) GetSeries(ctx context.Context, symbols []string, time
 		return map[string][]domain.Candle{}, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT symbol, ts, open, high, low, close, volume, source
+		SELECT s.symbol, ts, open, high, low, close, volume, source
 		FROM (
-			SELECT s.symbol, c.ts, c.open, c.high, c.low, c.close, c.volume, c.source,
+			SELECT c.symbol_id, c.ts, c.open, c.high, c.low, c.close, c.volume, c.source,
 			       row_number() OVER (PARTITION BY c.symbol_id ORDER BY c.ts DESC) AS rn
 			FROM candles c
-			JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-			WHERE c.timeframe = $1 AND s.symbol = ANY($2)
+			WHERE c.timeframe = $1
+			  AND c.symbol_id IN (SELECT symbol_id FROM tracked_symbols WHERE symbol = ANY($2))
 		) t
+		JOIN tracked_symbols s ON s.symbol_id = t.symbol_id
 		WHERE rn <= $3
-		ORDER BY symbol, ts`,
+		ORDER BY s.symbol, ts`,
 		string(timeframe), symbols, bars)
 	if err != nil {
 		return nil, fmt.Errorf("loading %s series for %d symbols: %w", timeframe, len(symbols), err)
