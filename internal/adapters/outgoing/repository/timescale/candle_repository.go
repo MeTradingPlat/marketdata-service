@@ -216,11 +216,11 @@ func (r *CandleRepository) GetM1DayHoles(ctx context.Context, since time.Time) (
 		GROUP BY s.symbol, day
 		HAVING count(*) >= 200
 		   AND count(*) < EXTRACT(EPOCH FROM (max(c.ts) - min(c.ts))) / 60 + 1
-		   AND EXISTS (SELECT 1 FROM candles c2
-		               WHERE c2.symbol_id = c.symbol_id AND c2.timeframe = 'M1'
+		   AND EXISTS (SELECT 1 FROM candles c2 JOIN tracked_symbols s2 ON s2.symbol_id = c2.symbol_id
+		               WHERE s2.symbol = s.symbol AND c2.timeframe = 'M1'
 		                 AND c2.ts < date_trunc('day', min(c.ts)))
-		   AND EXISTS (SELECT 1 FROM candles c3
-		               WHERE c3.symbol_id = c.symbol_id AND c3.timeframe = 'M1'
+		   AND EXISTS (SELECT 1 FROM candles c3 JOIN tracked_symbols s3 ON s3.symbol_id = c3.symbol_id
+		               WHERE s3.symbol = s.symbol AND c3.timeframe = 'M1'
 		                 AND c3.ts >= date_trunc('day', min(c.ts)) + interval '1 day')
 		ORDER BY s.symbol, day`, since)
 	if err != nil {
