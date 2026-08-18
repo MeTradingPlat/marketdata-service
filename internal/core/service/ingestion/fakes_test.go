@@ -61,7 +61,7 @@ type fakeRepo struct {
 	watermark *time.Time
 }
 
-func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle) error {
+func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
 	if f.saveErr != nil {
 		return f.saveErr
 	}

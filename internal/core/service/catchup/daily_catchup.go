@@ -243,7 +243,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		if len(closed) == 0 {
 			continue
 		}
-		if err := candles.Save(ctx, closed); err != nil {
+		if err := candles.Save(ctx, closed, true); err != nil {
 			log.Warn().Err(err).Str("symbol", symbol).Str("timeframe", string(tf)).
 				Msg("universe sweep batch save failed, falling back to per-symbol backfill")
 			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})

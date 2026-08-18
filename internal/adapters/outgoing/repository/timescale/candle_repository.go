@@ -82,7 +82,7 @@ const updateLastVolumeSQL = `
 // bloqueados de golpe). watermarks es una tabla chica sin particionar, una
 // fila por simbolo+timeframe -- leerla es una busqueda por clave primaria,
 // nunca toca la hypertable.
-func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) error {
+func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
 	if len(candles) == 0 {
 		return nil
 	}
@@ -91,7 +91,9 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) er
 		for _, c := range candles {
 			batch.Queue(upsertCandleSQL, c.Symbol, string(c.Timeframe), c.Timestamp,
 				c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source)
-			batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
+			if withWatermark {
+				batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
+			}
 			if c.Timeframe == domain.D1 {
 				batch.Queue(updateLastVolumeSQL, c.Symbol, c.Volume, c.Timestamp)
 			}
@@ -102,8 +104,10 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle) er
 			if _, err := results.Exec(); err != nil {
 				return fmt.Errorf("upserting candle batch: %w", err)
 			}
-			if _, err := results.Exec(); err != nil {
-				return fmt.Errorf("upserting watermark batch: %w", err)
+			if withWatermark {
+				if _, err := results.Exec(); err != nil {
+					return fmt.Errorf("upserting watermark batch: %w", err)
+				}
 			}
 			if c.Timeframe == domain.D1 {
 				if _, err := results.Exec(); err != nil {

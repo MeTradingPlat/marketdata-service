@@ -8,7 +8,13 @@ import (
 )
 
 type CandleRepository interface {
-	Save(ctx context.Context, candles []domain.Candle) error
+	// Save persiste velas; withWatermark controla si se avanza el watermark
+	// del simbolo+timeframe. Las velas EN VIVO (cerradas minuto a minuto
+	// desde la vela en formacion) guardan con false -- su watermark solo lo
+	// avanza el refill/backfill (las velas reales pedidas a TastyTrade);
+	// asi un reinicio vuelve a pedir exactamente lo que falta desde el
+	// ultimo watermark del refill.
+	Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error
 	// before es nil para las barras mas recientes, o un limite exclusivo
 	// para paginar hacia atras (ver CandleRepository.GetCandles).
 	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error)

@@ -43,7 +43,7 @@ func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, time
 	if len(closed) == 0 {
 		return nil
 	}
-	if err := s.repo.Save(ctx, closed); err != nil {
+	if err := s.repo.Save(ctx, closed, true); err != nil {
 		return fmt.Errorf("saving backfilled candles for %s %s: %w", symbol, timeframe, err)
 	}
 	return nil
@@ -123,7 +123,7 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 		from = *newest
 	}
 	return s.gateway.SubscribeLiveCandles(ctx, symbol, from, func(c domain.Candle) {
-		if err := s.repo.Save(ctx, []domain.Candle{c}); err != nil {
+		if err := s.repo.Save(ctx, []domain.Candle{c}, false); err != nil {
 			log.Error().Err(err).Str("symbol", symbol).Msg("failed to save live candle, buffering for retry")
 			s.retryBuffer.add(c)
 		}
@@ -147,7 +147,7 @@ func (s *ingestCandlesService) RetryPendingSaves(ctx context.Context) {
 	if len(pending) == 0 {
 		return
 	}
-	if err := s.repo.Save(ctx, pending); err != nil {
+	if err := s.repo.Save(ctx, pending, false); err != nil {
 		log.Error().Err(err).Int("candles", len(pending)).Msg("retrying pending candle saves failed, will retry again")
 		s.retryBuffer.requeue(pending)
 		return
