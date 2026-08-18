@@ -99,7 +99,7 @@ jobs:
         run: |
           echo "Attempting to pull image with auto-retry for stability..."
           for i in 1 2 3 4 5; do
-            docker pull virtud142/metradingplat_marketdata_service:latest && exit 0 || \
+            timeout 600 docker pull virtud142/metradingplat_marketdata_service:latest && exit 0 || \
             (echo "Attempt $i failed, waiting $((i * 15))s..." && sleep $((i * 15)))
           done
           echo "All pull attempts failed. Docker daemon might need a manual restart."
