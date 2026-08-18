@@ -17,9 +17,6 @@ type CandleRepository interface {
 	// query por simbolo: satura postgres y las escrituras M1 en vivo hacen
 	// fila detras (ver RefreshBeta).
 	GetSeries(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error)
-	// GetM1DayHoles detecta dias con huecos interiores de M1 (ver
-	// FillM1Gaps) -- la verificacion de huecos del backfill.
-	GetM1DayHoles(ctx context.Context, since time.Time) ([]domain.M1DayHole, error)
 	GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error)
 	SymbolsWithData(ctx context.Context, timeframe domain.Timeframe) (map[string]struct{}, error)
 	// GetIntradaySessions agrega las velas M1 de hoy por sesion (pre-market,

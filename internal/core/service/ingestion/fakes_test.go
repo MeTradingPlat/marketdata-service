@@ -73,10 +73,6 @@ func (f *fakeRepo) GetSeries(ctx context.Context, symbols []string, tf domain.Ti
 	return map[string][]domain.Candle{}, nil
 }
 
-func (f *fakeRepo) GetM1DayHoles(ctx context.Context, since time.Time) ([]domain.M1DayHole, error) {
-	return nil, nil
-}
-
 func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
 	return f.getResult, nil
 }

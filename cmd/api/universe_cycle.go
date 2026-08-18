@@ -107,14 +107,15 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// FASE 3: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
 	// las velas M1 de la sesion anterior, asi que va DESPUES del rollout
 	// M1 -- corria antes con la tabla M1 vacia en un refill en frio y
-	// calculaba 0) + verificacion de huecos de los ultimos dias (backstop
-	// del replay).
+	// calculaba 0). Sin verificacion de huecos de 10 dias: cada vela
+	// guardada (en vivo y en refill) actualiza su watermark, asi que un
+	// reinicio retoma desde el ultimo minuto guardado y el replay de la
+	// suscripcion rellena solo el hueco de las horas caidas -- pedir 10
+	// dias era redundante y costoso (una pasada de 25+ min sobre el M1
+	// completo en el primer refill).
 	startLiveUniverse(ctx, ingest, tracked)
 	refreshWithRetry("prev close", func() error {
 		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
-	})
-	refreshWithRetry("M1 gap fill", func() error {
-		return catchup.FillM1Gaps(ctx, gateway, candles, tracked)
 	})
 
 	catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
