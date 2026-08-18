@@ -208,21 +208,23 @@ const m1HoleMinBars = 200
 // profundidad de TastyTrade) son parciales por naturaleza, no huecos --
 // en el primer refill marcaban 21k falsos positivos y rellenaban 0.
 func (r *CandleRepository) GetM1DayHoles(ctx context.Context, since time.Time) ([]domain.M1DayHole, error) {
+	// Una sola pasada con funciones de ventana: la version con EXISTS
+	// correlacionados por grupo tardaba 20+ min sobre el refill completo de
+	// M1 (40M filas); rn/ndays marcan los dias interiores sin subconsultas.
 	rows, err := r.pool.Query(ctx, `
-		SELECT s.symbol, date_trunc('day', c.ts) AS day
-		FROM candles c
-		JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-		WHERE c.timeframe = 'M1' AND c.ts >= $1 AND s.is_active = TRUE
-		GROUP BY s.symbol, day
-		HAVING count(*) >= 200
-		   AND count(*) < EXTRACT(EPOCH FROM (max(c.ts) - min(c.ts))) / 60 + 1
-		   AND EXISTS (SELECT 1 FROM candles c2 JOIN tracked_symbols s2 ON s2.symbol_id = c2.symbol_id
-		               WHERE s2.symbol = s.symbol AND c2.timeframe = 'M1'
-		                 AND c2.ts < date_trunc('day', min(c.ts)))
-		   AND EXISTS (SELECT 1 FROM candles c3 JOIN tracked_symbols s3 ON s3.symbol_id = c3.symbol_id
-		               WHERE s3.symbol = s.symbol AND c3.timeframe = 'M1'
-		                 AND c3.ts >= date_trunc('day', min(c.ts)) + interval '1 day')
-		ORDER BY s.symbol, day`, since)
+		SELECT symbol, day FROM (
+			SELECT s.symbol, date_trunc('day', c.ts) AS day,
+			       count(*) AS n,
+			       EXTRACT(EPOCH FROM (max(c.ts) - min(c.ts))) / 60 AS span,
+			       row_number() OVER (PARTITION BY s.symbol ORDER BY date_trunc('day', c.ts)) AS rn,
+			       count(*) OVER (PARTITION BY s.symbol) AS ndays
+			FROM candles c
+			JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+			WHERE c.timeframe = 'M1' AND c.ts >= $1 AND s.is_active = TRUE
+			GROUP BY s.symbol, day
+		) t
+		WHERE n >= 200 AND n < span + 1 AND rn > 1 AND rn < ndays
+		ORDER BY symbol, day`, since)
 	if err != nil {
 		return nil, fmt.Errorf("detecting M1 day holes: %w", err)
 	}
