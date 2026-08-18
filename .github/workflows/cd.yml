@@ -139,6 +139,7 @@ jobs:
             -e MAX_CANDLE_POOL_CONNECTIONS="40" \
             -e SWEEP_WORKERS="25" \
             -e EUREKA_HOST="directory" \
+            -v secedgar_cache:/tmp/secedgar-cache \
             virtud142/metradingplat_marketdata_service:latest
 
       - name: Clean Old Images of This Service
