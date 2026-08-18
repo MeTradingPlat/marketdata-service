@@ -132,3 +132,22 @@ func TestWeeklyBetaMin(t *testing.T) {
 		t.Fatal("expected nil with insufficient weeks")
 	}
 }
+
+func TestCovarianceBetaFiltersSplitArtifacts(t *testing.T) {
+	// Un mes con retorno +900% (artefacto de ajuste por split) no debe
+	// contaminar el beta: se descarta el par completo.
+	symbol := map[int]float64{202501: 10, 202502: 12, 202503: 100, 202504: 120}
+	market := map[int]float64{202501: 100, 202502: 102, 202503: 104, 202504: 106}
+	withFilter := covarianceBeta(symbol, market, prevMonth, 2, maxMonthlyReturn)
+	if withFilter == nil {
+		t.Fatal("expected beta with the artifact period filtered")
+	}
+	// Sin filtro (maxReturn enorme) el artefacto cambia el beta.
+	withoutFilter := covarianceBeta(symbol, market, prevMonth, 2, 99.0)
+	if withoutFilter == nil {
+		t.Fatal("expected beta without filter")
+	}
+	if math.Abs(*withFilter-*withoutFilter) < 1.0 {
+		t.Fatalf("expected the artifact to move the beta (with=%v without=%v)", *withFilter, *withoutFilter)
+	}
+}

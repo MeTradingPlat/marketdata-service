@@ -46,7 +46,7 @@ func MonthlyBetaMin(symbolCandles, marketCandles []Candle, minMonths int) *float
 }
 
 func monthlyBetaMin(symbolCandles, marketCandles []Candle, minMonths int) *float64 {
-	return covarianceBeta(monthlyCloses(symbolCandles), monthlyCloses(marketCandles), prevMonth, minMonths)
+	return covarianceBeta(monthlyCloses(symbolCandles), monthlyCloses(marketCandles), prevMonth, minMonths, maxMonthlyReturn)
 }
 
 // WeeklyBetaMin es la misma covarianza sobre retornos SEMANALES (ISO week,
@@ -55,14 +55,28 @@ func monthlyBetaMin(symbolCandles, marketCandles []Candle, minMonths int) *float
 // Bloomberg/Reuters para ventanas de 1-2 anios (ver BetaFallbackWeeks y
 // BetaMinWeeks).
 func WeeklyBetaMin(symbolCandles, marketCandles []Candle, minWeeks int) *float64 {
-	return covarianceBeta(weeklyCloses(symbolCandles), weeklyCloses(marketCandles), prevWeek, minWeeks)
+	return covarianceBeta(weeklyCloses(symbolCandles), weeklyCloses(marketCandles), prevWeek, minWeeks, maxWeeklyReturn)
 }
+
+// maxMonthlyReturn / maxWeeklyReturn: un retorno mensual > 100% (o semanal
+// > 50%) nunca es un movimiento real de mercado -- es un artefacto de
+// ajuste por splits en la serie D1 de TastyTrade (confirmado en vivo: NVDA
+// con +837% en sept 2023 y -91% en nov 2022 por el corte del ajuste del
+// split 10:1; el beta 5Y salia 0.49 en vez de ~2.2 con esos 2 puntos
+// basura de 62). El periodo se descarta del calculo en vez de contaminar
+// la covarianza. Las fuentes oficiales (Yahoo/SA) calculan sobre precios
+// ajustados; esto es el equivalente sin poder ajustar nosotros.
+const (
+	maxMonthlyReturn = 1.0
+	maxWeeklyReturn  = 0.5
+)
 
 // covarianceBeta es el nucleo clasico cov(simbolo, mercado)/var(mercado)
 // sobre retornos por periodo (mensual o semanal segun el mapa de cierres y
 // la funcion de periodo anterior) -- requiere al menos minObs periodos
-// solapados con su periodo anterior completo.
-func covarianceBeta(symbol, market map[int]float64, prev func(int) int, minObs int) *float64 {
+// solapados con su periodo anterior completo y descarta los periodos cuyo
+// retorno del simbolo supera maxReturn (artefactos de ajuste por splits).
+func covarianceBeta(symbol, market map[int]float64, prev func(int) int, minObs int, maxReturn float64) *float64 {
 	if len(symbol) < minObs || len(market) < minObs {
 		return nil
 	}
@@ -78,8 +92,15 @@ func covarianceBeta(symbol, market map[int]float64, prev func(int) int, minObs i
 		if !prevMok || !prevSok || prevM <= 0 || prevS <= 0 {
 			continue
 		}
+		sReturn := sClose/prevS - 1
+		if sReturn > maxReturn || sReturn < -maxReturn {
+			// Artefacto de ajuste por split: el par (simbolo, mercado) se
+			// descarta entero, no solo el retorno del simbolo -- la
+			// covarianza necesita pares alineados.
+			continue
+		}
 		xs = append(xs, mClose/prevM-1)
-		ys = append(ys, sClose/prevS-1)
+		ys = append(ys, sReturn)
 	}
 	if len(xs) < minObs {
 		return nil
