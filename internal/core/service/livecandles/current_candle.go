@@ -47,7 +47,7 @@ func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol stri
 	var liveBar *dto.CandleBar
 	if ok && live.IsComplete() && !live.Timestamp.Before(period) && live.Timestamp.Before(end) {
 		b := toFormingBar(live)
-		b.Time = period.Unix()
+		b.Time = end.Unix()
 		liveBar = b
 	}
 
@@ -55,7 +55,7 @@ func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol stri
 		if liveBar != nil {
 			return liveBar, nil
 		}
-		return s.flatAtLastClose(ctx, symbol, period), nil
+		return s.flatAtLastClose(ctx, symbol, end), nil
 	}
 
 	// Timeframes derivados: agregar las M1 del periodo guardadas en BD y la
@@ -67,24 +67,24 @@ func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol stri
 	var bar *dto.CandleBar
 	for _, c := range m1s {
 		if !c.Timestamp.Before(period) && c.Timestamp.Before(end) {
-			bar = foldM1Bar(bar, c, period)
+			bar = foldM1Bar(bar, c, end)
 		}
 	}
 	if liveBar != nil {
-		bar = foldBar(bar, liveBar, period)
+		bar = foldBar(bar, liveBar, end)
 	}
 	if bar == nil {
-		bar = s.flatAtLastClose(ctx, symbol, period)
+		bar = s.flatAtLastClose(ctx, symbol, end)
 	}
 	return bar, nil
 }
 
 // flatAtLastClose arma la vela en formacion "plana" al ultimo cierre
-// conocido (open=high=low=close) para el periodo indicado -- el grafico
-// siempre tiene la vela en formacion presente aunque el periodo no tenga
-// trades todavia; el primer tick real la corrige (mismo patron que
+// conocido (open=high=low=close) para el periodo que termina en end -- el
+// grafico siempre tiene la vela en formacion presente aunque el periodo no
+// tenga trades todavia; el primer tick real la corrige (mismo patron que
 // TradingView para periodos muertos). nil si no hay ningun cierre previo.
-func (s *CurrentCandleService) flatAtLastClose(ctx context.Context, symbol string, period time.Time) *dto.CandleBar {
+func (s *CurrentCandleService) flatAtLastClose(ctx context.Context, symbol string, end time.Time) *dto.CandleBar {
 	m1s, err := s.candles.GetCandles(ctx, symbol, domain.M1, 1, nil)
 	if err != nil || len(m1s) == 0 {
 		return nil
@@ -93,26 +93,26 @@ func (s *CurrentCandleService) flatAtLastClose(ctx context.Context, symbol strin
 	if last.Close == 0 {
 		return nil
 	}
-	return &dto.CandleBar{Time: period.Unix(), Open: last.Close, High: last.Close, Low: last.Close, Close: last.Close, Closed: false}
+	return &dto.CandleBar{Time: end.Unix(), Open: last.Close, High: last.Close, Low: last.Close, Close: last.Close, Closed: false}
 }
 
 func toFormingBar(c domain.Candle) *dto.CandleBar {
 	return &dto.CandleBar{Time: c.Timestamp.Unix(), Open: c.Open, High: c.High, Low: c.Low, Close: c.Close, Volume: c.Volume, Closed: false}
 }
 
-func foldM1Bar(bar *dto.CandleBar, c domain.Candle, period time.Time) *dto.CandleBar {
+func foldM1Bar(bar *dto.CandleBar, c domain.Candle, end time.Time) *dto.CandleBar {
 	b := bar
 	if b == nil {
-		b = &dto.CandleBar{Time: period.Unix(), Open: c.Open, High: c.High, Low: c.Low, Close: c.Close, Volume: c.Volume, Closed: false}
+		b = &dto.CandleBar{Time: end.Unix(), Open: c.Open, High: c.High, Low: c.Low, Close: c.Close, Volume: c.Volume, Closed: false}
 		return b
 	}
-	return foldBar(b, toFormingBar(c), period)
+	return foldBar(b, toFormingBar(c), end)
 }
 
-func foldBar(bar *dto.CandleBar, next *dto.CandleBar, period time.Time) *dto.CandleBar {
+func foldBar(bar *dto.CandleBar, next *dto.CandleBar, end time.Time) *dto.CandleBar {
 	if bar == nil {
 		b := *next
-		b.Time = period.Unix()
+		b.Time = end.Unix()
 		b.Closed = false
 		return &b
 	}
@@ -130,8 +130,12 @@ func foldBar(bar *dto.CandleBar, next *dto.CandleBar, period time.Time) *dto.Can
 // FormingPeriodStart alinea el timestamp al inicio del periodo del timeframe
 // con la misma convencion que las velas guardadas (dxFeed): intraday y
 // diarios alineados a UTC, semana el lunes 00:00 UTC, mes el dia 1, anio el
-// 1 de enero. La vela en formacion se estampa con este inicio para
-// continuar la serie del historial.
+// 1 de enero. Las velas CERRADAS se estampan con este inicio; la vela EN
+// FORMACION se estampa con el FIN del periodo (FormingPeriodEnd) para que el
+// grafico la dibuje en el tick de su cierre ("la 40" para el periodo
+// 23:35-23:40) y no se confunda con la cerrada anterior -- confirmado en
+// vivo el 2026-08-18: con el inicio, la formacion se dibujaba sobre el tick
+// de la cerrada y parecia que faltaba.
 func FormingPeriodStart(t time.Time, tf domain.Timeframe) time.Time {
 	u := t.UTC()
 	switch tf {

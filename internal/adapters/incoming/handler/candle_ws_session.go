@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
@@ -148,7 +149,7 @@ func (s *wsSession) forwardLive(ch <-chan domain.Candle, symbol, timeframe strin
 		period := livecandles.FormingPeriodStart(c.Timestamp, tf).Unix()
 		if agg == nil || agg.Time != period {
 			if agg != nil && agg.Time >= lastHistoryTime {
-				s.sendBar(symbol, timeframe, *agg, true)
+				s.sendBar(symbol, timeframe, withEndTime(*agg, tf), true)
 			}
 			agg = &dto.CandleBar{Time: period, Open: c.Open, High: c.High, Low: c.Low, Close: c.Close, Volume: c.Volume, Closed: false}
 		} else {
@@ -162,9 +163,18 @@ func (s *wsSession) forwardLive(ch <-chan domain.Candle, symbol, timeframe strin
 			agg.Volume += c.Volume
 		}
 		if agg.Time >= lastHistoryTime {
-			s.sendBar(symbol, timeframe, *agg, false)
+			s.sendBar(symbol, timeframe, withEndTime(*agg, tf), false)
 		}
 	}
+}
+
+// withEndTime estampa la vela con el FIN del periodo (misma convencion que
+// CurrentCandleService y el seed) -- el agg interno conserva el inicio como
+// clave de agregacion, pero lo que llega al grafico debe dibujarse en el
+// tick de cierre del periodo.
+func withEndTime(bar dto.CandleBar, tf domain.Timeframe) dto.CandleBar {
+	bar.Time = livecandles.FormingPeriodEnd(time.Unix(bar.Time, 0), tf).Unix()
+	return bar
 }
 
 func (s *wsSession) sendBar(symbol, timeframe string, bar dto.CandleBar, closed bool) {
