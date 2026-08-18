@@ -97,4 +97,9 @@ type FundamentalsRepository interface {
 	GetSymbolsWithStalePrevClose(ctx context.Context, windowStart time.Time) ([]string, error)
 	// UpsertPrevClose guarda el prevClose del backfill con su fecha.
 	UpsertPrevClose(ctx context.Context, symbol string, close float64) error
+	// MarkPrevCloseAttempted estampa prev_close_updated_at sin tocar
+	// prev_close -- "se intento y no hay dato" (simbolo sin M1) no debe
+	// re-procesarse en cada ciclo (3,587 simbolos x ~10 min por ciclo,
+	// confirmado en vivo el 2026-08-18).
+	MarkPrevCloseAttempted(ctx context.Context, symbol string) error
 }

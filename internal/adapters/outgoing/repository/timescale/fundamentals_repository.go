@@ -439,6 +439,23 @@ func (r *FundamentalsRepository) UpsertPrevClose(ctx context.Context, symbol str
 	return nil
 }
 
+// MarkPrevCloseAttempted estampa prev_close_updated_at sin tocar prev_close
+// (misma semantica que external_updated_at: "corrio y no encontro dato" es
+// distinto de "nunca corrio"). Sin esto, los simbolos sin datos M1 quedaban
+// en la lista stale para siempre y cada ciclo los re-procesaba (~10 min
+// perdidos por ciclo con 3,587 de ellos, confirmado en vivo el 2026-08-18).
+func (r *FundamentalsRepository) MarkPrevCloseAttempted(ctx context.Context, symbol string) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO dividends (symbol_id, prev_close_updated_at)
+		SELECT symbol_id, now() FROM tracked_symbols WHERE symbol = $1
+		ON CONFLICT (symbol_id) DO UPDATE SET prev_close_updated_at = now()`,
+		symbol)
+	if err != nil {
+		return fmt.Errorf("marking prev close attempted for %s: %w", symbol, err)
+	}
+	return nil
+}
+
 // StepDoneAt devuelve cuando se calculo por ultima vez el paso (false si
 // nunca se calculo -- primer arranque o paso que nunca corrio).
 func (r *FundamentalsRepository) StepDoneAt(ctx context.Context, step string) (time.Time, bool, error) {

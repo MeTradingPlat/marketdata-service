@@ -19,8 +19,9 @@ const prevCloseChunk = 1000
 // prev_close_updated_at quedo fuera de la ventana de mantenimiento actual
 // -- el guard por-simbolo con fecha evita recalcular los 13k en cada
 // reinicio (corre en el backfill, despues del barrido D1 y antes de H1,
-// ver universe_cycle.go). Simbolos sin datos previos se saltan sin marcar:
-// el proximo ciclo los reintenta.
+// ver universe_cycle.go). Simbolos sin datos previos se marcan como
+// "intentados" (MarkPrevCloseAttempted): no se re-procesan en el mismo
+// window, y el proximo window los reintenta igual.
 func RefreshPrevClose(ctx context.Context, candles out.CandleRepository, fundamentals out.FundamentalsRepository, windowStart time.Time) error {
 	stale, err := fundamentals.GetSymbolsWithStalePrevClose(ctx, windowStart)
 	if err != nil {
@@ -37,7 +38,17 @@ func RefreshPrevClose(ctx context.Context, candles out.CandleRepository, fundame
 		end := min(i+prevCloseChunk, len(stale))
 		for _, symbol := range stale[i:end] {
 			close, err := candles.GetPreviousSessionClose(ctx, symbol, time.Now())
-			if err != nil || close == nil {
+			if err != nil {
+				continue
+			}
+			if close == nil {
+				// Sin datos M1 (warrants/OTC sin historia): estampar
+				// "intentado" para no re-procesarlo en cada ciclo -- el
+				// proximo window lo reintenta igual (el guard compara contra
+				// windowStart).
+				if err := fundamentals.MarkPrevCloseAttempted(ctx, symbol); err != nil {
+					return err
+				}
 				continue
 			}
 			if err := fundamentals.UpsertPrevClose(ctx, symbol, *close); err != nil {
