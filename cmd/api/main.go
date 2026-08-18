@@ -86,6 +86,7 @@ func main() {
 		// corre en background (no bloquea el arranque del servidor HTTP) y se
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
 		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling)
+		StartLiveReconcileLoop(ctx, ingest, symbols)
 		StartSaveRetryLoop(ctx, ingest)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo)
@@ -107,6 +108,13 @@ func main() {
 		if err := e.Shutdown(shutdownCtx); err != nil {
 			log.Error().Err(err).Msg("error shutting down http server")
 		}
+		// Cierra las conexiones DxLink con un FIN explicito antes de morir --
+		// si el proceso muere con los sockets abiertos, el servidor de
+		// TastyTrade tarda en reclamar las sesiones y un swap de contenedor
+		// deja sesiones huerfanas que saturan el limite ("number of user
+		// sessions has exceeded the configured limit", confirmado en vivo el
+		// 2026-08-18 con 5 swaps en una hora).
+		gateway.ResetLiveConnections()
 		dbPool.Close()
 		log.Info().Msg("shutdown complete")
 	})

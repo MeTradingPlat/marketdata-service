@@ -12,6 +12,7 @@ type IngestCandlesService interface {
 	Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error
 	StreamLive(ctx context.Context, symbol string) error
 	RetryPendingSaves(ctx context.Context)
+	IsLive(symbol string) bool
 }
 
 type GetCandlesService interface {

@@ -3,6 +3,7 @@ package ingestion
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -17,10 +18,12 @@ type ingestCandlesService struct {
 	repo        out.CandleRepository
 	broadcaster *livecandles.Broadcaster
 	retryBuffer *saveRetryBuffer
+	liveMu      sync.RWMutex
+	live        map[string]bool
 }
 
 func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, retryBuffer: newSaveRetryBuffer()}
+	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool)}
 }
 
 // IncrementalMargin son barras de mas antes del watermark que se vuelven a
@@ -123,7 +126,7 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 	if newest != nil {
 		from = *newest
 	}
-	return s.gateway.SubscribeLiveCandles(ctx, symbol, from, func(c domain.Candle) {
+	if err := s.gateway.SubscribeLiveCandles(ctx, symbol, from, func(c domain.Candle) {
 		if err := s.repo.Save(ctx, []domain.Candle{c}, false); err != nil {
 			log.Error().Err(err).Str("symbol", symbol).Msg("failed to save live candle, buffering for retry")
 			s.retryBuffer.add(c)
@@ -136,7 +139,31 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 		// que una sesion WS vea la vela a medio formar: solo se publicaba
 		// al cerrar.
 		s.broadcaster.Publish(c)
-	})
+	}); err != nil {
+		s.setLive(symbol, false)
+		return err
+	}
+	s.setLive(symbol, true)
+	return nil
+}
+
+func (s *ingestCandlesService) setLive(symbol string, live bool) {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	s.live[symbol] = live
+}
+
+// IsLive dice si el stream en vivo del simbolo arranco -- el loop de
+// reconciliacion (cmd/api) lo usa para resuscribir los simbolos cuyo intento
+// inicial fallo (ej. limite de sesiones DxLink saturado durante el rollout
+// M1, confirmado en vivo el 2026-08-18: los simbolos fallidos quedaban
+// mudos hasta el proximo ciclo porque nada los reintentaba). Los streams que
+// mueren DESPUES de arrancar los resuscribe el propio pool al reconectar
+// (handleConnectionReconnect); este flag solo distingue nunca-vivo de vivo.
+func (s *ingestCandlesService) IsLive(symbol string) bool {
+	s.liveMu.RLock()
+	defer s.liveMu.RUnlock()
+	return s.live[symbol]
 }
 
 // RetryPendingSaves reintenta las velas en vivo que fallaron al guardarse --
