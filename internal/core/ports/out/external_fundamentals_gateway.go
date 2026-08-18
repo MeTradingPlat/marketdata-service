@@ -31,9 +31,11 @@ type BeneficialOwnersGateway interface {
 }
 
 // ShortInterestGateway resuelve shortInterest/shortRatio via el CSV
-// biweekly de FINRA.
+// biweekly de FINRA. Devuelve error cuando NINGUNA fecha candidata responde
+// (FINRA publica con ~2 semanas de lag) -- el refresh lo reintenta, y un
+// fallo no se graba como exito con cero datos.
 type ShortInterestGateway interface {
-	DownloadLatest(ctx context.Context) map[string]domain.ShortInterestRecord
+	DownloadLatest(ctx context.Context) (map[string]domain.ShortInterestRecord, error)
 }
 
 // ProfileSharesGateway resuelve sharesOutstanding en vivo via el evento

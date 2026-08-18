@@ -42,7 +42,11 @@ func main() {
 
 	fmt.Println("=== FINRA short interest ===")
 	finraClient := finra.NewClient()
-	finraData := finraClient.DownloadLatest(ctx)
+	finraData, err := finraClient.DownloadLatest(ctx)
+	if err != nil {
+		fmt.Printf("FINRA download failed: %v\n", err)
+		return
+	}
 	fmt.Printf("total symbols in FINRA file: %d\n", len(finraData))
 	for _, s := range symbols {
 		rec := finraData[s]

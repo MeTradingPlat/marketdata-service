@@ -40,7 +40,10 @@ func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandin
 	insiderData := insiders.FetchInsiderShares(ctx, symbols)
 	log.Info().Int("symbols", len(insiderData)).Msg("sec insider ownership refresh finished")
 
-	finraData := finra.DownloadLatest(ctx)
+	finraData, err := finra.DownloadLatest(ctx)
+	if err != nil {
+		return fmt.Errorf("finra short interest: %w", err)
+	}
 	log.Info().Int("symbols", len(finraData)).Msg("finra short interest refresh finished")
 
 	updates := buildExternalFundamentals(symbols, profileShares, sharesOutstanding, insiderData, finraData)
