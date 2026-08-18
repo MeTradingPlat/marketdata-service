@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
@@ -9,6 +10,12 @@ import (
 )
 
 const tradingStatusInterval = 15 * time.Minute
+
+// lastTradingStatusAtUnix: la ultima corrida del trading status (loop o
+// ciclo) -- el ciclo salta el suyo si el loop corrio hace poco (ver
+// universe_cycle.go): el dato de halt es el mismo y el ciclo no debe pagar
+// 100s de REST por refrescarlo dos veces.
+var lastTradingStatusAtUnix atomic.Int64
 
 // StartTradingStatusLoop refresca halt/trading-status cada 15 minutos
 // mientras el mercado puede estar activo (pre-market a post-market
@@ -29,6 +36,7 @@ func StartTradingStatusLoop(ctx context.Context, gateway out.MarketDataGateway, 
 					continue
 				}
 				catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
+				lastTradingStatusAtUnix.Store(time.Now().Unix())
 			}
 		}
 	}()

@@ -118,7 +118,13 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
 	})
 
-	catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
+	// El trading status lo refresca el loop cada 15 min mientras el mercado
+	// esta activo -- si corrio hace menos de 10 min, el ciclo salta el suyo
+	// (ahorra ~100s de REST por ciclo, ver trading_status_loop.go).
+	if last := lastTradingStatusAtUnix.Load(); time.Since(time.Unix(last, 0)) > 10*time.Minute {
+		catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
+		lastTradingStatusAtUnix.Store(time.Now().Unix())
+	}
 	// Los pasos de abajo son de cadencia diaria (se recalculan tras el
 	// cierre del mercado): la marca fundamental_refresh_log hace que un
 	// reinicio del contenedor dentro de la MISMA ventana de mantenimiento no

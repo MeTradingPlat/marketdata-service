@@ -220,13 +220,25 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 // Si el fetch del lote falla, cae al backfill individual con reintentos --
 // peor lento que dejar un lote sin datos.
 func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) {
-	froms := make(map[string]time.Time, len(batch))
+	symbols := make([]string, 0, len(batch))
 	for _, j := range batch {
-		newest, err := candles.GetWatermark(ctx, j.symbol, tf)
-		if err != nil || newest == nil || !ingestion.HasNewClosedBar(*newest, duration) {
+		symbols = append(symbols, j.symbol)
+	}
+	watermarks, err := candles.GetWatermarksBatch(ctx, symbols, tf)
+	if err != nil {
+		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(batch)).
+			Msg("universe sweep watermark batch failed, falling back to per-symbol backfill")
+		for _, j := range batch {
+			backfillWithRetry(ctx, ingest, j)
+		}
+		return
+	}
+	froms := make(map[string]time.Time, len(watermarks))
+	for symbol, newest := range watermarks {
+		if !ingestion.HasNewClosedBar(newest, duration) {
 			continue
 		}
-		froms[j.symbol] = newest.Add(-ingestion.IncrementalMargin * duration)
+		froms[symbol] = newest.Add(-ingestion.IncrementalMargin * duration)
 	}
 	if len(froms) == 0 {
 		return

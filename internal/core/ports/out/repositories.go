@@ -24,6 +24,10 @@ type CandleRepository interface {
 	// fila detras (ver RefreshBeta).
 	GetSeries(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error)
 	GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error)
+	// GetWatermarksBatch lee los watermarks de un lote de simbolos en UNA
+	// query (el barrido leia uno por uno: 13k queries por fase, la mayor
+	// parte del tiempo del refill -- ver backfillBatchWithRetry).
+	GetWatermarksBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe) (map[string]time.Time, error)
 	SymbolsWithData(ctx context.Context, timeframe domain.Timeframe) (map[string]struct{}, error)
 	// GetIntradaySessions agrega las velas M1 de hoy por sesion (pre-market,
 	// regular, post-market) -- devuelve solo esos campos de

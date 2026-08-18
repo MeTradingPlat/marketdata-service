@@ -81,6 +81,17 @@ func (f *fakeRepo) GetWatermark(ctx context.Context, symbol string, tf domain.Ti
 	return f.watermark, nil
 }
 
+func (f *fakeRepo) GetWatermarksBatch(ctx context.Context, symbols []string, tf domain.Timeframe) (map[string]time.Time, error) {
+	if f.watermark != nil {
+		result := make(map[string]time.Time, len(symbols))
+		for _, s := range symbols {
+			result[s] = *f.watermark
+		}
+		return result, nil
+	}
+	return map[string]time.Time{}, nil
+}
+
 func (f *fakeRepo) SymbolsWithData(ctx context.Context, tf domain.Timeframe) (map[string]struct{}, error) {
 	return nil, nil
 }

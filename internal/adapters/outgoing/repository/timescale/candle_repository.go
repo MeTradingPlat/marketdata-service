@@ -346,6 +346,38 @@ func (r *CandleRepository) GetWatermark(ctx context.Context, symbol string, time
 	return newest, nil
 }
 
+// GetWatermarksBatch lee los watermarks de un lote en una sola query -- el
+// barrido por simbolo era 13k queries por fase, y bajo la carga de
+// escrituras M1 cada una pagaba cola de IO (el refill media ~170s solo en
+// lecturas de watermarks, confirmado en vivo el 2026-08-18).
+func (r *CandleRepository) GetWatermarksBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe) (map[string]time.Time, error) {
+	if len(symbols) == 0 {
+		return map[string]time.Time{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.symbol, w.last_ts
+		FROM watermarks w
+		JOIN tracked_symbols s ON s.symbol_id = w.symbol_id
+		WHERE w.timeframe = $1 AND s.symbol = ANY($2)`, string(timeframe), symbols)
+	if err != nil {
+		return nil, fmt.Errorf("querying watermarks batch: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[string]time.Time, len(symbols))
+	for rows.Next() {
+		var symbol string
+		var last time.Time
+		if err := rows.Scan(&symbol, &last); err != nil {
+			return nil, fmt.Errorf("scanning watermark batch: %w", err)
+		}
+		result[symbol] = last
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating watermark batch: %w", err)
+	}
+	return result, nil
+}
+
 const symbolsWithDataSQL = `
 	SELECT DISTINCT s.symbol
 	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
