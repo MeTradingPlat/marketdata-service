@@ -13,6 +13,7 @@ type IngestCandlesService interface {
 	StreamLive(ctx context.Context, symbol string) error
 	RetryPendingSaves(ctx context.Context)
 	IsLive(symbol string) bool
+	IsAttempted(symbol string) bool
 }
 
 type GetCandlesService interface {

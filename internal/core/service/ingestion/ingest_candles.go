@@ -20,10 +20,11 @@ type ingestCandlesService struct {
 	retryBuffer *saveRetryBuffer
 	liveMu      sync.RWMutex
 	live        map[string]bool
+	attempted   map[string]bool
 }
 
 func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool)}
+	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
 }
 
 // IncrementalMargin son barras de mas antes del watermark que se vuelven a
@@ -151,19 +152,26 @@ func (s *ingestCandlesService) setLive(symbol string, live bool) {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
 	s.live[symbol] = live
+	s.attempted[symbol] = true
 }
 
-// IsLive dice si el stream en vivo del simbolo arranco -- el loop de
-// reconciliacion (cmd/api) lo usa para resuscribir los simbolos cuyo intento
-// inicial fallo (ej. limite de sesiones DxLink saturado durante el rollout
-// M1, confirmado en vivo el 2026-08-18: los simbolos fallidos quedaban
-// mudos hasta el proximo ciclo porque nada los reintentaba). Los streams que
-// mueren DESPUES de arrancar los resuscribe el propio pool al reconectar
-// (handleConnectionReconnect); este flag solo distingue nunca-vivo de vivo.
+// IsLive dice si el stream en vivo del simbolo arranco.
 func (s *ingestCandlesService) IsLive(symbol string) bool {
 	s.liveMu.RLock()
 	defer s.liveMu.RUnlock()
 	return s.live[symbol]
+}
+
+// IsAttempted distingue "el rollout lo intento y fallo" de "nadie lo ha
+// intentado todavia" -- el reconciliador (cmd/api) solo reintenta los
+// intentados-fallidos; reintentar los nunca-intentados en el primer tick
+// (5 min tras boot, cuando el ciclo recien va por D1/beta) re-registra los
+// dispatch entries del rollout en curso y lo frena (confirmado en vivo el
+// 2026-08-18 18:07-18:20: el ciclo quedo atascado 15+ min sin abrir).
+func (s *ingestCandlesService) IsAttempted(symbol string) bool {
+	s.liveMu.RLock()
+	defer s.liveMu.RUnlock()
+	return s.attempted[symbol]
 }
 
 // RetryPendingSaves reintenta las velas en vivo que fallaron al guardarse --
