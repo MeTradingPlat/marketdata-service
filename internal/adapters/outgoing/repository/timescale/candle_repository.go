@@ -202,7 +202,11 @@ const m1HoleMinBars = 200
 // GetM1DayHoles detecta dias con huecos interiores de M1 para todo el
 // universo desde `since` (UTC por dia) -- la verificacion de huecos del
 // backfill (ver FillM1Gaps): el replay de la suscripcion en vivo cubre el
-// hueco reciente, esto detecta lo que el replay no alcanzo.
+// hueco reciente, esto detecta lo que el replay no alcanzo. Solo se marcan
+// dias INTERIORES (con velas el dia anterior y el siguiente): el dia
+// actual (a medio formar) y el dia mas viejo del rango (limite de
+// profundidad de TastyTrade) son parciales por naturaleza, no huecos --
+// en el primer refill marcaban 21k falsos positivos y rellenaban 0.
 func (r *CandleRepository) GetM1DayHoles(ctx context.Context, since time.Time) ([]domain.M1DayHole, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT s.symbol, date_trunc('day', c.ts) AS day
@@ -212,6 +216,12 @@ func (r *CandleRepository) GetM1DayHoles(ctx context.Context, since time.Time) (
 		GROUP BY s.symbol, day
 		HAVING count(*) >= 200
 		   AND count(*) < EXTRACT(EPOCH FROM (max(c.ts) - min(c.ts))) / 60 + 1
+		   AND EXISTS (SELECT 1 FROM candles c2
+		               WHERE c2.symbol_id = c.symbol_id AND c2.timeframe = 'M1'
+		                 AND c2.ts < date_trunc('day', min(c.ts)))
+		   AND EXISTS (SELECT 1 FROM candles c3
+		               WHERE c3.symbol_id = c.symbol_id AND c3.timeframe = 'M1'
+		                 AND c3.ts >= date_trunc('day', min(c.ts)) + interval '1 day')
 		ORDER BY s.symbol, day`, since)
 	if err != nil {
 		return nil, fmt.Errorf("detecting M1 day holes: %w", err)

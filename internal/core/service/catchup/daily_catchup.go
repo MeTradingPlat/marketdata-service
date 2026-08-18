@@ -3,6 +3,7 @@ package catchup
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,6 +63,21 @@ func NextMaintenanceWindowAt(now time.Time) time.Time {
 // guardada, solo deja de pedirsele mas historia). Si el fetch falla o
 // vuelve vacio (fallo silencioso del lado de TastyTrade), no se toca nada
 // -- mejor un universo desactualizado que desactivar todo por un fetch roto.
+// testSymbolPatterns: los simbolos de prueba que TastyTrade publica en su
+// propio universo de equities (NTEST/PTEST y sus variantes ZAZZT/ZCZZT) --
+// el usuario los excluyo del mercado nuestro; no deben entrar al Tracked ni
+// aparecer en el screener. El prefijo cubre las variantes (NTEST/A, /Z...).
+var testSymbolPatterns = []string{"NTEST", "PTEST", "ZAZZT", "ZCZZT"}
+
+func isTestSymbol(symbol string) bool {
+	for _, p := range testSymbolPatterns {
+		if strings.HasPrefix(symbol, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func reconcileUniverse(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository) error {
 	active, err := gateway.ActiveSymbols(ctx)
 	if err != nil {
@@ -70,7 +86,13 @@ func reconcileUniverse(ctx context.Context, gateway out.MarketDataGateway, symbo
 	if len(active) == 0 {
 		return fmt.Errorf("active symbol universe came back empty, skipping reconciliation")
 	}
-	if err := symbols.Upsert(ctx, active); err != nil {
+	real := active[:0]
+	for _, s := range active {
+		if !isTestSymbol(s.Symbol) {
+			real = append(real, s)
+		}
+	}
+	if err := symbols.Upsert(ctx, real); err != nil {
 		return fmt.Errorf("upserting active symbols: %w", err)
 	}
 
