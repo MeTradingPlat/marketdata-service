@@ -14,6 +14,15 @@ const (
 	healthCheckInterval   = 20 * time.Second
 	keepaliveInterval     = 30 * time.Second
 
+	// sessionSaturatedDelay: cuando el servidor rechaza por limite de
+	// sesiones, el backoff normal no basta -- cada handshake rechazado deja
+	// una sesion que tarda mas en expirar que el intervalo entre intentos
+	// (5 min max), asi el storm se auto-alimenta indefinidamente (confirmado
+	// en vivo el 2026-08-18: saturado 17:16 -> 18:54 sin resolver). Con 15
+	// min entre intentos las sesiones expiran entre medio y la mesa se
+	// desocupa de verdad.
+	sessionSaturatedDelay = 15 * time.Minute
+
 	// staleConnectionThreshold: si no llega NINGUN mensaje del servidor
 	// (dato real o su propio KEEPALIVE) en este tiempo, se asume conexion
 	// zombie y se cierra a la fuerza -- 3x keepaliveInterval, margen sobre
@@ -54,6 +63,9 @@ func (c *DxLinkConn) scheduleReconnect(ctx context.Context) {
 	}
 
 	delay := reconnectDelay(int(attempts))
+	if c.sessionSaturated.Load() && delay < sessionSaturatedDelay {
+		delay = sessionSaturatedDelay
+	}
 	go func() {
 		defer func() {
 			c.reconnectMu.Lock()
