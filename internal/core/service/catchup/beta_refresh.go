@@ -92,11 +92,20 @@ func RefreshBeta(ctx context.Context, candles out.CandleRepository, fundamentals
 			}
 			beta := domain.MonthlyBeta(symbolCandles, marketCandles)
 			if beta == nil && providerBeta[symbol] == 0 {
-				// Fallback beta 1Y con la mejor serie disponible -- un beta
-				// real de 12 meses es mejor que N/A para los simbolos
-				// cortos SIN beta del proveedor. Con beta real del
-				// proveedor se conserva el suyo.
+				// Escalera de fallbacks para historia corta SIN beta del
+				// proveedor (con beta real del proveedor se conserva el
+				// suyo): 1Y semanal (52 obs, Bloomberg-style), luego 1Y
+				// mensual (12 obs), y por ultimo 6M semanal (26 obs) para
+				// los simbolos con apenas 6-11 meses de D1 -- cada escalon
+				// es un beta real mejor que N/A (confirmado en vivo con
+				// MDXH, ADR con ~19 meses que quedaba sin beta del todo).
+				beta = domain.WeeklyBetaMin(symbolCandles, marketCandles, domain.BetaFallbackWeeks)
+			}
+			if beta == nil && providerBeta[symbol] == 0 {
 				beta = domain.MonthlyBetaMin(symbolCandles, marketCandles, domain.BetaFallbackMonths)
+			}
+			if beta == nil && providerBeta[symbol] == 0 {
+				beta = domain.WeeklyBetaMin(symbolCandles, marketCandles, domain.BetaMinWeeks)
 			}
 			if beta == nil {
 				continue

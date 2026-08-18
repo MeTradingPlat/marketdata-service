@@ -91,16 +91,12 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		gateway.ResetLiveConnections()
 	}
 
-	// FASE 1: D1 + sus calculos (beta y prevClose, guard por-simbolo).
+	// FASE 1: D1 + beta (guard por-simbolo, se calcula con D1 propio).
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.D1, cfg.SweepWorkers)
 	windowStart := catchup.LastMaintenanceWindowStart(time.Now())
-	refreshWithRetry("prev close", func() error {
-		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
-	})
 	// RefreshBeta usa el guard por-simbolo beta_updated_at: solo calcula
 	// los simbolos cuyo beta no se calculo en esta ventana de
-	// mantenimiento (ver beta_refresh.go). Despues de RefreshMarketMetrics
-	// ya no hace falta: los betas de TastyTrade se leen del propio lote.
+	// mantenimiento (ver beta_refresh.go).
 	refreshWithRetry("beta", func() error {
 		return catchup.RefreshBeta(ctx, candles, fundamentals, windowStart)
 	})
@@ -108,9 +104,15 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// FASE 2: H1, desde cero sesiones (RunSweepPhase cierra al terminar).
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.H1, cfg.SweepWorkers)
 
-	// FASE 3: M1 en vivo (se queda suscrito) + verificacion de huecos de
-	// los ultimos dias (backstop del replay).
+	// FASE 3: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
+	// las velas M1 de la sesion anterior, asi que va DESPUES del rollout
+	// M1 -- corria antes con la tabla M1 vacia en un refill en frio y
+	// calculaba 0) + verificacion de huecos de los ultimos dias (backstop
+	// del replay).
 	startLiveUniverse(ctx, ingest, tracked)
+	refreshWithRetry("prev close", func() error {
+		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
+	})
 	refreshWithRetry("M1 gap fill", func() error {
 		return catchup.FillM1Gaps(ctx, gateway, candles, tracked)
 	})

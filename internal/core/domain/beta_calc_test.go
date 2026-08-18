@@ -91,3 +91,44 @@ func TestMonthlyBeta(t *testing.T) {
 		})
 	}
 }
+
+func TestPrevWeekRollover(t *testing.T) {
+	// Semana 1 de 2026 sigue a la ultima semana ISO de 2025 (52).
+	if got := prevWeek(202601); got != 202552 {
+		t.Fatalf("prevWeek(202601) = %d, want 202552", got)
+	}
+	// Semana 3 sigue a la 2 del mismo anio.
+	if got := prevWeek(202603); got != 202602 {
+		t.Fatalf("prevWeek(202603) = %d, want 202602", got)
+	}
+}
+
+func TestWeeklyBetaMin(t *testing.T) {
+	// Serie sintetica con retornos VARIABLES (los constantes dan varianza
+	// cero y beta nil, correcto): el simbolo reacciona exactamente el doble
+	// que el mercado (beta ~2) sobre 60 semanas.
+	start := time.Date(2025, 1, 6, 0, 0, 0, 0, time.UTC) // lunes
+	market := make([]Candle, 0, 60)
+	symbol := make([]Candle, 0, 60)
+	m := 100.0
+	s := 50.0
+	for i := 0; i < 60; i++ {
+		mRet := 0.003 * math.Sin(float64(i)*0.7)
+		m = m * (1 + mRet)
+		s = s * (1 + 2*mRet)
+		ts := start.AddDate(0, 0, 7*i)
+		market = append(market, Candle{Timestamp: ts, Close: m})
+		symbol = append(symbol, Candle{Timestamp: ts, Close: s})
+	}
+	got := WeeklyBetaMin(symbol, market, 52)
+	if got == nil {
+		t.Fatal("expected weekly beta, got nil")
+	}
+	if math.Abs(*got-2.0) > 0.05 {
+		t.Errorf("weekly beta = %v, want ~2.0", *got)
+	}
+	// Con menos semanas que el minimo, nil.
+	if got := WeeklyBetaMin(symbol, market, 61); got != nil {
+		t.Fatal("expected nil with insufficient weeks")
+	}
+}
