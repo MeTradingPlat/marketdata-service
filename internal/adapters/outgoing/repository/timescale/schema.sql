@@ -61,7 +61,15 @@ ALTER TABLE candles SET (
     timescaledb.compress_orderby = 'ts DESC'
 );
 
-SELECT add_compression_policy('candles', INTERVAL '7 days', if_not_exists => TRUE);
+-- Compresion a los 2 dias, no 7: desde que Save() distingue velas
+-- verificadas (verified=TRUE, las que avanzan watermark = vienen del
+-- refill/backfill) de las provisionales en vivo (verified=FALSE, sin
+-- watermark -- un reinicio las re-pide y reemplaza), las velas viejas
+-- nunca se re-escriben: el refill solo pide hacia adelante desde el
+-- watermark y el replay en vivo toca minutos recientes. El margen
+-- incremental se redujo a 1 barra (IncrementalMargin) para que ningun
+-- re-fetch atrasado intente upsertear un chunk ya comprimido.
+SELECT add_compression_policy('candles', INTERVAL '2 days', if_not_exists => TRUE);
 
 -- Mismo tuning de historical-data-service: evita la pasada de vacuum de
 -- 30+ min vista en produccion con esta tabla bajo escritura constante.
@@ -173,3 +181,10 @@ CREATE TABLE IF NOT EXISTS fundamental_refresh_log (
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS beta_updated_at TIMESTAMPTZ;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close NUMERIC;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close_updated_at TIMESTAMPTZ;
+
+-- verified: las velas guardadas por el refill/backfill (Save withWatermark
+-- = TRUE) son verificadas (vienen de TastyTrade pedidas expresamente) --
+-- las del live en vivo (sin watermark) son provisionales y un reinicio las
+-- re-pide. La compresion puede ser agresiva porque las verificadas nunca
+-- se re-escriben.
+ALTER TABLE candles ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT FALSE;

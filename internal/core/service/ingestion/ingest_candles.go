@@ -24,12 +24,13 @@ func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepos
 }
 
 // IncrementalMargin son barras de mas antes del watermark que se vuelven a
-// pedir aposta -- de sobra (Save() las UPSERTea, pedir de mas es gratis) y
-// cubre cualquier borde raro (ej. el watermark se capturo a mitad de un
-// guardado). Sugerido por el usuario al ver que sin esto, cada backfill
-// repetia toda la profundidad historica sin necesidad. Exportado para que
-// el barrido en lote (catchup) use el mismo margen sin duplicarlo.
-const IncrementalMargin = 10
+// pedir aposta -- cubre cualquier borde raro (ej. el watermark se capturo a
+// mitad de un guardado). Reducido de 10 a 1 para que ningun re-fetch
+// atrasado intente upsertear un chunk ya comprimido (la compresion baja a 2
+// dias, y las velas verificadas del refill ya no se re-escriben -- pedir de
+// mas era gratis cuando no habia compresion agresiva, ya no). Exportado
+// para que el barrido en lote (catchup) use el mismo margen sin duplicarlo.
+const IncrementalMargin = 1
 
 func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error {
 	candles, err := s.fetchForBackfill(ctx, symbol, timeframe)
