@@ -114,6 +114,14 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 		return fmt.Errorf("dialing dxlink websocket: %w", err)
 	}
 
+	// El default de gorilla es 64KB: un mensaje mayor (el lote de perfiles
+	// de 13k simbolos del refresh externo, o un FEED_DATA de un batch
+	// profundo) mataba la conexion con "content length exceeded" y alimentaba
+	// el storm de reconexion -- confirmado en vivo el 2026-08-18 (el refresh
+	// externo de las 16:03 llego degradado por esto). 64MB da margen de
+	// sobra para cualquier lote.
+	conn.SetReadLimit(64 << 20)
+
 	handshakeDone := make(chan error, 1)
 	c.mu.Lock()
 	c.conn = conn
