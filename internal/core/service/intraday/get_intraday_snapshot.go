@@ -119,7 +119,7 @@ func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symb
 	}
 	var m1Fallback map[string][]domain.Candle
 	if len(needM1Fallback) > 0 {
-		m1Fallback, err = s.repo.GetSeries(ctx, needM1Fallback, domain.M1, 1)
+		m1Fallback, err = s.repo.GetSeriesPriority(ctx, needM1Fallback, domain.M1, 1)
 		if err != nil {
 			m1Fallback = map[string][]domain.Candle{}
 		}
@@ -154,7 +154,7 @@ func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symb
 	// prevClose D1 de respaldo (subasta ausente) en UNA query de lote en vez
 	// de una por simbolo -- ver el fallback de GetSnapshot.
 	if len(needD1Fallback) > 0 {
-		d1Series, err := s.repo.GetSeries(ctx, needD1Fallback, domain.D1, 1)
+		d1Series, err := s.repo.GetSeriesPriority(ctx, needD1Fallback, domain.D1, 1)
 		if err == nil {
 			for symbol, candles := range d1Series {
 				if len(candles) == 0 {

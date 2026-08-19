@@ -23,6 +23,14 @@ type CandleRepository interface {
 	// query por simbolo: satura postgres y las escrituras M1 en vivo hacen
 	// fila detras (ver RefreshBeta).
 	GetSeries(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error)
+	// GetSeriesPriority es GetSeries por el pool chico de fundamentals/
+	// realtime (ver storage.snapshotPoolConns) -- para llamadas dentro del
+	// camino caliente de GetSnapshotsBatch que no deben esperar detras de
+	// las agregaciones pesadas del pool general (confirmado en vivo el
+	// 2026-08-19: el fallback M1/D1 quedaba 23+s en espera de disco detras
+	// de esas agregaciones). No usar para barridos masivos (RefreshBeta
+	// sigue en GetSeries, el pool dedicado es de solo 3 conexiones).
+	GetSeriesPriority(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error)
 	GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error)
 	// GetWatermarksBatch lee los watermarks de un lote de simbolos en UNA
 	// query (el barrido leia uno por uno: 13k queries por fase, la mayor

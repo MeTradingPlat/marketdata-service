@@ -77,6 +77,10 @@ func (f *fakeRepo) GetSeries(ctx context.Context, symbols []string, tf domain.Ti
 	return map[string][]domain.Candle{}, nil
 }
 
+func (f *fakeRepo) GetSeriesPriority(ctx context.Context, symbols []string, tf domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
+	return map[string][]domain.Candle{}, nil
+}
+
 func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
 	return f.getResult, nil
 }

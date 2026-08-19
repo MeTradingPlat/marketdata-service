@@ -174,10 +174,27 @@ const (
 // fila detras de la saturacion. Cada serie se devuelve ordenada por ts
 // ascendente (mismo contenido que GetCandles por-simbolo).
 func (r *CandleRepository) GetSeries(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
+	return getSeriesFrom(ctx, r.pool, symbols, timeframe, bars)
+}
+
+// GetSeriesPriority es GetSeries por el pool chico de fundamentals/realtime
+// (ver storage.snapshotPoolConns) -- confirmado en vivo el 2026-08-19: el
+// fallback M1/D1 de GetSnapshotsBatch (para simbolos sin vela en vivo o sin
+// subasta de cierre encontrada) llamaba GetSeries por el pool general, y con
+// 3 escaneres reales pegandole al mismo tiempo esa consulta quedaba 23+
+// segundos en espera de lectura de disco (DataFileRead) detras de las
+// mismas agregaciones time_bucket que ya compiten por ese pool -- el mismo
+// problema que motivo el pool dedicado, solo que esta llamada especifica
+// nunca se movio para alla.
+func (r *CandleRepository) GetSeriesPriority(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
+	return getSeriesFrom(ctx, r.snapshotPool, symbols, timeframe, bars)
+}
+
+func getSeriesFrom(ctx context.Context, pool *pgxpool.Pool, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
 	if len(symbols) == 0 {
 		return map[string][]domain.Candle{}, nil
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := pool.Query(ctx, `
 		SELECT s.symbol, ts, open, high, low, close, volume, source
 		FROM (
 			SELECT c.symbol_id, c.ts, c.open, c.high, c.low, c.close, c.volume, c.source,
