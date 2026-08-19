@@ -22,6 +22,24 @@ const (
 	// incremental solo trae barras NUEVAS, nunca re-probea hacia atras).
 	historyDeepWait = 90 * time.Second
 
+	// historyBatchDeepGapThreshold: si algun simbolo del lote necesita
+	// ponerse al dia con mas de esto, el lote entero espera historyDeepWait
+	// en vez de historyDefaultWait -- confirmado en vivo el 2026-08-19:
+	// FetchHistoryBatch (el barrido de RunSweepPhase) nunca tuvo el
+	// equivalente de este ajuste que ya existe para el fetch individual (ver
+	// historyDeepWait arriba). Con watermarks atrasados varias horas (ej.
+	// tras un simbolo silenciosamente estancado unos dias), el lote se
+	// asentaba a los 15s con lo que hubiera llegado hasta ahi, guardaba esa
+	// porcion parcial como verified=true y avanzaba el watermark hasta ese
+	// punto -- el resto del hueco (desde la apertura hasta donde se corto)
+	// quedaba para siempre con los datos provisionales del stream en vivo,
+	// porque el proximo fetch incremental nunca vuelve a mirar atras del
+	// watermark ya avanzado (confirmado en real: SW/SFM/DNTH/GKOS con
+	// decenas de velas M1 de la apertura sin verificar horas despues de 3
+	// reinicios). 1h es varias veces el hueco de un reinicio normal
+	// (minutos) pero bien por debajo de una sesion completa.
+	historyBatchDeepGapThreshold = time.Hour
+
 	// unsubscribeDrainPeriod: dxLink no confirma cuando un FEED_SUBSCRIPTION
 	// remove ya surtio efecto del lado del servidor (verificado contra la
 	// especificacion oficial: no hay ACK, y el spec no dice nada sobre
@@ -422,6 +440,19 @@ func (p *CandlePool) CurrentCandle(symbol string) (domain.Candle, bool) {
 	return c, ok
 }
 
+// batchHistoryWait elige historyDeepWait para el lote entero si ALGUN
+// simbolo necesita ponerse al dia con mas de historyBatchDeepGapThreshold --
+// ver el comentario de esa constante arriba.
+func batchHistoryWait(froms map[string]time.Time) time.Duration {
+	now := time.Now()
+	for _, from := range froms {
+		if now.Sub(from) > historyBatchDeepGapThreshold {
+			return historyDeepWait
+		}
+	}
+	return historyDefaultWait
+}
+
 // FetchHistoryBatch pide el historial de un LOTE de simbolos en una sola
 // suscripcion DxLink (cada uno con su propio FromTime) -- es el
 // agrupamiento original del pool de Java (100 simbolos por canal) que el
@@ -486,7 +517,7 @@ func (p *CandlePool) FetchHistoryBatch(ctx context.Context, tf domain.Timeframe,
 		unlockAll()
 		return nil, fmt.Errorf("subscribing history batch: %w", err)
 	}
-	if err := waitForData(ctx, collector.settled, historyDefaultWait); err != nil {
+	if err := waitForData(ctx, collector.settled, batchHistoryWait(froms)); err != nil {
 		cleanup()
 		unlockAll()
 		return nil, err

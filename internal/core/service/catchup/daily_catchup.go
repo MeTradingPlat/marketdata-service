@@ -214,6 +214,20 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 		Msg("universe sweep phase finished")
 }
 
+// noWatermarkM1Fallback: cuanto pedir hacia atras para un simbolo M1 que
+// "phaseJobs" clasifico como covered (SymbolsWithData ve al menos una fila)
+// pero que en realidad NUNCA tuvo un backfill real -- solo velas del stream
+// en vivo (withWatermark=false, ver ingest_candles.go), asi que no aparece
+// en GetWatermarksBatch. Confirmado en vivo el 2026-08-19: sin este
+// fallback, esos simbolos se caian en silencio del mapa `froms` (ni error
+// ni log) y quedaban para siempre sin una sola vela M1 verificada -- miles
+// de simbolos activos (AAPL, NVDA, AMD, GOOGL...) con semanas de datos sin
+// verificar. 24h alcanza para lo que de verdad importa (hoy + el cierre de
+// ayer) sin mandar a estos simbolos por el camino lento de a uno
+// (backfillWithRetry/ProbeMaxDepth) que fue diseñado para simbolos NUEVOS
+// sin ninguna fila todavia, no para miles de simbolos activos de golpe.
+const noWatermarkM1Fallback = 24 * time.Hour
+
 // backfillBatchWithRetry arma el lote: lee el watermark de cada simbolo,
 // descarta los que no tienen nada nuevo cerrado todavia (HasNewClosedBar)
 // y pide el resto en UNA suscripcion con el margen incremental de cada uno.
@@ -233,12 +247,19 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		}
 		return
 	}
-	froms := make(map[string]time.Time, len(watermarks))
-	for symbol, newest := range watermarks {
-		if !ingestion.HasNewClosedBar(newest, duration) {
+	froms := make(map[string]time.Time, len(batch))
+	for _, j := range batch {
+		newest, ok := watermarks[j.symbol]
+		if ok {
+			if !ingestion.HasNewClosedBar(newest, duration) {
+				continue
+			}
+			froms[j.symbol] = newest.Add(-ingestion.IncrementalMargin * duration)
 			continue
 		}
-		froms[symbol] = newest.Add(-ingestion.IncrementalMargin * duration)
+		if tf == domain.M1 {
+			froms[j.symbol] = time.Now().Add(-noWatermarkM1Fallback)
+		}
 	}
 	if len(froms) == 0 {
 		return
