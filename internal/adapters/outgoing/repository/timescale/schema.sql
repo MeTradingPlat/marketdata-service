@@ -188,3 +188,61 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close_updated_at TIMESTAMPTZ
 -- re-pide. La compresion puede ser agresiva porque las verificadas nunca
 -- se re-escriben.
 ALTER TABLE candles ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- candles_m5/candles_m15: continuous aggregates de TimescaleDB sobre M1 --
+-- getAggregatedCandles agrupaba M5/M15 en vivo con GROUP BY sobre M1 cruda
+-- en CADA consulta (confirmado en vivo el 2026-08-19: 7 de esas consultas
+-- concurrentes, 20-77s cada una en espera de disco, CPU del VAIO al 316%,
+-- con varios escaneres evaluando filtros tecnicos en M5/M15 a la vez). Un
+-- continuous aggregate calcula eso UNA vez, de forma incremental, cada vez
+-- que llega una vela M1 nueva -- las lecturas pasan de "agrupar miles de
+-- filas" a "leer un puñado ya calculado". first()/last() son los agregados
+-- nativos de TimescaleDB para open/close (mismo resultado que el
+-- ARRAY_AGG ORDER BY de la version en vivo, sin construir el array).
+-- WITH NO DATA + la politica de refresco de abajo: no bloquea el deploy
+-- materializando años de historia de una -- arranca vacio y la real-time
+-- aggregation (default) sigue devolviendo datos correctos escaneando en
+-- vivo lo que todavia no se materializo, hasta que la politica lo alcance.
+CREATE MATERIALIZED VIEW IF NOT EXISTS candles_m5
+WITH (timescaledb.continuous) AS
+SELECT
+    symbol_id,
+    time_bucket('5 minutes', ts) AS bucket,
+    first(open, ts) AS open,
+    max(high) AS high,
+    min(low) AS low,
+    last(close, ts) AS close,
+    sum(volume) AS volume,
+    sum(trade_count) AS trade_count
+FROM candles
+WHERE timeframe = 'M1'
+GROUP BY symbol_id, bucket
+WITH NO DATA;
+
+SELECT add_continuous_aggregate_policy('candles_m5',
+    start_offset => INTERVAL '3 days',
+    end_offset => INTERVAL '10 minutes',
+    schedule_interval => INTERVAL '5 minutes',
+    if_not_exists => TRUE);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS candles_m15
+WITH (timescaledb.continuous) AS
+SELECT
+    symbol_id,
+    time_bucket('15 minutes', ts) AS bucket,
+    first(open, ts) AS open,
+    max(high) AS high,
+    min(low) AS low,
+    last(close, ts) AS close,
+    sum(volume) AS volume,
+    sum(trade_count) AS trade_count
+FROM candles
+WHERE timeframe = 'M1'
+GROUP BY symbol_id, bucket
+WITH NO DATA;
+
+SELECT add_continuous_aggregate_policy('candles_m15',
+    start_offset => INTERVAL '7 days',
+    end_offset => INTERVAL '20 minutes',
+    schedule_interval => INTERVAL '15 minutes',
+    if_not_exists => TRUE);
