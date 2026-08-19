@@ -81,6 +81,36 @@ type CandlePool struct {
 	orphanEvents int64
 }
 
+// liveGapFillWindow: cuando un tick llega despues de minutos muertos (sin
+// trades en la cinta), se sintetizan velas planas al ultimo cierre para los
+// minutos intermedios -- una vela sin movimiento SI se guarda (open=close al
+// ultimo precio, volumen 0), el grafico queda continuo dentro de la sesion en
+// vez de con huecos. Solo se rellenan huecos cortos: un hueco mayor que esta
+// ventana es un quiebre de sesion real (cierre de mercado), donde inventar
+// velas no tiene sentido. Confirmado en vivo el 2026-08-19: AAPL sin trades
+// en 02:12-02:13 no dejaba NINGUNA vela para esos minutos, solo los minutos
+// con tick tenian vela.
+const liveGapFillWindow = 15 * time.Minute
+
+// liveGapFill emite una vela plana por cada minuto muerto entre prev.Timestamp
+// (exclusivo) y until (exclusivo) cuando el hueco no supera liveGapFillWindow:
+// open=high=low=close al cierre previo, volumen 0. Un hueco mayor a la ventana
+// es un quiebre de sesion, no un minuto sin trades -- no se emite nada. El
+// filtro de integridad (IsComplete, prev.Close != 0) queda en dispatchClosed,
+// el mismo que valida las velas cerradas normales.
+func liveGapFill(prev domain.Candle, until time.Time, emit func(domain.Candle)) {
+	if gap := until.Sub(prev.Timestamp); gap > liveGapFillWindow {
+		return
+	}
+	for t := prev.Timestamp.Add(time.Minute); t.Before(until); t = t.Add(time.Minute) {
+		flat := prev
+		flat.Timestamp = t
+		flat.Open, flat.High, flat.Low = prev.Close, prev.Close, prev.Close
+		flat.Volume, flat.TradeCount, flat.VWAP = 0, 0, 0
+		emit(flat)
+	}
+}
+
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
 	p := &CandlePool{
 		dispatch: make(map[string]dispatchEntry),
@@ -196,6 +226,7 @@ func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 	var forming domain.Candle
 	prev, exists := p.current[symbol]
 	if exists && !prev.Timestamp.Equal(ev.Timestamp) {
+		liveGapFill(prev, ev.Timestamp, func(flat domain.Candle) { p.dispatchClosed(symbol, flat) })
 		closed := prev
 		p.current[symbol] = mergeCandle(domain.Candle{}, ev, symbol, domain.M1)
 		forming = p.current[symbol]
