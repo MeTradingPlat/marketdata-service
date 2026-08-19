@@ -16,6 +16,9 @@ var (
 
 	writeOnce     sync.Once
 	writeInstance *pgxpool.Pool
+
+	snapshotOnce     sync.Once
+	snapshotInstance *pgxpool.Pool
 )
 
 func ConnInstanceTimescale(cfg *configs.Config) *pgxpool.Pool {
@@ -40,6 +43,24 @@ func WritePoolInstanceTimescale(cfg *configs.Config) *pgxpool.Pool {
 		writeInstance = connectWithSize(cfg, writePoolConns)
 	})
 	return writeInstance
+}
+
+// snapshotPoolConns: pool DEDICADO a fundamentals/realtime (intraday
+// sessions + prevClose en lote) -- confirmado en vivo el 2026-08-19: con el
+// pool general ocupado por las agregaciones time_bucket de H1/D1 de OTROS
+// escaneres corriendo en paralelo (el mismo problema de recalculo en vivo
+// que getAggregatedCandlesSQL ya documenta, pendiente de arreglar con un
+// continuous aggregate), el batch ya optimizado de fundamentals/realtime
+// igual se quedaba sin conexion libre y tardaba mas de 120s. 3 conexiones
+// aisladas evitan que ese hueco tumbe al escaner de turno mientras se hace
+// el arreglo de fondo.
+const snapshotPoolConns = 3
+
+func SnapshotPoolInstanceTimescale(cfg *configs.Config) *pgxpool.Pool {
+	snapshotOnce.Do(func() {
+		snapshotInstance = connectWithSize(cfg, snapshotPoolConns)
+	})
+	return snapshotInstance
 }
 
 func connect(cfg *configs.Config) *pgxpool.Pool {

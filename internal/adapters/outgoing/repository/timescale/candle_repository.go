@@ -21,10 +21,15 @@ type CandleRepository struct {
 	// agregacion lentas ocupaban todas las conexiones del pool general y las
 	// escrituras de velas hacian fila detras con el mercado abierto.
 	writePool *pgxpool.Pool
+	// snapshotPool es un pool chico DEDICADO a fundamentals/realtime en
+	// lote (GetIntradaySessionsBatch/GetPreviousSessionCloseBatch) -- ver
+	// storage.snapshotPoolConns: aisla esas dos consultas de las
+	// agregaciones time_bucket de H1/D1 que compiten por el pool general.
+	snapshotPool *pgxpool.Pool
 }
 
-func NewCandleRepository(pool, writePool *pgxpool.Pool) *CandleRepository {
-	return &CandleRepository{pool: pool, writePool: writePool}
+func NewCandleRepository(pool, writePool, snapshotPool *pgxpool.Pool) *CandleRepository {
+	return &CandleRepository{pool: pool, writePool: writePool, snapshotPool: snapshotPool}
 }
 
 const deadlockRetries = 5
@@ -503,7 +508,7 @@ func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols
 		WHERE s.symbol = ANY($1) AND c.timeframe = 'M1' AND c.ts >= $2 AND c.ts < $3
 		GROUP BY s.symbol
 	`
-	rows, err := r.pool.Query(ctx, query, symbols, dayStart, dayEnd, marketOpen, marketClose)
+	rows, err := r.snapshotPool.Query(ctx, query, symbols, dayStart, dayEnd, marketOpen, marketClose)
 	if err != nil {
 		return nil, fmt.Errorf("querying intraday sessions batch for %d symbols: %w", len(symbols), err)
 	}
@@ -580,7 +585,7 @@ func (r *CandleRepository) GetPreviousSessionCloseBatch(ctx context.Context, sym
 		from := day.Add(15*time.Hour + 58*time.Minute)
 		to := day.Add(16*time.Hour + time.Minute)
 
-		rows, err := r.pool.Query(ctx, previousSessionCloseWindowSQL, pending, from, to)
+		rows, err := r.snapshotPool.Query(ctx, previousSessionCloseWindowSQL, pending, from, to)
 		if err != nil {
 			return nil, fmt.Errorf("querying previous session close window (day -%d) for %d symbols: %w", d, len(pending), err)
 		}

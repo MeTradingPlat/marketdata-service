@@ -37,6 +37,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(configs.Load))
 	checkErr(container.Provide(provideTimescalePool))
 	checkErr(container.Provide(provideTimescaleWritePool))
+	checkErr(container.Provide(provideTimescaleSnapshotPool))
 	checkErr(container.Provide(provideCandleRepository))
 	checkErr(container.Provide(provideSymbolRepository))
 	checkErr(container.Provide(provideFundamentalsRepository))
@@ -106,8 +107,18 @@ func provideTimescaleWritePool(cfg *configs.Config) writePool {
 	return writePool{pool: storage.WritePoolInstanceTimescale(cfg)}
 }
 
-func provideCandleRepository(pool *pgxpool.Pool, writePool writePool) out.CandleRepository {
-	return timescale.NewCandleRepository(pool, writePool.pool)
+// snapshotPool es un tipo nominal, mismo motivo que writePool: distinguirlo
+// del resto de *pgxpool.Pool para que dig no inyecte el pool equivocado.
+type snapshotPool struct{ pool *pgxpool.Pool }
+
+// provideTimescaleSnapshotPool es el pool chico dedicado a
+// fundamentals/realtime en lote (ver storage.snapshotPoolConns).
+func provideTimescaleSnapshotPool(cfg *configs.Config) snapshotPool {
+	return snapshotPool{pool: storage.SnapshotPoolInstanceTimescale(cfg)}
+}
+
+func provideCandleRepository(pool *pgxpool.Pool, writePool writePool, snapshotPool snapshotPool) out.CandleRepository {
+	return timescale.NewCandleRepository(pool, writePool.pool, snapshotPool.pool)
 }
 
 func provideSymbolRepository(pool *pgxpool.Pool) out.SymbolRepository {
