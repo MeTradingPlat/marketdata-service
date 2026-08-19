@@ -57,6 +57,7 @@ jobs:
               --cpus "1.0" \
               --memory "4g" \
               --memory-swap "4g" \
+              --shm-size "1g" \
               -e POSTGRES_DB="marketdata_db" \
               -e POSTGRES_USER="user_marketdata" \
               -e POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
