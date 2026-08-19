@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"strings"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
@@ -25,13 +26,17 @@ func (s *getSymbolsService) GetSymbols(ctx context.Context, markets []string) ([
 		return tracked, nil
 	}
 
+	// El frontend manda los ids de /markets en minuscula (xnas, xnys...) y la
+	// BD guarda los MICs en mayuscula (XNAS) -- normalizar ambos lados para
+	// que el filtro case-insensitive matchee (confirmado en vivo el
+	// 2026-08-19: el filtro por mercado devolvia vacio con el frontend).
 	allowed := make(map[string]struct{}, len(markets))
 	for _, m := range markets {
-		allowed[m] = struct{}{}
+		allowed[strings.ToUpper(m)] = struct{}{}
 	}
 	filtered := make([]domain.Symbol, 0, len(tracked))
 	for _, s := range tracked {
-		if _, ok := allowed[s.Market]; ok {
+		if _, ok := allowed[strings.ToUpper(s.Market)]; ok {
 			filtered = append(filtered, s)
 		}
 	}
