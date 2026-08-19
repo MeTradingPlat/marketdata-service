@@ -125,13 +125,20 @@ jobs:
         run: |
           # Binario Go, sin JVM que calentar -- memoria muchisimo mas baja
           # que el servicio Java que reemplaza (ver historial de este repo).
+          # 1g, no 512m: confirmado con dmesg (kernel OOM-killer) que el
+          # proceso llego a ~518-522MB de RSS real y el cgroup lo mato dos
+          # veces el 2026-08-19 -- una durante el barrido normal D1/H1/M1
+          # (obligando a reiniciar el ciclo entero desde cero cada vez) y
+          # otra bajo un lote grande de /historical/batch con gzip (el
+          # payload de ~9MB por lote se arma completo en memoria antes de
+          # comprimir). 1g deja margen real por encima de lo ya observado.
           docker run -d \
             --name "marketdata-service" \
             --network "metradingplat-network" \
             --restart "unless-stopped" \
             --cpus "1.0" \
-            --memory "512m" \
-            --memory-swap "512m" \
+            --memory "1g" \
+            --memory-swap "1g" \
             --label project="metradingplat" \
             --label service="marketdata-service" \
             -e DB_HOST="postgres-marketdata" \
