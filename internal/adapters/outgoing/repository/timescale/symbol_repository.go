@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/jackc/pgx/v5"
@@ -133,7 +134,7 @@ const searchSymbolsSQL = `
 	FROM tracked_symbols
 	WHERE is_active = TRUE
 		AND ($1 = '' OR symbol ILIKE '%' || $1 || '%' OR description ILIKE '%' || $1 || '%')
-		AND ($2::text[] IS NULL OR market = ANY($2))
+		AND ($2::text[] IS NULL OR UPPER(market) = ANY($2))
 	ORDER BY last_volume DESC, symbol ASC
 	LIMIT $3 OFFSET $4
 `
@@ -141,7 +142,15 @@ const searchSymbolsSQL = `
 func (r *SymbolRepository) Search(ctx context.Context, query string, markets []string, page, size int) ([]domain.Symbol, int64, error) {
 	var marketsParam []string
 	if len(markets) > 0 {
-		marketsParam = markets
+		// El frontend manda los ids de /markets en minuscula (xnas, xnys...)
+		// pero la BD guarda los MICs de TastyTrade en mayuscula (XNAS) --
+		// normalizar aqui para que el filtro case-insensitive matchee
+		// (confirmado en vivo el 2026-08-19: la busqueda con todos los
+		// mercados seleccionados devolvia vacio).
+		marketsParam = make([]string, len(markets))
+		for i, m := range markets {
+			marketsParam[i] = strings.ToUpper(m)
+		}
 	}
 
 	rows, err := r.pool.Query(ctx, searchSymbolsSQL, query, marketsParam, size, page*size)
