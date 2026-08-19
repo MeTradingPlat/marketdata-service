@@ -6,6 +6,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/middleware"
 	"github.com/labstack/echo/v4"
+	echoMiddleware "github.com/labstack/echo/v4/middleware"
 )
 
 type Router struct {
@@ -28,6 +29,14 @@ func (r *Router) Init() {
 	r.echo.Use(middleware.RequestLogging)
 	r.echo.Use(middleware.GatewayHeaderCheck)
 	r.echo.Use(middleware.BackfillGate(r.backfilling))
+	// Gzip: /marketdata/historical/batch devuelve hasta ~9MB de JSON crudo
+	// para un lote de 700 simbolos x 150 barras (confirmado en vivo el
+	// 2026-08-19) -- JSON con nombres de campo repetidos miles de veces
+	// comprime muy bien. Echo solo comprime si el cliente manda
+	// Accept-Encoding: gzip (signal-processing-service tambien lo pide
+	// ahora, ver marketdata_client.py), asi que no rompe nada para
+	// clientes que no lo pidan.
+	r.echo.Use(echoMiddleware.Gzip())
 
 	r.echo.GET("/marketdata/health", r.health.Health)
 	r.echo.GET("/marketdata/historical/:symbol", r.candles.GetCandles)
