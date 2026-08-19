@@ -126,15 +126,6 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
 	})
 
-	// Las VELAS ya estan completas (sweeps + rollout + prevClose): las
-	// lecturas de charts son correctas, el gate se libera aca y los
-	// fundamentales de abajo (market metrics, earnings, externos) corren con
-	// la app utilizable -- son REST/BD puro sobre tablas separadas, no
-	// compiten con las velas (confirmado en vivo el 2026-08-18: el market
-	// metrics tardo 15+ min y el earnings aun mas; la app quedo en 503 todo
-	// ese tiempo sin necesidad).
-	backfilling.Store(false)
-
 	// El trading status lo refresca el loop cada 15 min mientras el mercado
 	// esta activo -- si corrio hace menos de 10 min, el ciclo salta el suyo
 	// (ahorra ~100s de REST por ciclo, ver trading_status_loop.go).
