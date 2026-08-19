@@ -469,3 +469,148 @@ func (r *CandleRepository) GetIntradaySessions(ctx context.Context, symbol strin
 	}
 	return snap, nil
 }
+
+// GetIntradaySessionsBatch es intradaySessionsSQL con GROUP BY s.symbol --
+// ver el comentario del puerto (GetIntradaySessionsBatch) sobre por que esto
+// reemplaza N queries secuenciales por una sola.
+func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols []string) (map[string]domain.IntradaySnapshot, error) {
+	result := make(map[string]domain.IntradaySnapshot, len(symbols))
+	if len(symbols) == 0 {
+		return result, nil
+	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return nil, fmt.Errorf("loading America/New_York location: %w", err)
+	}
+	nowET := time.Now().In(loc)
+	dayStart := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 0, 0, 0, 0, loc)
+	dayEnd := dayStart.Add(24 * time.Hour)
+	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
+	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
+
+	query := `
+		SELECT
+			s.symbol,
+			(ARRAY_AGG(c.open ORDER BY c.ts) FILTER (WHERE c.ts >= $4 AND c.ts < $5))[1],
+			MAX(c.high) FILTER (WHERE c.ts >= $4 AND c.ts < $5),
+			MIN(c.low) FILTER (WHERE c.ts >= $4 AND c.ts < $5),
+			COALESCE(SUM(c.volume) FILTER (WHERE c.ts >= $4 AND c.ts < $5), 0),
+			COALESCE(SUM(c.volume) FILTER (WHERE c.ts < $4), 0),
+			(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts < $4))[1],
+			COALESCE(SUM(c.volume) FILTER (WHERE c.ts >= $5), 0),
+			(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts >= $5))[1]
+		FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+		WHERE s.symbol = ANY($1) AND c.timeframe = 'M1' AND c.ts >= $2 AND c.ts < $3
+		GROUP BY s.symbol
+	`
+	rows, err := r.pool.Query(ctx, query, symbols, dayStart, dayEnd, marketOpen, marketClose)
+	if err != nil {
+		return nil, fmt.Errorf("querying intraday sessions batch for %d symbols: %w", len(symbols), err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var snap domain.IntradaySnapshot
+		var open, high, low, preClose, postClose *float64
+		if err := rows.Scan(&snap.Symbol, &open, &high, &low, &snap.DayVolume,
+			&snap.PreMarketVolume, &preClose, &snap.PostMarketVolume, &postClose); err != nil {
+			return nil, fmt.Errorf("scanning intraday sessions batch row: %w", err)
+		}
+		if open != nil {
+			snap.Open = *open
+		}
+		if high != nil {
+			snap.High = *high
+		}
+		if low != nil {
+			snap.Low = *low
+		}
+		if preClose != nil {
+			snap.PreMarketClose = *preClose
+		}
+		if postClose != nil {
+			snap.PostMarketClose = *postClose
+		}
+		result[snap.Symbol] = snap
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating intraday sessions batch rows: %w", err)
+	}
+	return result, nil
+}
+
+// previousSessionCloseWindowSQL busca la subasta de UN dia especifico para
+// el lote entero -- deliberadamente SIN el OR de prevSessionCloseDays
+// ventanas que usa la version por simbolo. Confirmado en vivo el 2026-08-19:
+// esa misma query con 10 ventanas OR-eadas y ~8800 simbolos en el ANY()
+// tumbaba Postgres con "out of shared memory / max_locks_per_transaction"
+// -- el planner necesita considerar los chunks candidatos de las 10 ramas a
+// la vez dentro de una sola transaccion. Una ventana angosta por llamada
+// solo toca 1-2 chunks (chunk_time_interval=7 dias), muy por debajo del
+// limite.
+const previousSessionCloseWindowSQL = `
+	SELECT DISTINCT ON (s.symbol) s.symbol, c.close
+	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+	WHERE s.symbol = ANY($1) AND c.timeframe = 'M1' AND c.ts >= $2 AND c.ts < $3
+	ORDER BY s.symbol, c.ts DESC
+`
+
+// GetPreviousSessionCloseBatch es GetPreviousSessionClose para un lote --
+// itera las mismas ventanas [15:58,16:01) ET dia por dia (ver
+// prevSessionCloseDays), pero con una query angosta por dia en vez de un
+// solo OR gigante (ver previousSessionCloseWindowSQL) y se corta apenas
+// todos los simbolos pedidos ya resolvieron -- en la practica casi todos
+// caen en la primera vuelta (el dia habil mas reciente), asi que el caso
+// comun paga una sola query angosta, no diez.
+func (r *CandleRepository) GetPreviousSessionCloseBatch(ctx context.Context, symbols []string, before time.Time) (map[string]float64, error) {
+	result := make(map[string]float64, len(symbols))
+	if len(symbols) == 0 {
+		return result, nil
+	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return nil, fmt.Errorf("loading America/New_York location: %w", err)
+	}
+	dayStart := time.Date(before.Year(), before.Month(), before.Day(), 0, 0, 0, 0, loc)
+
+	pending := make([]string, len(symbols))
+	copy(pending, symbols)
+	for d := 1; d <= prevSessionCloseDays && len(pending) > 0; d++ {
+		day := dayStart.AddDate(0, 0, -d)
+		from := day.Add(15*time.Hour + 58*time.Minute)
+		to := day.Add(16*time.Hour + time.Minute)
+
+		rows, err := r.pool.Query(ctx, previousSessionCloseWindowSQL, pending, from, to)
+		if err != nil {
+			return nil, fmt.Errorf("querying previous session close window (day -%d) for %d symbols: %w", d, len(pending), err)
+		}
+		resolved := make(map[string]struct{}, len(pending))
+		for rows.Next() {
+			var symbol string
+			var close float64
+			if err := rows.Scan(&symbol, &close); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning previous session close window row: %w", err)
+			}
+			result[symbol] = close
+			resolved[symbol] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterating previous session close window rows: %w", err)
+		}
+		rows.Close()
+
+		if len(resolved) == 0 {
+			continue
+		}
+		next := pending[:0]
+		for _, sym := range pending {
+			if _, ok := resolved[sym]; !ok {
+				next = append(next, sym)
+			}
+		}
+		pending = next
+	}
+	return result, nil
+}

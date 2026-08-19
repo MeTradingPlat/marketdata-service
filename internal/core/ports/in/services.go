@@ -32,6 +32,10 @@ type GetCurrentCandleService interface {
 
 type GetIntradaySnapshotService interface {
 	GetSnapshot(ctx context.Context, symbol string) (domain.IntradaySnapshot, error)
+	// GetSnapshotsBatch es GetSnapshot para un lote -- ver
+	// out.CandleRepository.GetIntradaySessionsBatch sobre por que
+	// fundamentals/realtime necesita esto en vez de N llamadas a GetSnapshot.
+	GetSnapshotsBatch(ctx context.Context, symbols []string) map[string]domain.IntradaySnapshot
 }
 
 // GetCurrentPricesService es la version liviana de GetIntradaySnapshotService
