@@ -100,6 +100,31 @@ func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symb
 		prevCloses = map[string]float64{}
 	}
 
+	// needM1Fallback: simbolos sin vela en formacion en el gateway (en vivo
+	// TODAVIA no suscrito -- tipico justo despues de un deploy/reconexion,
+	// antes de que el rollout re-suscriba todo el universo). Confirmado en
+	// vivo el 2026-08-19: llamar GetCandles(M1) simbolo por simbolo aca
+	// reintrodujo el mismo cuello de botella de N queries que este metodo
+	// existe para eliminar -- 89.4s con el universo entero recien
+	// desplegado (justo debajo del timeout de 90s de signal-processing, sin
+	// margen real). GetSeries en lote lo reemplaza por UNA consulta.
+	needM1Fallback := make([]string, 0)
+	live := make(map[string]domain.Candle, len(symbols))
+	for _, symbol := range symbols {
+		if current, ok := s.gateway.CurrentCandle(symbol); ok {
+			live[symbol] = current
+		} else {
+			needM1Fallback = append(needM1Fallback, symbol)
+		}
+	}
+	var m1Fallback map[string][]domain.Candle
+	if len(needM1Fallback) > 0 {
+		m1Fallback, err = s.repo.GetSeries(ctx, needM1Fallback, domain.M1, 1)
+		if err != nil {
+			m1Fallback = map[string][]domain.Candle{}
+		}
+	}
+
 	for _, symbol := range symbols {
 		snap, ok := sessions[symbol]
 		if !ok {
@@ -108,11 +133,11 @@ func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symb
 		snap.Symbol = symbol
 		snap.AsOf = now
 
-		if current, ok := s.gateway.CurrentCandle(symbol); ok {
+		if current, ok := live[symbol]; ok {
 			snap.CurrentPrice = current.Close
 			snap.CurrentVolume = current.Volume
 			mergeFormingCandle(&snap, current)
-		} else if lastM1, err := s.repo.GetCandles(ctx, symbol, domain.M1, 1, nil); err == nil && len(lastM1) > 0 {
+		} else if lastM1 := m1Fallback[symbol]; len(lastM1) > 0 {
 			snap.CurrentPrice = lastM1[0].Close
 			snap.CurrentVolume = lastM1[0].Volume
 		}
