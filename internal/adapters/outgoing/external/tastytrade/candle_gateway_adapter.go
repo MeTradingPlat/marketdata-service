@@ -58,6 +58,10 @@ func (g *Gateway) CurrentCandle(symbol string) (domain.Candle, bool) {
 	return g.pool.CurrentCandle(symbol)
 }
 
+func (g *Gateway) LiveSubscribed(symbol string) bool {
+	return g.pool.LiveSubscribed(symbol)
+}
+
 func (g *Gateway) ResetLiveConnections() {
 	g.pool.CloseAllConnections()
 }

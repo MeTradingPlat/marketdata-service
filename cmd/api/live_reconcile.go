@@ -25,9 +25,11 @@ const (
 // simbolos y nada los reintentaba; quedaban mudos hasta el proximo ciclo.
 // Solo toca los INTENTADOS y fallidos (IsAttempted): el primer tick cae
 // cuando el ciclo recien va por D1/beta y reintentar los nunca-intentados
-// pelea con el rollout en curso. Los streams que mueren DESPUES de arrancar
-// los resuscribe el propio pool al reconectar (handleConnectionReconnect).
-func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService, symbols out.SymbolRepository) {
+// pelea con el rollout en curso. Tambien resuscribe las muertes SILENCIOSAS:
+// un resubscribe fallido del pool tras una reconexion deja el stream mudo
+// sin tocar la marca del ingestor (LiveSubscribed reporta el estado real --
+// confirmado en vivo el 2026-08-18 con OSRH).
+func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService, gateway out.MarketDataGateway, symbols out.SymbolRepository) {
 	go func() {
 		ticker := time.NewTicker(liveReconcileInterval)
 		defer ticker.Stop()
@@ -43,7 +45,7 @@ func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService,
 				}
 				retried := 0
 				for _, s := range tracked {
-					if !ingest.IsAttempted(s.Symbol) || ingest.IsLive(s.Symbol) {
+					if !ingest.IsAttempted(s.Symbol) || ingest.IsLive(s.Symbol) && gateway.LiveSubscribed(s.Symbol) {
 						continue
 					}
 					if retried >= liveReconcileMaxPerTick {

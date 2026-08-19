@@ -275,7 +275,17 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 			continue
 		}
 		if err := p.SubscribeLive(ctx, symbol, resumeFrom[symbol], cb, tick); err != nil {
-			log.Error().Err(err).Str("symbol", symbol).Msg("failed to resubscribe live candle after reconnect")
+			// El simbolo quedo MUERTO de verdad (sin canal que lo sirva) --
+			// sacarlo del estado live del pool para que LiveSubscribed() lo
+			// reporte como caido y el reconciliador (cmd/api) lo resuscriba
+			// (confirmado en vivo el 2026-08-18: OSRH quedo mudo en silencio
+			// tras un resubscribe fallido y nada lo reintentaba porque la
+			// entrada seguia en el mapa).
+			p.liveMu.Lock()
+			delete(p.liveSubs, symbol)
+			delete(p.liveTicks, symbol)
+			p.liveMu.Unlock()
+			log.Error().Err(err).Str("symbol", symbol).Msg("failed to resubscribe live candle after reconnect, dropped from live state")
 		}
 	}
 }
@@ -375,6 +385,19 @@ func (p *CandlePool) CloseAllConnections() {
 
 // hasLiveSub dice si un simbolo ya tiene una suscripcion M1 en vivo activa.
 func (p *CandlePool) hasLiveSub(symbol string) bool {
+	p.liveMu.Lock()
+	defer p.liveMu.Unlock()
+	_, ok := p.liveSubs[symbol]
+	return ok
+}
+
+// LiveSubscribed dice si el stream M1 del simbolo esta ACTUALMENTE
+// registrado en el pool -- el reconciliador (cmd/api) lo usa para
+// detectar las muertes silenciosas (un resubscribe fallido tras una
+// reconexion deja el stream mudo sin error visible, confirmado en vivo el
+// 2026-08-18 con OSRH) y resuscribirlas aunque la marca del ingestor siga
+// en true.
+func (p *CandlePool) LiveSubscribed(symbol string) bool {
 	p.liveMu.Lock()
 	defer p.liveMu.Unlock()
 	_, ok := p.liveSubs[symbol]

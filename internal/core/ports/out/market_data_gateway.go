@@ -27,6 +27,12 @@ type MarketDataGateway interface {
 	SubscribeLiveCandles(ctx context.Context, symbol string, from time.Time, onClosed func(domain.Candle), onTick func(domain.Candle)) error
 	ActiveSymbols(ctx context.Context) ([]domain.Symbol, error)
 	CurrentCandle(symbol string) (domain.Candle, bool)
+	// LiveSubscribed dice si el stream M1 en vivo del simbolo esta
+	// ACTUALMENTE registrado en el pool -- el reconciliador lo usa para
+	// detectar muertes silenciosas (un resubscribe fallido tras una
+	// reconexion deja el stream mudo sin error visible, confirmado en vivo
+	// el 2026-08-18 con OSRH).
+	LiveSubscribed(symbol string) bool
 	DividendInfo(ctx context.Context, symbols []string) ([]domain.Fundamentals, error)
 	// MarketMetrics trae market-cap/beta/liquidez/IV/proximo earnings --
 	// fuente separada de DividendInfo (otro endpoint REST), se llama aparte.

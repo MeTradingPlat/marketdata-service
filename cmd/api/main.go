@@ -86,7 +86,7 @@ func main() {
 		// corre en background (no bloquea el arranque del servidor HTTP) y se
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
 		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling)
-		StartLiveReconcileLoop(ctx, ingest, symbols)
+		StartLiveReconcileLoop(ctx, ingest, gateway, symbols)
 		StartSaveRetryLoop(ctx, ingest)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo)
