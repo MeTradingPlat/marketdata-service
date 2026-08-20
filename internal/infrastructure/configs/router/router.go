@@ -18,12 +18,12 @@ type Router struct {
 	fundamentals *handler.FundamentalsHandler
 	metadata     *handler.MetadataHandler
 	candleWS     *handler.CandleWSHandler
-	quotes       *handler.QuotesHandler
+	prices       *handler.CurrentPricesHandler
 	backfilling  *atomic.Bool
 }
 
-func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, quotes *handler.QuotesHandler, backfilling *atomic.Bool) *Router {
-	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, quotes: quotes, backfilling: backfilling}
+func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, prices *handler.CurrentPricesHandler, backfilling *atomic.Bool) *Router {
+	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, prices: prices, backfilling: backfilling}
 }
 
 func (r *Router) Init() {
@@ -56,7 +56,9 @@ func (r *Router) Init() {
 	r.echo.GET("/marketdata/intraday/:symbol", r.intraday.GetSnapshot)
 	r.echo.GET("/marketdata/fundamentals/:symbol", r.fundamentals.GetFundamentals)
 	r.echo.POST("/marketdata/fundamentals/realtime", r.fundamentals.GetFundamentalsRealtime)
-	r.echo.POST("/marketdata/quotes/rest", r.quotes.GetQuotes)
+	// La ruta sigue llamandose /quotes/rest por compatibilidad con
+	// signal-processing-service ya desplegado -- ver current_prices_handler.go.
+	r.echo.POST("/marketdata/quotes/rest", r.prices.GetCurrentPrices)
 	r.echo.GET("/marketdata/symbols", r.metadata.GetSymbols)
 	r.echo.GET("/marketdata/symbols/search", r.metadata.SearchSymbols)
 	r.echo.GET("/marketdata/symbols/:symbol/details", r.metadata.GetSymbolDetails)
