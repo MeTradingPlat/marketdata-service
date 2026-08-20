@@ -116,20 +116,21 @@ func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symb
 		prevCloses = map[string]float64{}
 	}
 
-	// needM1Fallback: simbolos sin vela en formacion en el gateway (en vivo
-	// TODAVIA no suscrito -- tipico justo despues de un deploy/reconexion,
-	// antes de que el rollout re-suscriba todo el universo). Confirmado en
-	// vivo el 2026-08-19: llamar GetCandles(M1) simbolo por simbolo aca
-	// reintrodujo el mismo cuello de botella de N queries que este metodo
-	// existe para eliminar -- 89.4s con el universo entero recien
-	// desplegado (justo debajo del timeout de 90s de signal-processing, sin
-	// margen real). GetSeries en lote lo reemplaza por UNA consulta.
+	// needM1Fallback: simbolos sin vela en formacion en el gateway NI ultima
+	// M1 cerrada en el tracker (en vivo todavia no suscrito Y sin ningun
+	// tick registrado hoy -- tipico justo tras un deploy/rollout, antes de
+	// que el primer tick de cada simbolo llegue). Confirmado en vivo el
+	// 2026-08-19/20: tanto llamar GetCandles(M1) simbolo por simbolo como
+	// GetSeriesPriority en lote para el universo ENTERO recien desplegado
+	// tardaban 80-90s+ -- el tracker.LastClose cubre el caso comun (el
+	// simbolo ya cerro al menos una M1 hoy) en memoria; solo lo que ni
+	// siquiera eso tiene cae a BD.
 	needM1Fallback := make([]string, 0)
 	live := make(map[string]domain.Candle, len(symbols))
 	for _, symbol := range symbols {
 		if current, ok := s.gateway.CurrentCandle(symbol); ok {
 			live[symbol] = current
-		} else {
+		} else if _, _, ok := s.tracker.LastClose(symbol); !ok {
 			needM1Fallback = append(needM1Fallback, symbol)
 		}
 	}
@@ -153,6 +154,9 @@ func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symb
 			snap.CurrentPrice = current.Close
 			snap.CurrentVolume = current.Volume
 			mergeFormingCandle(&snap, current)
+		} else if price, volume, ok := s.tracker.LastClose(symbol); ok {
+			snap.CurrentPrice = price
+			snap.CurrentVolume = volume
 		} else if lastM1 := m1Fallback[symbol]; len(lastM1) > 0 {
 			snap.CurrentPrice = lastM1[0].Close
 			snap.CurrentVolume = lastM1[0].Volume

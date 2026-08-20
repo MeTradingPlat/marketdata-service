@@ -250,4 +250,24 @@ func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, trac
 	}
 	tracker.Seed(day, snapshots)
 	log.Info().Int("symbols", len(snapshots)).Dur("elapsed", time.Since(start)).Msg("snapshot tracker seeded")
+
+	// SeedLastClose por separado: sin esto, el fallback de precio actual
+	// (GetSnapshotsBatch, ver LastClose) no tendria nada que devolver para
+	// ningun simbolo hasta su primer tick en vivo, y caeria de nuevo en la
+	// consulta lenta para el universo ENTERO justo tras este mismo
+	// despliegue -- confirmado en vivo el 2026-08-20.
+	lastStart := time.Now()
+	lastCandles, err := candles.GetSeries(ctx, symbols, domain.M1, 1)
+	if err != nil {
+		log.Error().Err(err).Msg("seeding last-close tracker failed, falling back to per-request DB reads")
+		return
+	}
+	lastClose := make(map[string]domain.Candle, len(lastCandles))
+	for symbol, bars := range lastCandles {
+		if len(bars) > 0 {
+			lastClose[symbol] = bars[len(bars)-1]
+		}
+	}
+	tracker.SeedLastClose(lastClose)
+	log.Info().Int("symbols", len(lastClose)).Dur("elapsed", time.Since(lastStart)).Msg("last-close tracker seeded")
 }

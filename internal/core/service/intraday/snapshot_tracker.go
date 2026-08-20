@@ -19,10 +19,21 @@ type SnapshotTracker struct {
 	mu   sync.RWMutex
 	day  time.Time
 	data map[string]domain.IntradaySnapshot
+	last map[string]lastClose
+}
+
+// lastClose es el precio/volumen de la ultima M1 cerrada registrada, de
+// CUALQUIER dia -- no se limpia en el corte de medianoche (a diferencia de
+// data) porque el hueco entre el cierre de ayer y el primer tick de hoy
+// debe seguir resolviendo al ultimo precio conocido, igual que ya hacia el
+// fallback de BD que reemplaza (GetSeriesPriority M1 bars=1).
+type lastClose struct {
+	Price  float64
+	Volume int64
 }
 
 func NewSnapshotTracker() *SnapshotTracker {
-	return &SnapshotTracker{data: make(map[string]domain.IntradaySnapshot)}
+	return &SnapshotTracker{data: make(map[string]domain.IntradaySnapshot), last: make(map[string]lastClose)}
 }
 
 // Seed carga una base inicial (desde la BD, una sola vez al arrancar o tras
@@ -35,6 +46,19 @@ func (t *SnapshotTracker) Seed(day time.Time, snapshots map[string]domain.Intrad
 	defer t.mu.Unlock()
 	t.day = day
 	t.data = snapshots
+}
+
+// SeedLastClose carga el ultimo cierre M1 conocido por simbolo (desde BD,
+// una sola vez) -- mismo motivo que Seed: sin esto, LastClose no tiene nada
+// que devolver hasta que cada simbolo reciba su primer tick en vivo tras el
+// rollout, y GetSnapshotsBatch volveria a caer en la consulta lenta para el
+// universo entero justo despues de cada despliegue.
+func (t *SnapshotTracker) SeedLastClose(closes map[string]domain.Candle) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for symbol, c := range closes {
+		t.last[symbol] = lastClose{Price: c.Close, Volume: c.Volume}
+	}
 }
 
 // RecordClosedCandle acumula una vela M1 YA CERRADA en la sesion del dia
@@ -59,6 +83,8 @@ func (t *SnapshotTracker) RecordClosedCandle(c domain.Candle) {
 		t.data = make(map[string]domain.IntradaySnapshot)
 	}
 
+	t.last[c.Symbol] = lastClose{Price: c.Close, Volume: c.Volume}
+
 	snap := t.data[c.Symbol]
 	snap.Symbol = c.Symbol
 	switch {
@@ -81,6 +107,20 @@ func (t *SnapshotTracker) RecordClosedCandle(c domain.Candle) {
 		snap.PostMarketClose = c.Close
 	}
 	t.data[c.Symbol] = snap
+}
+
+// LastClose devuelve el precio/volumen de la ultima M1 cerrada registrada
+// para el simbolo -- reemplaza GetSeriesPriority(..., M1, 1) como fallback
+// de precio actual cuando el gateway todavia no tiene tick en vivo (recien
+// suscrito, tipico justo tras un rollout: confirmado en vivo el 2026-08-20,
+// esa consulta sola volvia a tardar 80s+ para el universo entero recien
+// desplegado, el mismo problema de fondo que SnapshotBatch ya resolvia
+// para las sesiones).
+func (t *SnapshotTracker) LastClose(symbol string) (price float64, volume int64, ok bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	lc, ok := t.last[symbol]
+	return lc.Price, lc.Volume, ok
 }
 
 // SnapshotBatch devuelve las sesiones ya acumuladas del lote -- un simbolo
