@@ -28,7 +28,17 @@ type Fundamentals struct {
 	// nil hasta el primer calculo o si el simbolo no tiene M1 (warrants/OTC
 	// sin historia). GetFundamentalsRealtime lo usa para no repetir la misma
 	// consulta de subasta por request (ver GetSnapshotsBatch).
-	PrevClose *float64 `json:"-"`
+	//
+	// PrevCloseUpdatedAt distingue "nunca se intento" (nil, simbolo nuevo
+	// sin ventana de mantenimiento todavia) de "se intento y no hay dato"
+	// (no-nil con PrevClose nil, ej. warrant sin M1 -- MarkPrevCloseAttempted
+	// lo marca igual). Sin esta distincion, GetSnapshotsBatch repetia la
+	// misma busqueda de 10 dias hacia atras en CADA request para los
+	// simbolos que la ventana de mantenimiento ya determino sin dato,
+	// confirmado en vivo el 2026-08-20 (seguian constando 70s+ pese al fix
+	// de PrevClose).
+	PrevClose          *float64   `json:"-"`
+	PrevCloseUpdatedAt *time.Time `json:"-"`
 
 	MarketCap                   float64    `json:"marketCap"`
 	Eps                         float64    `json:"eps"`

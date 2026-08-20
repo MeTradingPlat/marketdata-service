@@ -34,10 +34,17 @@ func (s *getFundamentalsRealtimeService) GetFundamentalsRealtime(ctx context.Con
 		equitiesBySymbol = map[string]domain.Symbol{}
 	}
 
+	// knownPrevCloses tambien cubre "se intento y no hay dato" (PrevClose
+	// nil pero PrevCloseUpdatedAt no-nil, ver el comentario del campo en
+	// domain.Fundamentals) con 0 -- sin esto, esos simbolos volvian a pagar
+	// la busqueda de 10 dias en CADA request pese a que la ventana de
+	// mantenimiento ya determino que no tienen M1.
 	knownPrevCloses := make(map[string]float64, len(fundamentalsBySymbol))
 	for symbol, f := range fundamentalsBySymbol {
 		if f.PrevClose != nil {
 			knownPrevCloses[symbol] = *f.PrevClose
+		} else if f.PrevCloseUpdatedAt != nil {
+			knownPrevCloses[symbol] = 0
 		}
 	}
 	snapshotsBySymbol := s.intraday.GetSnapshotsBatch(ctx, symbols, knownPrevCloses)
