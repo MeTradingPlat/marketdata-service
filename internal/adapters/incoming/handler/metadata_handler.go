@@ -23,11 +23,27 @@ func NewMetadataHandler(symbols in.GetSymbolsService, markets in.GetMarketsServi
 
 const defaultSearchPageSize = 50
 
-func (h *MetadataHandler) SearchSymbols(c echo.Context) error {
+// parseMarkets acepta tanto ?markets=A,B,C (un parametro separado por comas)
+// como ?markets=A&markets=B&markets=C (parametro repetido) -- c.QueryParam
+// por si sola solo devuelve el PRIMER valor de un parametro repetido, asi
+// que un caller que arma la query repitiendo "markets=" (como
+// MarketdataClient.fetch_symbols en signal-processing-service) perdia todos
+// los mercados menos el primero en silencio, confirmado en vivo el
+// 2026-08-19 (un escaner multi-mercado solo veia el primero de la lista).
+func parseMarkets(c echo.Context) []string {
 	var markets []string
-	if q := c.QueryParam("markets"); q != "" {
-		markets = strings.Split(q, ",")
+	for _, raw := range c.QueryParams()["markets"] {
+		for _, m := range strings.Split(raw, ",") {
+			if m != "" {
+				markets = append(markets, m)
+			}
+		}
 	}
+	return markets
+}
+
+func (h *MetadataHandler) SearchSymbols(c echo.Context) error {
+	markets := parseMarkets(c)
 
 	page, err := strconv.Atoi(c.QueryParam("page"))
 	if err != nil || page < 0 {
@@ -55,10 +71,7 @@ func (h *MetadataHandler) GetSymbolDetails(c echo.Context) error {
 }
 
 func (h *MetadataHandler) GetSymbols(c echo.Context) error {
-	var markets []string
-	if q := c.QueryParam("markets"); q != "" {
-		markets = strings.Split(q, ",")
-	}
+	markets := parseMarkets(c)
 	symbols, err := h.symbols.GetSymbols(c.Request().Context(), markets)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
