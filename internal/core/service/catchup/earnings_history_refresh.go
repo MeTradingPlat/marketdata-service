@@ -77,7 +77,16 @@ func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, 
 					continue
 				}
 				occurred, predicted := domain.LastEarningsReport(reports)
-				f := domain.Fundamentals{Symbol: symbol, OccurredDate: occurred}
+				f := domain.Fundamentals{Symbol: symbol}
+				// El placeholder de cierre de trimestre tampoco es un
+				// occurred-date real (ver el comentario de mas abajo) --
+				// escribirlo igual contaminaba "Last Report Date" en el
+				// frontend con una fecha fabricada en vez de dejar el dato
+				// real anterior (si habia uno) sin tocar, gracias al COALESCE
+				// del upsert cuando se manda vacio.
+				if !isQuarterEndPlaceholder(occurred) {
+					f.OccurredDate = occurred
+				}
 				// Solo se escribe la prediccion si cae a FUTURO: una
 				// prediccion en el pasado (cadencia real distinta a la
 				// mediana historica, ej. MDXH reportando semi-anual)

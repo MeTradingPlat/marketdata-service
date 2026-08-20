@@ -47,3 +47,26 @@ func DaysUntil(isoDate string) int {
 	}
 	return days
 }
+
+// IsFutureOrToday: una next_earnings_date que ya paso no es "la proxima" de
+// nada -- confirmado en vivo con INTC, con una fecha casi un mes vieja
+// todavia guardada. Pasa porque el refresco nocturno (RefreshEarningsHistory)
+// correctamente se niega a construir una prediccion nueva cuando TastyTrade
+// solo devuelve un placeholder de cierre de trimestre como ultimo reporte
+// (ver isQuarterEndPlaceholder), pero el UPSERT usa COALESCE para no pisar
+// una fecha buena con un vacio, asi que la fecha vieja se queda ahi
+// indefinidamente en vez de limpiarse -- se filtra aca, en el borde de
+// lectura, en vez de arriesgar romper esa proteccion contra sobreescribir
+// con vacio.
+func IsFutureOrToday(isoDate string) bool {
+	if isoDate == "" {
+		return false
+	}
+	target, err := time.Parse("2006-01-02", isoDate)
+	if err != nil {
+		return false
+	}
+	today := time.Now()
+	todayDate := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
+	return !target.Before(todayDate)
+}

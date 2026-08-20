@@ -39,6 +39,14 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 		snapshot = domain.IntradaySnapshot{}
 	}
 
+	// Una next_earnings_date que ya paso no es "la proxima" de nada (ver
+	// domain.IsFutureOrToday) -- tratarla como si nunca se hubiera buscado
+	// evita mostrar una fecha de hace semanas como si fuera la que viene.
+	nextEarnings := fundamentals.NextEarningsDate
+	if !domain.IsFutureOrToday(nextEarnings) {
+		nextEarnings = ""
+	}
+
 	details := dto.SymbolDetails{
 		ActiveEquity: equity,
 		FundamentalData: dto.FundamentalData{
@@ -67,8 +75,8 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			ImpliedVolatilityIndex:      fundamentals.ImpliedVolatilityIndex,
 			ImpliedVolatilityRank:       fundamentals.ImpliedVolatilityRank,
 			ImpliedVolatilityPercentile: fundamentals.ImpliedVolatilityPercentile,
-			NextEarningsDate:            fundamentals.NextEarningsDate,
-			DaysUntilEarnings:           daysUntilOrNil(fundamentals.NextEarningsDate),
+			NextEarningsDate:            nextEarnings,
+			DaysUntilEarnings:           daysUntilOrNil(nextEarnings),
 			OccurredDate:                fundamentals.OccurredDate,
 		},
 	}

@@ -138,7 +138,10 @@ func applyMarketMetrics(out *dto.FundamentalRealtime, f domain.Fundamentals, sna
 		ivPercentile := f.ImpliedVolatilityPercentile
 		out.ImpliedVolatilityPercentile = &ivPercentile
 	}
-	if f.NextEarningsDate != "" {
+	// IsFutureOrToday, no solo != "" -- una next_earnings_date que ya paso
+	// (confirmado en vivo con INTC, casi un mes vieja) no es "la proxima" de
+	// nada, ver el comentario de domain.IsFutureOrToday.
+	if domain.IsFutureOrToday(f.NextEarningsDate) {
 		days := domain.DaysUntil(f.NextEarningsDate)
 		out.DaysUntilEarnings = &days
 	}
