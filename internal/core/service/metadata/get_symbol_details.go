@@ -68,7 +68,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			ImpliedVolatilityRank:       fundamentals.ImpliedVolatilityRank,
 			ImpliedVolatilityPercentile: fundamentals.ImpliedVolatilityPercentile,
 			NextEarningsDate:            fundamentals.NextEarningsDate,
-			DaysUntilEarnings:           domain.DaysUntil(fundamentals.NextEarningsDate),
+			DaysUntilEarnings:           daysUntilOrNil(fundamentals.NextEarningsDate),
 			OccurredDate:                fundamentals.OccurredDate,
 		},
 	}
@@ -88,6 +88,17 @@ func nonzeroOrNil(v float64) *float64 {
 		return nil
 	}
 	return &v
+}
+
+// daysUntilOrNil: domain.DaysUntil("") devuelve 0, indistinguible de "los
+// earnings son hoy" -- mismo criterio null-vs-0 que nonzeroOrNil, aplicado
+// a la fecha de origen en vez del resultado.
+func daysUntilOrNil(isoDate string) *int {
+	if isoDate == "" {
+		return nil
+	}
+	days := domain.DaysUntil(isoDate)
+	return &days
 }
 
 // applyExternalFundamentals solo llena sharesOutstanding/floatShares/

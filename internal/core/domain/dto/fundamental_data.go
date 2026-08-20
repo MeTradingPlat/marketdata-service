@@ -54,8 +54,13 @@ type FundamentalData struct {
 	ImpliedVolatilityIndex      float64  `json:"impliedVolatilityIndex"`
 	ImpliedVolatilityRank       float64  `json:"impliedVolatilityRank"`
 	ImpliedVolatilityPercentile float64  `json:"impliedVolatilityPercentile"`
-	NextEarningsDate            string   `json:"nextEarningsDate"`
-	DaysUntilEarnings           int      `json:"daysUntilEarnings"`
+	NextEarningsDate string `json:"nextEarningsDate"`
+	// DaysUntilEarnings es puntero por el mismo motivo que MarketCap/Eps/
+	// Beta arriba -- domain.DaysUntil("") devuelve 0 tanto para "sin fecha
+	// de earnings" (ETFs, confirmado en vivo con MSTU) como para "los
+	// earnings son hoy", dos cosas muy distintas. El frontend ya usaba `??`
+	// (no `||`) esperando justamente un null real aca, que nunca llegaba.
+	DaysUntilEarnings *int `json:"daysUntilEarnings,omitempty"`
 	// OccurredDate es la fecha del ultimo reporte de earnings REAL (con EPS
 	// ya publicado) -- el frontend la muestra como "Last Report Date".
 	// "" (no puntero) es consistente con el resto de campos de texto de
