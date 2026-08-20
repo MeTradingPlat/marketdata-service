@@ -85,8 +85,24 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		return
 	}
 
-	backfilling.Store(true)
-	defer backfilling.Store(false)
+	// El gate solo tiene sentido cuando el barrido corre en la ventana de
+	// mantenimiento real (mercado cerrado) -- ahi bloquear no cuesta nada,
+	// nadie esta escaneando. Pero firstRun corre en CADA arranque del
+	// proceso, sin importar la hora: un redeploy a mitad de la sesion
+	// (confirmado en vivo el 2026-08-20, varios seguidos) disparaba el
+	// mismo sweep completo D1+H1+M1+fundamentales CON el gate puesto,
+	// dejando a signal-processing-service reintentando "en mantenimiento"
+	// varios minutos en pleno horario de mercado -- exactamente la clase de
+	// atraso en senales que se estaba investigando. La mayoria de los datos
+	// ya existen de antes del reinicio (Backfill/StreamLive retoman desde
+	// watermark, no repiten todo), asi que el riesgo real de "vela a medio
+	// rellenar" en un firstRun en horario de mercado es bajo comparado con
+	// bloquear toda la plataforma.
+	gate := !firstRun || !isMarketActive(time.Now())
+	if gate {
+		backfilling.Store(true)
+		defer backfilling.Store(false)
+	}
 
 	if !firstRun {
 		gateway.ResetLiveConnections()
@@ -270,4 +286,24 @@ func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, trac
 	}
 	tracker.SeedLastClose(lastClose)
 	log.Info().Int("symbols", len(lastClose)).Dur("elapsed", time.Since(lastStart)).Msg("last-close tracker seeded")
+}
+
+// isMarketActive: mismo rango que effective_start/effective_end en
+// signal-processing-service (04:00-20:00 ET, pre/post-market extendido
+// incluido) -- no chequea feriados/fin de semana a proposito, un firstRun
+// que cae en uno de esos dias simplemente vuelve a la conducta segura de
+// siempre (gate puesto) en vez de arriesgar bloquear trafico real por un
+// falso negativo.
+func isMarketActive(now time.Time) bool {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return true
+	}
+	nowET := now.In(loc)
+	if nowET.Weekday() == time.Saturday || nowET.Weekday() == time.Sunday {
+		return false
+	}
+	open := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 4, 0, 0, 0, loc)
+	closeTime := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 20, 0, 0, 0, loc)
+	return !nowET.Before(open) && nowET.Before(closeTime)
 }
