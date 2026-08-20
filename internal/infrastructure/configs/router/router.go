@@ -1,6 +1,7 @@
 package router
 
 import (
+	"compress/gzip"
 	"sync/atomic"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
@@ -36,7 +37,17 @@ func (r *Router) Init() {
 	// Accept-Encoding: gzip (signal-processing-service tambien lo pide
 	// ahora, ver marketdata_client.py), asi que no rompe nada para
 	// clientes que no lo pidan.
-	r.echo.Use(echoMiddleware.Gzip())
+	//
+	// Level: BestSpeed (1), no el default (6) -- confirmado en vivo el
+	// 2026-08-20: con 4 escaneres concurrentes pidiendo el universo
+	// completo, el CPU del VAIO (4 nucleos) se saturaba a 85%+ comprimiendo
+	// esas respuestas, siendo el cuello de botella real (pg_stat_activity
+	// mostraba casi cero actividad en BD al mismo tiempo). El trafico va
+	// casi todo por la red interna de Docker entre marketdata-service y
+	// signal-processing-service, donde el ancho de banda ahorrado por un
+	// nivel mas alto vale mucho menos que el CPU que cuesta -- JSON
+	// comprime casi igual de bien en nivel 1 que en 6.
+	r.echo.Use(echoMiddleware.GzipWithConfig(echoMiddleware.GzipConfig{Level: gzip.BestSpeed}))
 
 	r.echo.GET("/marketdata/health", r.health.Health)
 	r.echo.GET("/marketdata/historical/:symbol", r.candles.GetCandles)
