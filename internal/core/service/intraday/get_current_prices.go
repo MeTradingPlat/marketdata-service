@@ -14,10 +14,11 @@ const currentPricesWorkers = 20
 type getCurrentPricesService struct {
 	repo    out.CandleRepository
 	gateway out.MarketDataGateway
+	tracker *SnapshotTracker
 }
 
-func NewGetCurrentPricesService(repo out.CandleRepository, gateway out.MarketDataGateway) in.GetCurrentPricesService {
-	return &getCurrentPricesService{repo: repo, gateway: gateway}
+func NewGetCurrentPricesService(repo out.CandleRepository, gateway out.MarketDataGateway, tracker *SnapshotTracker) in.GetCurrentPricesService {
+	return &getCurrentPricesService{repo: repo, gateway: gateway, tracker: tracker}
 }
 
 // GetCurrentPrices es la version liviana de GetSnapshot -- solo el precio,
@@ -56,9 +57,17 @@ func (s *getCurrentPricesService) GetCurrentPrices(ctx context.Context, symbols 
 	return result
 }
 
+// resolvePrice prueba el tracker en memoria (LastClose) antes de tocar BD --
+// mismo fallback que GetSnapshotsBatch, reusado aca: sin esto, un lote de
+// quotes con muchos simbolos todavia no suscritos en vivo (justo tras un
+// deploy/reconexion) pagaba una consulta por simbolo, el mismo problema ya
+// resuelto para fundamentals/realtime (ver snapshot_tracker.go).
 func (s *getCurrentPricesService) resolvePrice(ctx context.Context, symbol string) (float64, bool) {
 	if current, ok := s.gateway.CurrentCandle(symbol); ok && current.Close != 0 {
 		return current.Close, true
+	}
+	if price, _, ok := s.tracker.LastClose(symbol); ok {
+		return price, true
 	}
 	lastM1, err := s.repo.GetCandles(ctx, symbol, domain.M1, 1, nil)
 	if err != nil || len(lastM1) == 0 {
