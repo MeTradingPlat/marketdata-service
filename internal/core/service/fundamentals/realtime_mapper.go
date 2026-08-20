@@ -101,23 +101,43 @@ func applyDividendAndHalt(out *dto.FundamentalRealtime, f domain.Fundamentals) {
 	}
 }
 
+// marketCap/eps/beta/liquidity/IV en 0 no son un dato real (confirmado en
+// vivo con MSTU, un ETF apalancado sin market cap ni EPS de TastyTrade) --
+// mismo criterio "0 no es un dato" que applyIntraday de arriba, que estos
+// campos no tenian: un MARKET_CAP MENOR_QUE en signal-processing-service
+// evaluaba $0 como un dato real y disparaba falso positivo en cualquier
+// simbolo sin este dato, en vez de excluirlo por falta de dato como
+// evaluate() ya hace cuando compute_value devuelve None.
 func applyMarketMetrics(out *dto.FundamentalRealtime, f domain.Fundamentals, snap domain.IntradaySnapshot) {
-	marketCap := domain.MarketCapLive(f.MarketCap, f.SharesOutstanding, snap)
-	out.MarketCap = &marketCap
-	eps := f.Eps
-	out.Eps = &eps
-	beta := f.Beta
-	out.Beta = &beta
-	liquidity := f.Liquidity
-	out.Liquidity = &liquidity
+	if marketCap := domain.MarketCapLive(f.MarketCap, f.SharesOutstanding, snap); marketCap != 0 {
+		out.MarketCap = &marketCap
+	}
+	if f.Eps != 0 {
+		eps := f.Eps
+		out.Eps = &eps
+	}
+	if f.Beta != 0 {
+		beta := f.Beta
+		out.Beta = &beta
+	}
+	if f.Liquidity != 0 {
+		liquidity := f.Liquidity
+		out.Liquidity = &liquidity
+	}
 	liquidityRating := f.LiquidityRating
 	out.LiquidityRating = &liquidityRating
-	ivIndex := f.ImpliedVolatilityIndex
-	out.ImpliedVolatilityIndex = &ivIndex
-	ivRank := f.ImpliedVolatilityRank
-	out.ImpliedVolatilityRank = &ivRank
-	ivPercentile := f.ImpliedVolatilityPercentile
-	out.ImpliedVolatilityPercentile = &ivPercentile
+	if f.ImpliedVolatilityIndex != 0 {
+		ivIndex := f.ImpliedVolatilityIndex
+		out.ImpliedVolatilityIndex = &ivIndex
+	}
+	if f.ImpliedVolatilityRank != 0 {
+		ivRank := f.ImpliedVolatilityRank
+		out.ImpliedVolatilityRank = &ivRank
+	}
+	if f.ImpliedVolatilityPercentile != 0 {
+		ivPercentile := f.ImpliedVolatilityPercentile
+		out.ImpliedVolatilityPercentile = &ivPercentile
+	}
 	if f.NextEarningsDate != "" {
 		days := domain.DaysUntil(f.NextEarningsDate)
 		out.DaysUntilEarnings = &days

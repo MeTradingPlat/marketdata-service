@@ -33,14 +33,19 @@ type FundamentalData struct {
 
 	TradingStatus string `json:"tradingStatus"`
 
-	MarketCap                   float64  `json:"marketCap"`
+	// MarketCap/Eps/Beta son punteros por el mismo motivo que Open/High/Low/
+	// PrevClose arriba: 0 no es un market cap, EPS o beta real (confirmado
+	// en vivo con MSTU, un ETF apalancado -- TastyTrade no calcula market
+	// cap ni EPS para ETFs, y el 0 crudo se mostraba en el frontend como si
+	// fuera el valor real en vez de "sin dato").
+	MarketCap                   *float64 `json:"marketCap,omitempty"`
 	SharesOutstanding           *int64   `json:"sharesOutstanding,omitempty"`
 	FloatShares                 *int64   `json:"floatShares,omitempty"`
 	FloatSource                 *string  `json:"floatSource,omitempty"`
 	ShortInterest               *float64 `json:"shortInterest,omitempty"`
 	ShortRatio                  *float64 `json:"shortRatio,omitempty"`
-	Eps                         float64  `json:"eps"`
-	Beta                        float64  `json:"beta"`
+	Eps                         *float64 `json:"eps,omitempty"`
+	Beta                        *float64 `json:"beta,omitempty"`
 	OpenInterest                *float64 `json:"openInterest,omitempty"`
 	Lendability                 string   `json:"lendability"`
 	BorrowRate                  float64  `json:"borrowRate"`
