@@ -225,6 +225,18 @@ SELECT add_continuous_aggregate_policy('candles_m5',
     schedule_interval => INTERVAL '5 minutes',
     if_not_exists => TRUE);
 
+-- Confirmado en vivo el 2026-08-20: pese al comentario de arriba, esta vista
+-- SI termino con materialized_only=true (la causa exacta no quedo clara --
+-- no es compresion, esa nunca se habilito en el hypertable materializado),
+-- dejando cada lectura topada al ultimo refresh de la politica (hasta 15
+-- min de atraso real) en vez de caer a agregar en vivo lo no materializado
+-- todavia. Esto hacia que filtros tecnicos en M5 (y M15 mas abajo) dispararan
+-- señales hasta ~15-35 min despues de que la vela que las causo realmente
+-- cerro -- confirmado con una señal real: vela cerrada 13:40 UTC, señal
+-- recien publicada 13:55:42 UTC. ALTER explicito (no solo el default de
+-- CREATE) para que quede asi sin importar como haya quedado antes.
+ALTER MATERIALIZED VIEW candles_m5 SET (timescaledb.materialized_only = false);
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS candles_m15
 WITH (timescaledb.continuous) AS
 SELECT
@@ -246,3 +258,8 @@ SELECT add_continuous_aggregate_policy('candles_m15',
     end_offset => INTERVAL '20 minutes',
     schedule_interval => INTERVAL '15 minutes',
     if_not_exists => TRUE);
+
+-- Ver el comentario de candles_m5 de arriba -- mismo problema, peor aca:
+-- end_offset de 20 min + schedule de 15 min sin real-time aggregation
+-- significaba hasta 35 min de atraso real en filtros tecnicos M15.
+ALTER MATERIALIZED VIEW candles_m15 SET (timescaledb.materialized_only = false);
