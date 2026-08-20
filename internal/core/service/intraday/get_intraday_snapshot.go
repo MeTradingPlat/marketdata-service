@@ -13,10 +13,11 @@ import (
 type getIntradaySnapshotService struct {
 	repo    out.CandleRepository
 	gateway out.MarketDataGateway
+	tracker *SnapshotTracker
 }
 
-func NewGetIntradaySnapshotService(repo out.CandleRepository, gateway out.MarketDataGateway) in.GetIntradaySnapshotService {
-	return &getIntradaySnapshotService{repo: repo, gateway: gateway}
+func NewGetIntradaySnapshotService(repo out.CandleRepository, gateway out.MarketDataGateway, tracker *SnapshotTracker) in.GetIntradaySnapshotService {
+	return &getIntradaySnapshotService{repo: repo, gateway: gateway, tracker: tracker}
 }
 
 // GetSnapshot arma todo lo que se puede sacar de fundamentales SOLO con
@@ -66,28 +67,43 @@ func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol str
 	return snap, nil
 }
 
-// GetSnapshotsBatch es GetSnapshot para un lote de simbolos en un numero fijo
-// de queries en vez de 2-3 por simbolo -- confirmado en vivo el 2026-08-19:
-// fundamentals/realtime llamaba GetSnapshot simbolo por simbolo (20 workers
-// contra el pool de 20 conexiones) y con el universo NYSE+NASDAQ+AMEX
-// (~8800 simbolos) eso tardaba ~90.2-90.3s constantes, justo encima del
-// timeout de 90s del cliente -- el escaner de pre-mercado perdia esa carrera
-// en CADA ciclo y nunca vio un solo simbolo con datos, 0 senales toda la
-// sesion pese a filtros poco exigentes.
+// GetSnapshotsBatch es GetSnapshot para un lote de simbolos leyendo las
+// sesiones del dia desde el SnapshotTracker en memoria (actualizado vela a
+// vela por el streaming en vivo, ver RecordClosedCandle) en vez de
+// recalcularlas desde disco en cada request -- confirmado en vivo el
+// 2026-08-20: incluso ya en un solo query de lote (ver el batch de
+// GetIntradaySessionsBatch), agregar el chunk M1 de hoy (8.8M+ filas, todo
+// el universo) para 8861 simbolos a la vez seguia tardando 90s+ por como el
+// planner recorre un chunk ordenado por TIEMPO cuando se filtra por
+// SIMBOLO. Solo cae a BD (GetIntradaySessionsBatch, ver el fallback abajo)
+// para simbolos sin ninguna vela registrada todavia hoy en el tracker --
+// tipico justo tras un reinicio, antes de que el seed y el streaming en
+// vivo los cubran.
 func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symbols []string) map[string]domain.IntradaySnapshot {
 	result := make(map[string]domain.IntradaySnapshot, len(symbols))
 	if len(symbols) == 0 {
 		return result
 	}
 
-	sessions, err := s.repo.GetIntradaySessionsBatch(ctx, symbols)
-	if err != nil {
-		sessions = map[string]domain.IntradaySnapshot{}
+	sessions := s.tracker.SnapshotBatch(symbols)
+	missingSessions := make([]string, 0)
+	for _, sym := range symbols {
+		if _, ok := sessions[sym]; !ok {
+			missingSessions = append(missingSessions, sym)
+		}
+	}
+	if len(missingSessions) > 0 {
+		if fallback, err := s.repo.GetIntradaySessionsBatch(ctx, missingSessions); err == nil {
+			for sym, snap := range fallback {
+				sessions[sym] = snap
+			}
+		}
 	}
 
 	now := time.Now()
 	needD1Fallback := make([]string, 0)
 	var prevCloses map[string]float64
+	var err error
 	loc, locErr := time.LoadLocation("America/New_York")
 	if locErr == nil {
 		nowET := now.In(loc)

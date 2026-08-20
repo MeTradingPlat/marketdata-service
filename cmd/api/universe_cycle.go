@@ -9,6 +9,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/rs/zerolog/log"
 )
@@ -55,22 +56,22 @@ func refreshWithRetry(name string, fn func() error) {
 // /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
 // (ver topSymbolsPerMarket) despues del rollout M1 -- REST puro, no compite
 // por conexiones DxLink con las fases de velas.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, firstRun bool) {
 	// Pipeline del backfill (diseno del usuario): D1 primero, se cierran
 	// las conexiones, se calcula TODO lo que se calcula con D1 (beta y
 	// prevClose, por-simbolo con fecha), luego H1 (se cierra, se calcula lo
@@ -120,6 +121,13 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// sweep, el watermark avanza diario y el rollout solo re-juega el hueco
 	// del downtime (~minutos).
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.M1, cfg.SweepWorkers)
+
+	// Sembrar el SnapshotTracker con UNA sola consulta de lote (el mismo
+	// costo que antes pagaba CADA request de fundamentals/realtime) justo
+	// despues del sweep M1 y antes de abrir las suscripciones en vivo -- sin
+	// esto, GetSnapshotsBatch caeria al fallback de BD para el universo
+	// entero hasta que cada simbolo recibiera su primer tick en vivo.
+	seedSnapshotTracker(ctx, candles, tracker, tracked)
 
 	startLiveUniverse(ctx, ingest, tracked)
 	refreshWithRetry("prev close", func() error {
@@ -212,4 +220,34 @@ func startLiveUniverse(ctx context.Context, ingest in.IngestCandlesService, trac
 	}
 
 	log.Info().Int("symbols", len(tracked)).Dur("elapsed", time.Since(start)).Msg("live M1 rollout finished")
+}
+
+// seedSnapshotTracker carga la sesion de hoy para todo el universo en UNA
+// sola consulta de lote (el mismo costo que antes pagaba CADA request de
+// fundamentals/realtime, ver el comentario de GetSnapshotsBatch) -- corre
+// una vez por ventana de mantenimiento, no en el camino caliente. Un error
+// aca no frena el arranque: GetSnapshotsBatch sigue cubriendo lo que falte
+// via su propio fallback a BD por-simbolo.
+func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, tracker *intraday.SnapshotTracker, tracked []domain.Symbol) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		log.Error().Err(err).Msg("seeding snapshot tracker: loading America/New_York failed")
+		return
+	}
+	nowET := time.Now().In(loc)
+	day := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 0, 0, 0, 0, loc)
+
+	symbols := make([]string, len(tracked))
+	for i, s := range tracked {
+		symbols[i] = s.Symbol
+	}
+
+	start := time.Now()
+	snapshots, err := candles.GetIntradaySessionsBatch(ctx, symbols)
+	if err != nil {
+		log.Error().Err(err).Msg("seeding snapshot tracker failed, falling back to per-request DB reads")
+		return
+	}
+	tracker.Seed(day, snapshots)
+	log.Info().Int("symbols", len(snapshots)).Dur("elapsed", time.Since(start)).Msg("snapshot tracker seeded")
 }
