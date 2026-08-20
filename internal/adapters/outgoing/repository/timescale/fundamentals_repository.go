@@ -33,7 +33,8 @@ const fundamentalsSelectSQL = `
 	d.shares_outstanding, d.float_shares, d.short_interest, d.short_ratio,
 	d.short_interest_shares, COALESCE(d.short_interest_settlement, ''),
 	d.external_updated_at, d.float_updated_at,
-	COALESCE(d.occurred_date, '')
+	COALESCE(d.occurred_date, ''),
+	d.prev_close
 `
 
 const getFundamentalsSQL = `
@@ -56,6 +57,7 @@ func scanFundamentals(row pgx.Row, f *domain.Fundamentals) error {
 		&f.ShortInterestShares, &f.ShortInterestSettlement,
 		&f.ExternalUpdatedAt, &f.FloatUpdatedAt,
 		&f.OccurredDate,
+		&f.PrevClose,
 	)
 }
 
@@ -106,6 +108,7 @@ func (r *FundamentalsRepository) GetBatch(ctx context.Context, symbols []string)
 			&f.ShortInterestShares, &f.ShortInterestSettlement,
 			&f.ExternalUpdatedAt, &f.FloatUpdatedAt,
 			&f.OccurredDate,
+			&f.PrevClose,
 		); err != nil {
 			return nil, fmt.Errorf("scanning fundamentals batch row: %w", err)
 		}

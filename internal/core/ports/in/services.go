@@ -35,7 +35,11 @@ type GetIntradaySnapshotService interface {
 	// GetSnapshotsBatch es GetSnapshot para un lote -- ver
 	// out.CandleRepository.GetIntradaySessionsBatch sobre por que
 	// fundamentals/realtime necesita esto en vez de N llamadas a GetSnapshot.
-	GetSnapshotsBatch(ctx context.Context, symbols []string) map[string]domain.IntradaySnapshot
+	// knownPrevCloses es el prevClose YA calculado por RefreshPrevClose (ver
+	// domain.Fundamentals.PrevClose) para los simbolos que el caller ya
+	// tiene a mano -- evita recalcular la misma consulta de subasta/D1 para
+	// un simbolo cuyo prevClose de hoy ya se sabe.
+	GetSnapshotsBatch(ctx context.Context, symbols []string, knownPrevCloses map[string]float64) map[string]domain.IntradaySnapshot
 }
 
 // GetCurrentPricesService es la version liviana de GetIntradaySnapshotService

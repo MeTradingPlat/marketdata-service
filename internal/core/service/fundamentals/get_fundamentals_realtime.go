@@ -33,7 +33,14 @@ func (s *getFundamentalsRealtimeService) GetFundamentalsRealtime(ctx context.Con
 	if err != nil {
 		equitiesBySymbol = map[string]domain.Symbol{}
 	}
-	snapshotsBySymbol := s.intraday.GetSnapshotsBatch(ctx, symbols)
+
+	knownPrevCloses := make(map[string]float64, len(fundamentalsBySymbol))
+	for symbol, f := range fundamentalsBySymbol {
+		if f.PrevClose != nil {
+			knownPrevCloses[symbol] = *f.PrevClose
+		}
+	}
+	snapshotsBySymbol := s.intraday.GetSnapshotsBatch(ctx, symbols, knownPrevCloses)
 
 	result := make(map[string]dto.FundamentalRealtime, len(symbols))
 	for _, symbol := range symbols {

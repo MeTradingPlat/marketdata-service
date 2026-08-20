@@ -79,7 +79,7 @@ func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol str
 // para simbolos sin ninguna vela registrada todavia hoy en el tracker --
 // tipico justo tras un reinicio, antes de que el seed y el streaming en
 // vivo los cubran.
-func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symbols []string) map[string]domain.IntradaySnapshot {
+func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symbols []string, knownPrevCloses map[string]float64) map[string]domain.IntradaySnapshot {
 	result := make(map[string]domain.IntradaySnapshot, len(symbols))
 	if len(symbols) == 0 {
 		return result
@@ -102,18 +102,37 @@ func (s *getIntradaySnapshotService) GetSnapshotsBatch(ctx context.Context, symb
 
 	now := time.Now()
 	needD1Fallback := make([]string, 0)
-	var prevCloses map[string]float64
-	var err error
-	loc, locErr := time.LoadLocation("America/New_York")
-	if locErr == nil {
-		nowET := now.In(loc)
-		openET := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
-		prevCloses, err = s.repo.GetPreviousSessionCloseBatch(ctx, symbols, openET)
-		if err != nil {
-			prevCloses = map[string]float64{}
+
+	// prevCloses arranca con lo que el caller ya sabe (RefreshPrevClose lo
+	// calcula una vez por ventana de mantenimiento para el universo entero,
+	// ver domain.Fundamentals.PrevClose) -- solo se consulta la subasta/D1
+	// para los simbolos SIN ese dato: confirmado en vivo el 2026-08-20, con
+	// el universo entero recien desplegado (nada en knownPrevCloses todavia)
+	// GetPreviousSessionCloseBatch + su fallback D1 seguian tardando 70s+
+	// pese a que RefreshPrevClose ya habia calculado exactamente lo mismo
+	// minutos antes en la ventana de mantenimiento.
+	prevCloses := make(map[string]float64, len(symbols))
+	needPrevClose := make([]string, 0, len(symbols))
+	for _, sym := range symbols {
+		if pc, ok := knownPrevCloses[sym]; ok {
+			prevCloses[sym] = pc
+		} else {
+			needPrevClose = append(needPrevClose, sym)
 		}
-	} else {
-		prevCloses = map[string]float64{}
+	}
+	var err error
+	if len(needPrevClose) > 0 {
+		loc, locErr := time.LoadLocation("America/New_York")
+		if locErr == nil {
+			nowET := now.In(loc)
+			openET := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
+			fromDB, dbErr := s.repo.GetPreviousSessionCloseBatch(ctx, needPrevClose, openET)
+			if dbErr == nil {
+				for sym, pc := range fromDB {
+					prevCloses[sym] = pc
+				}
+			}
+		}
 	}
 
 	// needM1Fallback: simbolos sin vela en formacion en el gateway NI ultima

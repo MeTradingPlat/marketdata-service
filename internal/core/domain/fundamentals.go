@@ -23,6 +23,13 @@ type Fundamentals struct {
 	HaltEndTime         int64      `json:"-"`
 	MarketDataUpdatedAt *time.Time `json:"-"`
 
+	// PrevClose lo calcula RefreshPrevClose una vez por ventana de
+	// mantenimiento para el universo entero (ver prev_close_refresh.go) --
+	// nil hasta el primer calculo o si el simbolo no tiene M1 (warrants/OTC
+	// sin historia). GetFundamentalsRealtime lo usa para no repetir la misma
+	// consulta de subasta por request (ver GetSnapshotsBatch).
+	PrevClose *float64 `json:"-"`
+
 	MarketCap                   float64    `json:"marketCap"`
 	Eps                         float64    `json:"eps"`
 	Beta                        float64    `json:"beta"`
