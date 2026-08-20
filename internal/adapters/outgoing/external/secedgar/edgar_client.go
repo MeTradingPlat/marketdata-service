@@ -24,6 +24,15 @@ func NewEdgarClient(tickerCik *TickerCikLookup, cacheDir string) *EdgarClient {
 }
 
 func (c *EdgarClient) FetchSharesOutstanding(ctx context.Context, symbols []string) map[string]int64 {
+	shares, _ := c.FetchCompanyFacts(ctx, symbols)
+	return shares
+}
+
+// FetchCompanyFacts trae sharesOutstanding y la fecha del ultimo filing
+// (10-Q/10-K) en UN solo pase sobre el bulk -- usar esto en vez de llamar
+// FetchSharesOutstanding aparte cuando el caller necesita ambos datos, para
+// no decodificar el ZIP completo (~1.5GB) dos veces en la misma corrida.
+func (c *EdgarClient) FetchCompanyFacts(ctx context.Context, symbols []string) (shares map[string]int64, filingDates map[string]string) {
 	cikToSymbols := make(map[string][]string)
 	tickerToCik := c.tickerCik.TickerToCikMap(ctx)
 	for _, symbol := range symbols {
@@ -35,7 +44,7 @@ func (c *EdgarClient) FetchSharesOutstanding(ctx context.Context, symbols []stri
 		cikToSymbols[key] = append(cikToSymbols[key], strings.ToUpper(symbol))
 	}
 	if len(cikToSymbols) == 0 {
-		return map[string]int64{}
+		return map[string]int64{}, map[string]string{}
 	}
 
 	// sharesOutstanding es una cifra por-entidad (CIK), no por-ticker: se
@@ -48,7 +57,7 @@ func (c *EdgarClient) FetchSharesOutstanding(ctx context.Context, symbols []stri
 	zipPath, err := c.ensureCachedZip(ctx)
 	if err != nil {
 		log.Error().Err(err).Str("cacheDir", c.cacheDir).Msg("sec edgar companyfacts.zip unavailable")
-		return map[string]int64{}
+		return map[string]int64{}, map[string]string{}
 	}
 	return parseCompanyFactsZip(zipPath, cikToSymbols, totalTargets)
 }

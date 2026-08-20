@@ -6,16 +6,23 @@ import (
 	"strings"
 )
 
-func parseCompanyFactsZip(zipPath string, cikToSymbols map[string][]string, totalTargets int) map[string]int64 {
-	result := make(map[string]int64)
+// parseCompanyFactsZip hace UN solo pase sobre el bulk (~1.5GB) sacando
+// tanto sharesOutstanding como la fecha de filing mas reciente -- las dos
+// vienen del mismo JSON por CIK, pedirlas por separado significaria decodificar
+// el archivo entero dos veces. totalTargets solo cuenta contra sharesOutstanding
+// (el dato principal de esta pasada); filingDates se llena en el mismo loop
+// sin condicionar el corte temprano.
+func parseCompanyFactsZip(zipPath string, cikToSymbols map[string][]string, totalTargets int) (shares map[string]int64, filingDates map[string]string) {
+	shares = make(map[string]int64)
+	filingDates = make(map[string]string)
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
-		return result
+		return shares, filingDates
 	}
 	defer r.Close()
 
 	for _, entry := range r.File {
-		if len(result) >= totalTargets {
+		if len(shares) >= totalTargets {
 			break
 		}
 		matched, ok := cikToSymbols[extractCik(entry.Name)]
@@ -33,18 +40,23 @@ func parseCompanyFactsZip(zipPath string, cikToSymbols map[string][]string, tota
 			continue
 		}
 
-		if shares := parseSharesOutstanding(data); shares != nil {
-			// El SO es de la entidad (CIK), no del ticker: se aplica a todos
-			// los tickers del CIK (el principal y sus warrants/preferentes).
-			// Antes se descartaba el CIK entero con mas de un ticker, y el
-			// principal legitimo quedaba NULL -- confirmado en vivo: T, SMCI,
-			// OPEN y BBD sin shares por compartir CIK con TBB/SMCIP/OPENW/BBDO.
-			for _, symbol := range matched {
-				result[symbol] = *shares
+		facts := parseCompanyFacts(data)
+		// El SO y la fecha de filing son de la entidad (CIK), no del ticker:
+		// se aplican a todos los tickers del CIK (el principal y sus
+		// warrants/preferentes). Antes se descartaba el CIK entero con mas
+		// de un ticker, y el principal legitimo quedaba NULL -- confirmado
+		// en vivo: T, SMCI, OPEN y BBD sin shares por compartir CIK con
+		// TBB/SMCIP/OPENW/BBDO.
+		for _, symbol := range matched {
+			if facts.Shares != nil {
+				shares[symbol] = *facts.Shares
+			}
+			if facts.LastFiled != "" {
+				filingDates[symbol] = facts.LastFiled
 			}
 		}
 	}
-	return result
+	return shares, filingDates
 }
 
 func extractCik(entryName string) string {

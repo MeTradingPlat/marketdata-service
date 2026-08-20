@@ -42,15 +42,34 @@ type secFacts struct {
 	} `json:"facts"`
 }
 
-func parseSharesOutstanding(data []byte) *int64 {
+// companyFacts es lo que se saca de UN pase sobre el JSON de una empresa --
+// sharesOutstanding y la fecha de filing mas reciente comparten exactamente
+// las mismas unidades (cover page de cada 10-Q/10-K), asi que se sacan
+// juntas en la misma pasada en vez de volver a decodificar ~1.5GB de bulk
+// dos veces (una por cada dato).
+type companyFacts struct {
+	Shares    *int64
+	LastFiled string
+}
+
+func parseCompanyFacts(data []byte) companyFacts {
 	var facts secFacts
 	if err := json.Unmarshal(data, &facts); err != nil {
-		return nil
+		return companyFacts{}
 	}
-	if shares := latestShareCount(facts.Facts.Dei.EntityCommonStockSharesOutstanding.Units.Shares); shares != nil {
-		return shares
+	dei := facts.Facts.Dei.EntityCommonStockSharesOutstanding.Units.Shares
+	gaap := facts.Facts.UsGaap.CommonStockSharesOutstanding.Units.Shares
+
+	shares := latestShareCount(dei)
+	if shares == nil {
+		shares = latestShareCount(gaap)
 	}
-	return latestShareCount(facts.Facts.UsGaap.CommonStockSharesOutstanding.Units.Shares)
+
+	filed := latestFiledDate(dei)
+	if f := latestFiledDate(gaap); f > filed {
+		filed = f
+	}
+	return companyFacts{Shares: shares, LastFiled: filed}
 }
 
 func latestShareCount(units []secFactUnit) *int64 {
@@ -65,6 +84,23 @@ func latestShareCount(units []secFactUnit) *int64 {
 		return nil
 	}
 	return &latestVal
+}
+
+// latestFiledDate: la fecha en que la SEC recibio el 10-Q/10-K mas reciente
+// -- proxy razonable de "ultimo reporte de earnings" cuando TastyTrade
+// todavia no tiene el reporte real en su historial (confirmado en vivo con
+// INTC: TastyTrade seguia devolviendo el cierre de trimestre como
+// placeholder semanas despues del reporte real). No aplica el mismo filtro
+// de plausibilidad que shares -- una fecha vieja simplemente pierde contra
+// isStale() al usarse, no hace falta descartarla aca.
+func latestFiledDate(units []secFactUnit) string {
+	var latest string
+	for _, u := range units {
+		if u.Filed > latest {
+			latest = u.Filed
+		}
+	}
+	return latest
 }
 
 func isStale(endDate string) bool {

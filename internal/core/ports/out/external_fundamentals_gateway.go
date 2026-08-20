@@ -15,6 +15,11 @@ import (
 // simplemente no aparece en el mapa devuelto).
 type SharesOutstandingGateway interface {
 	FetchSharesOutstanding(ctx context.Context, symbols []string) map[string]int64
+	// FetchCompanyFacts trae sharesOutstanding y la fecha del ultimo filing
+	// (10-Q/10-K) en un solo pase sobre el mismo bulk -- usar en vez de
+	// FetchSharesOutstanding cuando el caller necesita ambos datos, para no
+	// decodificar el ZIP (~1.5GB) dos veces en la misma corrida.
+	FetchCompanyFacts(ctx context.Context, symbols []string) (shares map[string]int64, filingDates map[string]string)
 }
 
 // InsiderOwnershipGateway resuelve tenencias de insiders (Form 3/4/5) via

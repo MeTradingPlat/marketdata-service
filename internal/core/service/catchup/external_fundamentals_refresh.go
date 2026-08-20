@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/rs/zerolog/log"
 )
@@ -34,7 +35,7 @@ func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandin
 	profileShares := profile.FetchProfileShares(ctx, symbols)
 	log.Info().Int("symbols", len(profileShares)).Msg("dxlink profile shares refresh finished")
 
-	sharesOutstanding := edgar.FetchSharesOutstanding(ctx, symbols)
+	sharesOutstanding, filingDates := edgar.FetchCompanyFacts(ctx, symbols)
 	log.Info().Int("symbols", len(sharesOutstanding)).Msg("sec edgar sharesOutstanding refresh finished")
 
 	insiderData := insiders.FetchInsiderShares(ctx, symbols)
@@ -51,5 +52,43 @@ func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandin
 		return fmt.Errorf("upserting external fundamentals batch: %w", err)
 	}
 	log.Info().Int("symbols", len(updates)).Dur("elapsed", time.Since(start)).Msg("external fundamentals refresh finished")
+
+	if err := fillEarningsFromSecFilings(ctx, fundamentalsRepo, filingDates); err != nil {
+		log.Error().Err(err).Msg("sec edgar earnings fallback failed")
+	}
+	return nil
+}
+
+// fillEarningsFromSecFilings usa la fecha del ultimo filing (10-Q/10-K) de
+// SEC EDGAR como proxy de "ultimo reporte" SOLO para los simbolos que
+// RefreshEarningsHistory (TastyTrade, que corre antes en el ciclo -- ver
+// universe_cycle.go) no pudo resolver esta misma noche -- re-consulta el
+// mismo criterio de "vencido o nunca buscado" ya con los resultados de
+// TastyTrade aplicados, para nunca pisar un dato mejor con este proxy mas
+// debil (TastyTrade tiene prioridad). No fabrica una prediccion de proxima
+// fecha desde esto -- ver el comentario de RefreshEarningsHistory sobre por
+// que preferimos no predecir antes que predecir mal.
+func fillEarningsFromSecFilings(ctx context.Context, fundamentalsRepo out.FundamentalsRepository, filingDates map[string]string) error {
+	stale, err := fundamentalsRepo.GetSymbolsWithStaleEarnings(ctx)
+	if err != nil {
+		return fmt.Errorf("selecting still-stale symbols: %w", err)
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+
+	var updates []domain.Fundamentals
+	for _, symbol := range stale {
+		if filed, ok := filingDates[symbol]; ok && filed != "" {
+			updates = append(updates, domain.Fundamentals{Symbol: symbol, OccurredDate: filed})
+		}
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	if err := fundamentalsRepo.UpsertEarningsHistory(ctx, updates); err != nil {
+		return fmt.Errorf("upserting sec edgar earnings fallback: %w", err)
+	}
+	log.Info().Int("symbols", len(updates)).Msg("sec edgar earnings fallback finished")
 	return nil
 }
