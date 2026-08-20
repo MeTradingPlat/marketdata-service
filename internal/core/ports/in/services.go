@@ -20,6 +20,12 @@ type GetCandlesService interface {
 	// before es nil para las barras mas recientes, o un limite exclusivo
 	// para paginar hacia atras (scroll a la izquierda del chart).
 	GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error)
+	// GetCandlesBatch es GetCandles para un lote -- para timeframes con
+	// continuous aggregate (M5/M15) usa una sola consulta en vez de una por
+	// simbolo (ver out.CandleRepository.GetSeriesAggregatedBatch); el resto
+	// de timeframes derivados sigue con concurrencia acotada por simbolo.
+	// Un simbolo sin ninguna vela disponible no aparece en el mapa.
+	GetCandlesBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) map[string][]domain.Candle
 }
 
 // GetCurrentCandleService devuelve la vela EN FORMACION del simbolo+timeframe

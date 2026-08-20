@@ -83,6 +83,59 @@ func (s *getCandlesService) GetCandles(ctx context.Context, symbol string, timef
 	return candles, nil
 }
 
+// candlesBatchFallbackWorkers: concurrencia acotada para el camino
+// per-simbolo (timeframes derivados sin continuous aggregate propio, o si
+// el batch agregado fallo) -- mismo criterio que liveRolloutWorkers, no
+// saturar el pool de conexiones con miles de queries de golpe.
+const candlesBatchFallbackWorkers = 4
+
+// GetCandlesBatch resuelve TODO el lote en una sola consulta cuando el
+// timeframe tiene continuous aggregate (M5/M15, ver
+// out.CandleRepository.GetSeriesAggregatedBatch) -- confirmado en vivo el
+// 2026-08-20: el camino per-simbolo (candlesBatchFallbackWorkers) tardaba
+// 14-15s con el universo completo bajo carga concurrente de escaneres,
+// contra 2.1s de la consulta en lote via EXPLAIN ANALYZE. Para el resto de
+// timeframes derivados (sin vista propia) o si el batch agregado da error,
+// cae al camino per-simbolo de siempre.
+func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) map[string][]domain.Candle {
+	if _, bucket, _, ok := timeframe.Aggregation(); ok {
+		if batch, hasView, err := s.repo.GetSeriesAggregatedBatch(ctx, symbols, timeframe, bucket, bars); err == nil && hasView {
+			return batch
+		}
+	}
+	return s.getCandlesBatchPerSymbol(ctx, symbols, timeframe, bars)
+}
+
+func (s *getCandlesService) getCandlesBatchPerSymbol(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) map[string][]domain.Candle {
+	result := make(map[string][]domain.Candle, len(symbols))
+	var mu sync.Mutex
+
+	jobs := make(chan string, len(symbols))
+	for _, sym := range symbols {
+		jobs <- sym
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for i := 0; i < candlesBatchFallbackWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for symbol := range jobs {
+				candles, err := s.GetCandles(ctx, symbol, timeframe, bars, nil)
+				if err != nil || len(candles) == 0 {
+					continue
+				}
+				mu.Lock()
+				result[symbol] = candles
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return result
+}
+
 func candleCacheKey(symbol string, timeframe domain.Timeframe, bars int, before *time.Time) string {
 	beforeKey := ""
 	if before != nil {

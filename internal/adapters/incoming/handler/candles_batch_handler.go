@@ -2,21 +2,11 @@ package handler
 
 import (
 	"net/http"
-	"sync"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/labstack/echo/v4"
 )
-
-// candlesBatchWorkers: bajado de 20 a 4 tras confirmar en vivo que cada poll
-// del batch de signal-processing (2,929 simbolos x timeframe derivado)
-// disparaba ~20 agregaciones time_bucket concurrentes sobre M1 comprimida
-// que saturaban el CPU del host (laptop 2011) y dejaban al barrido y al
-// frontend esperando detras. 4 workers alargan el poll del batch unos
-// segundos pero dejan CPU y conexiones para el resto -- la carga del
-// servidor manda (diseno del usuario).
-const candlesBatchWorkers = 4
 
 type candlesBatchRequest struct {
 	Symbols   []string `json:"symbols"`
@@ -25,10 +15,9 @@ type candlesBatchRequest struct {
 }
 
 // GetCandlesBatch es lo que llama signal-processing-service (fetch_candles)
-// para pedir velas de muchos simbolos de una -- reusa GetCandlesService por
-// simbolo (incluye agregacion de timeframes derivados) con concurrencia
-// acotada, mismo criterio que liveRolloutWorkers para no saturar el pool
-// de conexiones a Postgres con miles de queries de golpe.
+// para pedir velas de muchos simbolos de una -- ver
+// in.GetCandlesService.GetCandlesBatch sobre la estrategia (consulta en
+// lote para M5/M15, concurrencia acotada por simbolo para el resto).
 func (h *CandlesHandler) GetCandlesBatch(c echo.Context) error {
 	var req candlesBatchRequest
 	if err := c.Bind(&req); err != nil {
@@ -43,31 +32,6 @@ func (h *CandlesHandler) GetCandlesBatch(c echo.Context) error {
 		bars = 100
 	}
 
-	result := make(map[string][]domain.Candle, len(req.Symbols))
-	var mu sync.Mutex
-	jobs := make(chan string, len(req.Symbols))
-	for _, s := range req.Symbols {
-		jobs <- s
-	}
-	close(jobs)
-
-	var wg sync.WaitGroup
-	for i := 0; i < candlesBatchWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for symbol := range jobs {
-				candles, err := h.service.GetCandles(c.Request().Context(), symbol, timeframe, bars, nil)
-				if err != nil || len(candles) == 0 {
-					continue
-				}
-				mu.Lock()
-				result[symbol] = candles
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-
+	result := h.service.GetCandlesBatch(c.Request().Context(), req.Symbols, timeframe, bars)
 	return c.JSON(http.StatusOK, dto.CandlesBatchResponse{CandlesPorSimbolo: result})
 }
