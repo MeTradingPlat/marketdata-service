@@ -259,6 +259,7 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 	// detras). Por eso, si la pagina viene corta, se ensancha la ventana
 	// (x4) y se reintenta -- los simbolos densos pagan un solo query, los
 	// huecos cuestan un par de queries extra como mucho.
+	prevCount := -1
 	for attempt := 0; ; attempt++ {
 		from := anchor.Add(-window)
 		rows, err := r.pool.Query(ctx, getCandlesSQL, symbol, string(timeframe), from, before, bars)
@@ -284,9 +285,17 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 		if err != nil {
 			return nil, err
 		}
-		if len(candles) >= bars || attempt >= maxWindowWidenAttempts {
+		// Un simbolo con historia real corta (ETF apalancado recien listado,
+		// ej. MSTU con 481 D1 desde su lanzamiento) NUNCA junta `bars` sin
+		// importar cuanto se ensanche la ventana -- confirmado en vivo el
+		// 2026-08-20: sin este corte, las 4 vueltas de ensanche (hasta 256x
+		// la ventana base) igual repetian la misma consulta sobre un rango
+		// que ya cubria toda la historia real, costando 14s en vez de una
+		// sola consulta que ya tenia la respuesta correcta.
+		if len(candles) >= bars || attempt >= maxWindowWidenAttempts || len(candles) == prevCount {
 			return candles, nil
 		}
+		prevCount = len(candles)
 		window *= windowWidenFactor
 	}
 }
