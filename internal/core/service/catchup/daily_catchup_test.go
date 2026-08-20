@@ -19,17 +19,17 @@ func TestNextMaintenanceWindowAt(t *testing.T) {
 		{
 			name: "before close today, EDT (summer)",
 			now:  time.Date(2026, 7, 15, 12, 0, 0, 0, loc),
-			want: time.Date(2026, 7, 15, 16, 5, 0, 0, loc),
+			want: time.Date(2026, 7, 15, 20, 5, 0, 0, loc),
 		},
 		{
 			name: "after close today, EDT (summer) rolls to tomorrow",
-			now:  time.Date(2026, 7, 15, 17, 0, 0, 0, loc),
-			want: time.Date(2026, 7, 16, 16, 5, 0, 0, loc),
+			now:  time.Date(2026, 7, 15, 21, 0, 0, 0, loc),
+			want: time.Date(2026, 7, 16, 20, 5, 0, 0, loc),
 		},
 		{
 			name: "before close today, EST (winter)",
 			now:  time.Date(2026, 1, 15, 12, 0, 0, 0, loc),
-			want: time.Date(2026, 1, 15, 16, 5, 0, 0, loc),
+			want: time.Date(2026, 1, 15, 20, 5, 0, 0, loc),
 		},
 	}
 
