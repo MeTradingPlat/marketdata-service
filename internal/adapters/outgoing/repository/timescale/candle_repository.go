@@ -199,19 +199,36 @@ func getSeriesFrom(ctx context.Context, pool *pgxpool.Pool, symbols []string, ti
 	if len(symbols) == 0 {
 		return map[string][]domain.Candle{}, nil
 	}
+	// Sin cota de ts, ROW_NUMBER() OVER (PARTITION BY symbol_id ...) tiene que
+	// leer y ordenar TODA la historia de cada simbolo antes de recortar a
+	// `bars` -- para D1 eso son años de chunks comprimidos. Confirmado en vivo
+	// el 2026-08-21: una consulta de este tipo llevaba 68+ segundos activa
+	// bajo carga concurrente de escaneres (pg_stat_activity). JOIN LATERAL
+	// (la solucion que funciono para el mismo problema en seriesAggregatedBatchSQL)
+	// NO sirve aca: con D1 abarcando cientos de chunks el planner tarda 11+
+	// segundos SOLO planificando un lateral por simbolo. La cota de ts deja
+	// que TimescaleDB excluya chunks viejos enteros antes de siquiera
+	// descomprimirlos -- bars*3+60 periodos de margen (igual de generoso que
+	// el ensanchamiento de ventana de GetCandles) alcanza de sobra para los
+	// pedidos chicos (5-15 barras) que hace este camino.
+	duration, err := timeframe.Duration()
+	if err != nil {
+		return nil, fmt.Errorf("resolving duration for %s: %w", timeframe, err)
+	}
+	from := time.Now().Add(-time.Duration(bars*3+60) * duration)
 	rows, err := pool.Query(ctx, `
 		SELECT s.symbol, ts, open, high, low, close, volume, source
 		FROM (
 			SELECT c.symbol_id, c.ts, c.open, c.high, c.low, c.close, c.volume, c.source,
 			       row_number() OVER (PARTITION BY c.symbol_id ORDER BY c.ts DESC) AS rn
 			FROM candles c
-			WHERE c.timeframe = $1
+			WHERE c.timeframe = $1 AND c.ts >= $4
 			  AND c.symbol_id IN (SELECT symbol_id FROM tracked_symbols WHERE symbol = ANY($2))
 		) t
 		JOIN tracked_symbols s ON s.symbol_id = t.symbol_id
 		WHERE rn <= $3
 		ORDER BY s.symbol, ts`,
-		string(timeframe), symbols, bars)
+		string(timeframe), symbols, bars, from)
 	if err != nil {
 		return nil, fmt.Errorf("loading %s series for %d symbols: %w", timeframe, len(symbols), err)
 	}
