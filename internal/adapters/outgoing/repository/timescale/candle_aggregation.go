@@ -176,8 +176,77 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 		window *= windowWidenFactor
 	}
 
+	// candles todavia esta en orden DESC aca (bucket DESC LIMIT $n de la
+	// consulta) -- candles[0] es el mas reciente, el unico que puede seguir
+	// asentandose.
+	if before == nil && len(candles) > 0 {
+		candles = r.dropUnsettledLastBucket(ctx, symbol, source, approxPeriod, candles)
+	}
+
 	for i, j := 0, len(candles)-1; i < j; i, j = i+1, j-1 {
 		candles[i], candles[j] = candles[j], candles[i]
 	}
 	return candles, nil
+}
+
+const (
+	settleCheckRetries  = 2
+	settleCheckInterval = time.Second
+)
+
+// hasDataAtOrAfterSQL: existencia acotada, no MAX(ts) -- Save() en vivo
+// (StreamLive) guarda cada vela M1 con withWatermark=false a proposito (una
+// vela en formacion puede llegar con datos parciales/erroneos que no deben
+// quedar como punto de retomada del backfill), asi que la tabla watermarks
+// NUNCA avanza durante el dia de trading, solo en el catchup/backfill -- un
+// intento anterior de este mismo fix uso GetWatermark() y quedaba siempre
+// desactualizado en vivo, descartando la ultima vela SIEMPRE, sin importar
+// si de verdad estaba asentada. `ts >= $3 LIMIT 1` cae en el chunk mas
+// reciente sin comprimir (bucketEnd siempre es reciente) en vez de escanear
+// toda la hypertable como haria MAX(ts) -- mismo motivo por el que
+// watermarks existe en primer lugar (ver comentario de Save()).
+const hasDataAtOrAfterSQL = `
+	SELECT EXISTS (
+		SELECT 1 FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
+		WHERE s.symbol = $1 AND c.timeframe = $2 AND c.ts >= $3
+		LIMIT 1
+	)
+`
+
+// dropUnsettledLastBucket confirma que ya llego al menos un M1 en o despues
+// del cierre del bucket mas reciente antes de entregarlo como "cerrado" --
+// mismo patron de "watermark" de sistemas de streaming (Flink/Spark/Kafka
+// Streams): un resultado de ventana solo se entrega una vez que se
+// confirmo que no puede llegar mas data para ella. Sin esto, un bucket
+// "cerrado por reloj" (timestamp+periodo <= ahora) podia devolverse con
+// datos incompletos si el ultimo M1 que lo compone todavia no habia
+// llegado a la BD -- confirmado en vivo con NMAX: el precio de la señal
+// quedo en el high de un momento a medio completar, no en el close final.
+// Reintenta un par de segundos (la vela SIGUIENTE ya deberia estar
+// entrando) antes de descartarlo -- mucho mas corto y preciso que un
+// margen de tiempo fijo adivinado.
+func (r *CandleRepository) dropUnsettledLastBucket(ctx context.Context, symbol string, source domain.Timeframe, approxPeriod time.Duration, candles []domain.Candle) []domain.Candle {
+	bucketEnd := candles[0].Timestamp.Add(approxPeriod)
+	if bucketEnd.After(time.Now()) {
+		// Todavia en formacion por reloj -- ni vale la pena esperar, no es
+		// una vela "cerrada" en ningun sentido todavia. La sirve el
+		// mecanismo de vela en vivo (seed/forwardLive del WS), no el
+		// historial -- sin este corte temprano, CUALQUIER carga de grafico
+		// en horario de mercado (el bucket mas reciente casi siempre sigue
+		// en formacion) pagaria los reintentos de mas abajo por nada.
+		return candles[1:]
+	}
+	for attempt := 0; attempt <= settleCheckRetries; attempt++ {
+		var settled bool
+		err := r.pool.QueryRow(ctx, hasDataAtOrAfterSQL, symbol, string(source), bucketEnd).Scan(&settled)
+		if err != nil || settled {
+			// err != nil: no bloquear la respuesta por un chequeo que fallo,
+			// se confia en los datos ya traidos.
+			return candles
+		}
+		if attempt < settleCheckRetries {
+			time.Sleep(settleCheckInterval)
+		}
+	}
+	return candles[1:]
 }
