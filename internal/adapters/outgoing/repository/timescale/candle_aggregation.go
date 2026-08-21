@@ -14,6 +14,10 @@ import (
 // exclusion de chunks del hypertable sigue funcionando igual. time_bucket
 // alinea a limites UTC por defecto (meses/anios incluidos, de forma
 // calendario) sin necesidad de pasar un origin propio.
+// symbol_id resuelto con subconsulta escalar, no JOIN -- ver el comentario
+// de continuousAggregateCandlesSQL mas abajo: con el JOIN, Postgres a veces
+// descarta el indice (symbol_id, timeframe) y hace Seq Scan sobre todos los
+// simbolos antes de filtrar.
 const getAggregatedCandlesSQL = `
 	SELECT bucket, open, high, low, close, volume, trade_count FROM (
 		SELECT
@@ -24,8 +28,9 @@ const getAggregatedCandlesSQL = `
 			(ARRAY_AGG(c.close ORDER BY c.ts DESC))[1] AS close,
 			SUM(c.volume) AS volume,
 			SUM(c.trade_count) AS trade_count
-		FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-		WHERE s.symbol = $1 AND c.timeframe = $2 AND c.ts >= $4
+		FROM candles c
+		WHERE c.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
+			AND c.timeframe = $2 AND c.ts >= $4
 			AND ($5::timestamptz IS NULL OR c.ts < $5)
 		GROUP BY bucket
 	) agg
@@ -51,31 +56,56 @@ var continuousAggregateViews = map[string]string{
 // TimescaleDB) sigue devolviendo el tramo mas reciente aun no materializado
 // con datos correctos, asi que no hay ventana con huecos mientras la
 // politica de refresco se pone al dia.
+//
+// symbol_id resuelto con una SUBCONSULTA escalar, no un JOIN -- confirmado
+// en vivo el 2026-08-21 con EXPLAIN ANALYZE: la version con JOIN hacia que
+// el planner de Postgres descartara el indice (symbol_id, bucket) que SI
+// existe sobre la tabla materializada y escaneara TODA la tabla (Seq Scan,
+// 2.85 millones de filas de TODOS los simbolos, 2.3s) para despues recien
+// filtrar por symbol_id via el join. Con la subconsulta, Postgres resuelve
+// symbol_id primero y usa Index Scan directo: 44ms, 52x mas rapido, mismo
+// resultado. Esto explicaba la mayor parte de la lentitud de M5/M15 que se
+// veia en el chart y en las señales, no la logica de Go alrededor.
 const continuousAggregateCandlesSQL = `
 	SELECT ca.bucket, ca.open, ca.high, ca.low, ca.close, ca.volume, ca.trade_count
-	FROM %s ca JOIN tracked_symbols s ON s.symbol_id = ca.symbol_id
-	WHERE s.symbol = $1 AND ca.bucket >= $2
+	FROM %s ca
+	WHERE ca.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
+		AND ca.bucket >= $2
 		AND ($3::timestamptz IS NULL OR ca.bucket < $3)
 	ORDER BY ca.bucket DESC LIMIT $4
 `
 
 // seriesAggregatedBatchSQL trae los ultimos $2 buckets por simbolo para
-// TODO el lote en una sola consulta -- ROW_NUMBER particionado por simbolo
-// encuentra los buckets mas recientes de cada uno sin importar cuantos
-// huecos haya de por medio, asi que a diferencia de getAggregatedCandles no
-// necesita ensanchar ventana ni watermark por simbolo. Confirmado en vivo
-// el 2026-08-20 con EXPLAIN ANALYZE contra candles_m15 (1.44M filas): 2.1s
-// para 8861 simbolos x 15 barras, contra los 14-15s que costaba el mismo
-// pedido via GetCandlesBatch (una consulta por simbolo, 4 workers).
+// TODO el lote en una sola consulta -- a diferencia de getAggregatedCandles
+// no necesita ensanchar ventana ni watermark por simbolo, cualquier hueco
+// de un simbolo no afecta a los demas.
+//
+// JOIN LATERAL, no JOIN + ROW_NUMBER -- confirmado en vivo el 2026-08-21
+// con EXPLAIN ANALYZE: la version con JOIN hacia que Postgres descartara el
+// indice (symbol_id, bucket) y escaneara TODA la tabla materializada (Seq
+// Scan sobre 2.85 millones de filas de TODOS los simbolos) para despues
+// filtrar por el lote pedido -- el "2.1s para 8861 simbolos" del commit
+// original de esta consulta ya pagaba ese costo, solo que quedaba oculto
+// porque el universo completo de todas formas necesitaba leer casi toda la
+// tabla. Con LATERAL, Postgres hace un Index Scan real por simbolo (uno a
+// la vez, pero cada uno acotado por el indice) -- medido con el tamano de
+// lote y bars real de signal-processing (700 simbolos, 15-150 barras):
+// 300-400ms, 10-13x mas rapido que el JOIN, y a diferencia del camino de UN
+// simbolo (continuousAggregateCandlesSQL) esto SI escala bien de lote chico
+// a lote de 700 porque el costo por simbolo es bajo con bars_needed
+// tipico (docenas, no cientos).
 const seriesAggregatedBatchSQL = `
-	SELECT symbol, bucket, open, high, low, close, volume, trade_count FROM (
-		SELECT s.symbol, ca.bucket, ca.open, ca.high, ca.low, ca.close, ca.volume, ca.trade_count,
-		       ROW_NUMBER() OVER (PARTITION BY ca.symbol_id ORDER BY ca.bucket DESC) AS rn
-		FROM %s ca JOIN tracked_symbols s ON s.symbol_id = ca.symbol_id
-		WHERE s.symbol = ANY($1)
-	) t
-	WHERE rn <= $2
-	ORDER BY symbol, bucket
+	SELECT s.symbol, ca.bucket, ca.open, ca.high, ca.low, ca.close, ca.volume, ca.trade_count
+	FROM tracked_symbols s
+	JOIN LATERAL (
+		SELECT bucket, open, high, low, close, volume, trade_count
+		FROM %s ca2
+		WHERE ca2.symbol_id = s.symbol_id
+		ORDER BY ca2.bucket DESC
+		LIMIT $2
+	) ca ON true
+	WHERE s.symbol = ANY($1)
+	ORDER BY s.symbol, ca.bucket
 `
 
 // GetSeriesAggregatedBatch es GetSeries (ver candle_repository.go) para un
@@ -207,8 +237,9 @@ const (
 // watermarks existe en primer lugar (ver comentario de Save()).
 const hasDataAtOrAfterSQL = `
 	SELECT EXISTS (
-		SELECT 1 FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-		WHERE s.symbol = $1 AND c.timeframe = $2 AND c.ts >= $3
+		SELECT 1 FROM candles c
+		WHERE c.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
+			AND c.timeframe = $2 AND c.ts >= $3
 		LIMIT 1
 	)
 `

@@ -130,11 +130,16 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 	})
 }
 
+// symbol_id resuelto con subconsulta escalar, no JOIN -- ver el comentario
+// de continuousAggregateCandlesSQL (candle_aggregation.go): con el JOIN,
+// Postgres a veces descarta el indice (symbol_id, timeframe) y hace Seq
+// Scan sobre todos los simbolos antes de filtrar.
 const getCandlesSQL = `
 	SELECT ts, open, high, low, close, volume, trade_count, vwap, source FROM (
 		SELECT c.ts, c.open, c.high, c.low, c.close, c.volume, c.trade_count, c.vwap, c.source
-		FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-		WHERE s.symbol = $1 AND c.timeframe = $2 AND c.ts >= $3
+		FROM candles c
+		WHERE c.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
+			AND c.timeframe = $2 AND c.ts >= $3
 			AND ($4::timestamptz IS NULL OR c.ts < $4)
 		ORDER BY c.ts DESC LIMIT $5
 	) recent ORDER BY ts ASC
