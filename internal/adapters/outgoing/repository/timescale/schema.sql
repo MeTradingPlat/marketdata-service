@@ -219,8 +219,18 @@ WHERE timeframe = 'M1'
 GROUP BY symbol_id, bucket
 WITH NO DATA;
 
+-- start_offset bajado de 3 dias a 1 dia el 2026-08-21: el unico caso que
+-- de verdad necesita re-materializar hacia atras es noWatermarkM1Fallback
+-- (daily_catchup.go) -- 24h para simbolos con datos pero sin watermark
+-- real. El viejo chequeo de huecos de 10 dias que hubiera justificado una
+-- ventana mas ancha ya no existe (ver universe_cycle.go: se saco por
+-- redundante y costoso, el M1 sweep retoma del watermark, solo re-juega
+-- el hueco del downtime). Con 3 dias, este job releia y recomputaba 3
+-- dias completos de M1 CADA 5 minutos -- confirmado en vivo el 2026-08-21:
+-- contribuia a que el VAIO llegara a load average 30 y entrara en swap
+-- bajo carga concurrente de escaneres.
 SELECT add_continuous_aggregate_policy('candles_m5',
-    start_offset => INTERVAL '3 days',
+    start_offset => INTERVAL '1 day',
     end_offset => INTERVAL '10 minutes',
     schedule_interval => INTERVAL '5 minutes',
     if_not_exists => TRUE);
@@ -253,8 +263,10 @@ WHERE timeframe = 'M1'
 GROUP BY symbol_id, bucket
 WITH NO DATA;
 
+-- start_offset bajado de 7 dias a 1 dia el 2026-08-21 -- mismo motivo que
+-- candles_m5, ver el comentario de esa politica arriba.
 SELECT add_continuous_aggregate_policy('candles_m15',
-    start_offset => INTERVAL '7 days',
+    start_offset => INTERVAL '1 day',
     end_offset => INTERVAL '20 minutes',
     schedule_interval => INTERVAL '15 minutes',
     if_not_exists => TRUE);
