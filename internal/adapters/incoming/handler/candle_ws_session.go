@@ -136,9 +136,28 @@ func (s *wsSession) handleUnsubscribe(symbol, timeframe string) {
 // lastHistoryTime protege la serie: jamas se emite una vela anterior al
 // ultimo bar del historial (lightweight-charts rompe con tiempos
 // descendentes).
+// seedAggregate convierte el seed (estampado con el FIN de su periodo, misma
+// convencion que el resto del grafico -- ver GetCurrentCandle: b.Time =
+// end.Unix()) al INICIO que usa el agregador de forwardLive para comparar y
+// crear periodos (period, mas abajo). Sin esta conversion, el primer tick
+// real que llegaba despues de CUALQUIER suscripcion nueva (abrir un grafico,
+// cambiar de simbolo o timeframe) nunca coincidia con el seed -- se mandaba
+// como "cerrado" con el timestamp corrido un periodo entero hacia adelante.
+// Confirmado en vivo: una vela fantasma "cerrada" en el horario equivocado en
+// cada suscripcion (ej. M5 sembrado en :35, fantasma cerrado en :40 en vez
+// del cierre real de la vela que seguia formandose).
+func seedAggregate(seed *dto.CandleBar, tf domain.Timeframe, now time.Time) *dto.CandleBar {
+	if seed == nil {
+		return nil
+	}
+	start := *seed
+	start.Time = livecandles.FormingPeriodStart(now, tf).Unix()
+	return &start
+}
+
 func (s *wsSession) forwardLive(ch <-chan domain.Candle, symbol, timeframe string, lastHistoryTime int64, seed *dto.CandleBar) {
 	tf := domain.Timeframe(timeframe)
-	agg := seed
+	agg := seedAggregate(seed, tf, time.Now())
 	for c := range ch {
 		// Un tick puede traer OHLC parcial (minuto sin trades, primer evento
 		// de un periodo) -- se dibuja igual (plano) y el siguiente tick lo
