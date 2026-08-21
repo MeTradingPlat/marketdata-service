@@ -21,8 +21,8 @@ func NewCandlesHandler(service in.GetCandlesService, current in.GetCurrentCandle
 
 // GetCurrentCandle sirve la vela EN FORMACION del simbolo+timeframe (query
 // param timeframe, default M1) -- para el grafico en vivo; los consumidores
-// de velas cerradas no la usan. 404 cuando no hay ningun dato previo del
-// simbolo para anclar la vela plana.
+// de velas cerradas no la usan. 404 cuando el periodo todavia no tiene
+// ningun tick real (no se fabrica una vela plana para cubrir el hueco).
 func (h *CandlesHandler) GetCurrentCandle(c echo.Context) error {
 	symbol := c.Param("symbol")
 	timeframe := domain.Timeframe(c.QueryParam("timeframe"))

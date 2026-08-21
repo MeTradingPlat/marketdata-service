@@ -28,8 +28,8 @@ type GetCandlesService interface {
 	GetCandlesBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) map[string][]domain.Candle
 }
 
-// GetCurrentCandleService devuelve la vela EN FORMACION del simbolo+timeframe
-// (plana al ultimo cierre si el periodo no tiene datos). Exclusiva del
+// GetCurrentCandleService devuelve la vela EN FORMACION del simbolo+timeframe,
+// o nil si el periodo todavia no tiene ningun tick real. Exclusiva del
 // grafico en vivo -- signal-processing consume velas cerradas y no pasa
 // por aca; la vela en formacion nunca se guarda.
 type GetCurrentCandleService interface {

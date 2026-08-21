@@ -16,10 +16,16 @@ import (
 // cerradas de la BD y jamás pasa por acá (la vela en formacion no se
 // guarda; el guardado solo ocurre al cerrar el periodo). Para M1 devuelve
 // la vela del minuto en curso tal cual la fusiona el pool (la mas fiel:
-// ticks sin esperar el guardado), o una plana al ultimo cierre si el minuto
-// no tuvo trades. Para los timeframes derivados agrega las M1 del periodo
-// desde la BD mas la M1 en curso del pool, y plana al ultimo cierre si el
-// periodo no tiene datos todavia (ej. D1 antes de la apertura).
+// ticks sin esperar el guardado), o nil si el minuto no tuvo ningun trade
+// todavia. Para los timeframes derivados agrega las M1 reales del periodo
+// desde la BD mas la M1 en curso del pool, y nil si el periodo no tiene
+// ningun dato real todavia (ej. D1 antes de la apertura) -- ANTES devolvia
+// una vela plana (open=high=low=close=ultimo cierre) para cubrir el hueco;
+// eso fabricaba una vela que nunca existio (confirmado en vivo: un candle
+// verde con open=close dibujado en post-mercado para un minuto sin ningun
+// trade real, que desaparecia solo al re-suscribirse). El estandar real de
+// graficos en vivo (Binance, TradingView) es: sin ticks no hay vela para
+// ese periodo, un hueco en el tiempo -- lightweight-charts lo soporta bien.
 type CurrentCandleService struct {
 	candles in.GetCandlesService
 	gateway out.MarketDataGateway
@@ -52,14 +58,14 @@ func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol stri
 	}
 
 	if tf == domain.M1 {
-		if liveBar != nil {
-			return liveBar, nil
-		}
-		return s.flatAtLastClose(ctx, symbol, end), nil
+		return liveBar, nil
 	}
 
-	// Timeframes derivados: agregar las M1 del periodo guardadas en BD y la
-	// M1 en curso del pool (que aun no se guardo, refresca el cierre/mechas).
+	// Timeframes derivados: agregar las M1 REALES del periodo guardadas en
+	// BD mas la M1 en curso del pool (que aun no se guardo, refresca el
+	// cierre/mechas). Si ninguna de las dos existe todavia, bar se queda
+	// nil -- sin inventar una plana, el periodo simplemente no tiene vela
+	// en formacion hasta que llegue el primer dato real.
 	m1s, err := s.candles.GetCandles(ctx, symbol, domain.M1, 2000, nil)
 	if err != nil {
 		return nil, fmt.Errorf("loading M1 bars for forming %s %s: %w", symbol, tf, err)
@@ -73,27 +79,7 @@ func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol stri
 	if liveBar != nil {
 		bar = foldBar(bar, liveBar, end)
 	}
-	if bar == nil {
-		bar = s.flatAtLastClose(ctx, symbol, end)
-	}
 	return bar, nil
-}
-
-// flatAtLastClose arma la vela en formacion "plana" al ultimo cierre
-// conocido (open=high=low=close) para el periodo que termina en end -- el
-// grafico siempre tiene la vela en formacion presente aunque el periodo no
-// tenga trades todavia; el primer tick real la corrige (mismo patron que
-// TradingView para periodos muertos). nil si no hay ningun cierre previo.
-func (s *CurrentCandleService) flatAtLastClose(ctx context.Context, symbol string, end time.Time) *dto.CandleBar {
-	m1s, err := s.candles.GetCandles(ctx, symbol, domain.M1, 1, nil)
-	if err != nil || len(m1s) == 0 {
-		return nil
-	}
-	last := m1s[len(m1s)-1]
-	if last.Close == 0 {
-		return nil
-	}
-	return &dto.CandleBar{Time: end.Unix(), Open: last.Close, High: last.Close, Low: last.Close, Close: last.Close, Closed: false}
 }
 
 func toFormingBar(c domain.Candle) *dto.CandleBar {

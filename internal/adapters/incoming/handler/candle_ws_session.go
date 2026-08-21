@@ -84,7 +84,6 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "no se pudo cargar el historial"})
 		return
 	}
-	s.sendJSON(dto.CandleHistoryMessage{Type: "history", Symbol: symbol, Timeframe: timeframe, Bars: toBars(candles)})
 
 	var lastTime int64
 	if len(candles) > 0 {
@@ -92,12 +91,17 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 	}
 
 	// La vela en formacion se siembra al instante desde el servicio (M1 del
-	// pool, derivados agregando las M1 del periodo, plana al ultimo cierre
-	// si el periodo no tiene datos) y se ENVIA como bar apenas suscrito --
-	// el grafico NO espera al primer tick para dibujarla (sin esto, la
-	// semilla solo quedaba como estado interno del agregador y un simbolo
-	// con ticks espaciados mostraba la grafica sin vela en formacion
-	// durante minutos). La agregacion en vivo sigue desde ahi (forwardLive).
+	// pool, derivados agregando las M1 reales del periodo) y va DENTRO del
+	// mismo mensaje de historial -- el grafico NO espera un mensaje aparte
+	// para dibujarla. GetCurrentCandle devuelve nil cuando el periodo
+	// todavia no tiene ningun tick real (ya no fabrica una plana al ultimo
+	// cierre: confirmado en vivo un candle fantasma open=close dibujado en
+	// post-mercado para un minuto sin ningun trade, que desaparecia solo al
+	// re-suscribirse) -- en ese caso no se agrega nada, el grafico
+	// simplemente no tiene vela en formacion hasta que llegue el primer
+	// dato real (forwardLive la crea ahi). La agregacion en vivo sigue
+	// desde ahi (forwardLive).
+	bars := toBars(candles)
 	var seed *dto.CandleBar
 	if s.current != nil {
 		seed, err = s.current.GetCurrentCandle(ctx, symbol, tf)
@@ -106,8 +110,9 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 		}
 	}
 	if seed != nil && seed.Time >= lastTime {
-		s.sendBar(symbol, timeframe, *seed, false)
+		bars = append(bars, *seed)
 	}
+	s.sendJSON(dto.CandleHistoryMessage{Type: "history", Symbol: symbol, Timeframe: timeframe, Bars: bars})
 
 	ch, cancel := s.broadcaster.Subscribe(symbol)
 	s.mu.Lock()
