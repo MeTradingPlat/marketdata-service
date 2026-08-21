@@ -135,6 +135,16 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 	// Mismo ensanchamiento de ventana que GetCandles (ver
 	// candle_repository.go): una zona muerta grande deja la pagina en 0
 	// velas y el frontend corta la paginacion creyendo que no hay mas.
+	// prevCount corta apenas ensanchar deja de traer mas velas -- un simbolo
+	// ralo (PCRX, CHRD: pocos minutos con trades reales) nunca junta `bars`
+	// sin importar cuanto se agrande la ventana. Faltaba aca el mismo corte
+	// que ya tiene GetCandles (confirmado en vivo el 2026-08-20 para ese
+	// caso): sin el, las 4 vueltas de ensanche (hasta 256x la ventana base)
+	// repetian la consulta completa sobre chunks comprimidos cada vez mas
+	// viejos aunque ya no hubiera nada nuevo que encontrar -- confirmado en
+	// vivo el 2026-08-21: 5-8s para cargar el grafico de un simbolo ralo,
+	// contra <1s de uno liquido.
+	prevCount := -1
 	for attempt := 0; ; attempt++ {
 		from := anchor.Add(-window)
 		rows, err := r.pool.Query(ctx, query, buildArgs(from)...)
@@ -159,9 +169,10 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 		if err != nil {
 			return nil, err
 		}
-		if len(candles) >= bars || attempt >= maxWindowWidenAttempts {
+		if len(candles) >= bars || attempt >= maxWindowWidenAttempts || len(candles) == prevCount {
 			break
 		}
+		prevCount = len(candles)
 		window *= windowWidenFactor
 	}
 
