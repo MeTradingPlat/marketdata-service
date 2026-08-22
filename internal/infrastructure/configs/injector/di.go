@@ -64,6 +64,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(livecandles.NewCurrentCandleService))
 	checkErr(container.Provide(intraday.NewGetIntradaySnapshotService))
 	checkErr(container.Provide(intraday.NewGetCurrentPricesService))
+	checkErr(container.Provide(fundamentals.NewFundamentalsCache))
 	checkErr(container.Provide(fundamentals.NewGetFundamentalsService))
 	checkErr(container.Provide(fundamentals.NewGetFundamentalsRealtimeService))
 	checkErr(container.Provide(metadata.NewGetSymbolsService))

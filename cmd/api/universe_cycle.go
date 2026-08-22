@@ -9,6 +9,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
+	fundamentals2 "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/rs/zerolog/log"
@@ -56,22 +57,22 @@ func refreshWithRetry(name string, fn func() error) {
 // /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
 // (ver topSymbolsPerMarket) despues del rollout M1 -- REST puro, no compite
 // por conexiones DxLink con las fases de velas.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, firstRun bool) {
 	// Pipeline del backfill (diseno del usuario): D1 primero, se cierran
 	// las conexiones, se calcula TODO lo que se calcula con D1 (beta y
 	// prevClose, por-simbolo con fecha), luego H1 (se cierra, se calcula lo
@@ -175,14 +176,29 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		return catchup.RefreshEarningsHistory(ctx, gateway, fundamentals)
 	})
 
+	// Recien aca terminaron TODOS los pasos sincronos que escriben
+	// fundamentales (beta, market metrics, earnings, prevClose, trading
+	// status) -- refrescar el cache de una sola vez aca, en vez de parchear
+	// campo por campo en cada Upsert, deja listo en memoria exactamente lo
+	// mismo que ya se abre a peticiones externas (backfilling.Store(false)
+	// via el defer de mas arriba corre justo despues de este return).
+	fundamentalsCache.ReloadAll(ctx)
+
 	// En background: descarga+parseo del companyfacts.zip de SEC EDGAR
 	// (~1.5GB, hasta 20 min la primera vez del dia) y de los ZIPs
 	// trimestrales de insiders no deben demorar el arranque de la ventana
 	// de mantenimiento ni bloquear la siguiente vuelta del ciclo -- mismo
 	// patron que CompletableFuture.runAsync en la version Java.
-	go refreshFundamentalsOnce(ctx, fundamentals, "external fundamentals", windowStart, func() error {
-		return catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals)
-	})
+	go func() {
+		refreshFundamentalsOnce(ctx, fundamentals, "external fundamentals", windowStart, func() error {
+			return catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals)
+		})
+		// sharesOutstanding/floatShares/shortInterest recien quedan
+		// disponibles cuando esto termina (hasta 20 min despues de abierto
+		// el gate) -- un segundo reload los recoge sin esperar a la
+		// proxima ventana de mantenimiento.
+		fundamentalsCache.ReloadAll(ctx)
+	}()
 }
 
 // refreshFundamentalsOnce corre el refresh solo si no se completo ya en la

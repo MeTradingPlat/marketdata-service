@@ -15,6 +15,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/injector"
@@ -53,6 +54,7 @@ func main() {
 		r *router.Router,
 		backfilling *atomic.Bool,
 		snapshotTracker *intraday.SnapshotTracker,
+		fundamentalsCache *fundamentals.FundamentalsCache,
 	) {
 		// signal.NotifyContext cancela ctx al recibir SIGTERM/SIGINT --
 		// eso apaga limpio el pool de DB, las goroutines en vivo y el catch-up
@@ -87,10 +89,10 @@ func main() {
 		// Ciclo del universo completo -- D1 fase 1, H1 fase 2, M1 fase 3 --
 		// corre en background (no bloquea el arranque del servidor HTTP) y se
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
-		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker)
+		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache)
 		StartLiveReconcileLoop(ctx, ingest, gateway, symbols)
 		StartSaveRetryLoop(ctx, ingest)
-		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo)
+		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo)
 
 		r.Init()

@@ -10,12 +10,12 @@ import (
 )
 
 type getFundamentalsRealtimeService struct {
-	fundamentals out.FundamentalsRepository
+	fundamentals *FundamentalsCache
 	symbols      out.SymbolRepository
 	intraday     in.GetIntradaySnapshotService
 }
 
-func NewGetFundamentalsRealtimeService(fundamentals out.FundamentalsRepository, symbols out.SymbolRepository, intraday in.GetIntradaySnapshotService) in.GetFundamentalsRealtimeService {
+func NewGetFundamentalsRealtimeService(fundamentals *FundamentalsCache, symbols out.SymbolRepository, intraday in.GetIntradaySnapshotService) in.GetFundamentalsRealtimeService {
 	return &getFundamentalsRealtimeService{fundamentals: fundamentals, symbols: symbols, intraday: intraday}
 }
 
@@ -25,10 +25,7 @@ func NewGetFundamentalsRealtimeService(fundamentals out.FundamentalsRepository, 
 // fundamentals Y sin symbol tracked no aparece en el resultado -- no hay
 // nada real que devolverle a signal-processing-service para el.
 func (s *getFundamentalsRealtimeService) GetFundamentalsRealtime(ctx context.Context, symbols []string) map[string]dto.FundamentalRealtime {
-	fundamentalsBySymbol, err := s.fundamentals.GetBatch(ctx, symbols)
-	if err != nil {
-		fundamentalsBySymbol = map[string]domain.Fundamentals{}
-	}
+	fundamentalsBySymbol := s.fundamentals.GetBatch(symbols)
 	equitiesBySymbol, err := s.symbols.GetBatch(ctx, symbols)
 	if err != nil {
 		equitiesBySymbol = map[string]domain.Symbol{}

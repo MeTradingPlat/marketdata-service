@@ -7,6 +7,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 )
 
 const tradingStatusInterval = 15 * time.Minute
@@ -23,7 +24,7 @@ var lastTradingStatusAtUnix atomic.Int64
 // que de verdad pierde sentido si se entera recien la manana siguiente (ver
 // RefreshTradingStatus). Fuera de esa ventana no hay nada que descubrir, no
 // vale la pena golpear la API por las dudas.
-func StartTradingStatusLoop(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, fundamentals out.FundamentalsRepository) {
+func StartTradingStatusLoop(ctx context.Context, gateway out.MarketDataGateway, symbols out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentals.FundamentalsCache) {
 	go func() {
 		ticker := time.NewTicker(tradingStatusInterval)
 		defer ticker.Stop()
@@ -35,8 +36,14 @@ func StartTradingStatusLoop(ctx context.Context, gateway out.MarketDataGateway, 
 				if !isMarketActiveWindow(time.Now()) {
 					continue
 				}
-				catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
+				catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentalsRepo)
 				lastTradingStatusAtUnix.Store(time.Now().Unix())
+				// El halt es el unico fundamental que pierde sentido si se
+				// entera al dia siguiente -- refrescar el cache aca, no solo
+				// en el ciclo nocturno, para que un HALT nuevo se vea en
+				// /marketdata/fundamentals/realtime dentro de los mismos 15
+				// min en que ya lo ve la BD.
+				fundamentalsCache.ReloadAll(ctx)
 			}
 		}
 	}()
