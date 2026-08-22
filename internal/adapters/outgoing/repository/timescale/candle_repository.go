@@ -211,11 +211,24 @@ func getSeriesFrom(ctx context.Context, pool *pgxpool.Pool, symbols []string, ti
 	// descomprimirlos -- bars*3+60 periodos de margen (igual de generoso que
 	// el ensanchamiento de ventana de GetCandles) alcanza de sobra para los
 	// pedidos chicos (5-15 barras) que hace este camino.
+	//
+	// minLookback pisa esa formula cuando da una ventana absurdamente angosta
+	// -- SeedLastClose llama esto con bars=1 (M1: bars*3+60 = 63 MINUTOS), a
+	// proposito para sobrevivir el hueco entre el cierre de ayer y el primer
+	// tick de hoy (ver el comentario de SnapshotTracker.last). Confirmado en
+	// vivo el 2026-08-22: un arranque en fin de semana (horas despues del
+	// cierre del viernes) caia fuera de esos 63 minutos, la siembra volvia 0
+	// simbolos, y CADA lookup de precio en vivo terminaba cayendo al fallback
+	// individual de resolvePrice en vez de servirse del tracker -- 10 dias
+	// cubre de sobra cualquier fin de semana largo sin resucitar el problema
+	// original (D1 con bars=500 ya da ~4 anios de ventana, muy por encima de
+	// este piso).
+	const minLookback = 10 * 24 * time.Hour
 	duration, err := timeframe.Duration()
 	if err != nil {
 		return nil, fmt.Errorf("resolving duration for %s: %w", timeframe, err)
 	}
-	from := time.Now().Add(-time.Duration(bars*3+60) * duration)
+	from := time.Now().Add(-max(time.Duration(bars*3+60)*duration, minLookback))
 	rows, err := pool.Query(ctx, `
 		SELECT s.symbol, ts, open, high, low, close, volume, source
 		FROM (
