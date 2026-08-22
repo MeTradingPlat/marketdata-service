@@ -64,16 +64,29 @@ func main() {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 		defer stop()
 
+		// fatalStartup cierra las conexiones DxLink que se alcanzaron a abrir
+		// ANTES de morir -- sin esto, un fallo de arranque (ej. WarmUp que
+		// choca con el limite de sesiones) salia con log.Fatal() sin pasar
+		// por el cierre ordenado, dejando huerfanas exactamente las sesiones
+		// parciales que la siguiente vuelta del restart iba a necesitar
+		// libres. Confirmado en vivo el 2026-08-22: un WarmUp fallido por
+		// limite de sesiones crasheaba sin liberar nada, y el reinicio
+		// automatico de Docker volvia a chocar con el mismo limite.
+		fatalStartup := func(err error, msg string) {
+			gateway.ResetLiveConnections()
+			log.Fatal().Err(err).Msg(msg)
+		}
+
 		if _, err := oauth.RefreshAccessToken(ctx); err != nil {
-			log.Fatal().Err(err).Msg("failed to obtain initial TastyTrade access token")
+			fatalStartup(err, "failed to obtain initial TastyTrade access token")
 		}
 		if err := quoteToken.Refresh(ctx); err != nil {
-			log.Fatal().Err(err).Msg("failed to obtain initial DxLink quote token")
+			fatalStartup(err, "failed to obtain initial DxLink quote token")
 		}
 		tastytrade.StartProactiveRefresh(ctx, oauth, quoteToken)
 
 		if err := pool.WarmUp(ctx); err != nil {
-			log.Fatal().Err(err).Msg("failed to warm up candle pool")
+			fatalStartup(err, "failed to warm up candle pool")
 		}
 
 		// Red de seguridad: si ActiveSymbols fallara en la primera pasada del
@@ -83,7 +96,7 @@ func main() {
 			testSymbols[i] = domain.Symbol{Symbol: s, Market: cfg.TestMarket}
 		}
 		if err := symbols.Upsert(ctx, testSymbols); err != nil {
-			log.Fatal().Err(err).Msg("failed to track test symbols")
+			fatalStartup(err, "failed to track test symbols")
 		}
 
 		// Ciclo del universo completo -- D1 fase 1, H1 fase 2, M1 fase 3 --
