@@ -11,14 +11,27 @@ import (
 
 const currentPricesWorkers = 20
 
+// dbFallbackConcurrencyLimit acota, GLOBALMENTE (compartido entre TODAS las
+// llamadas a GetCurrentPrices, sin importar cuantos escaneres o requests HTTP
+// esten en vuelo a la vez), cuantas resolvePrice pueden tocar la BD al mismo
+// tiempo. currentPricesWorkers ya acota el paralelismo DENTRO de un request,
+// pero con varios escaneres pidiendo el universo completo a la vez eso no
+// alcanza: 10 requests concurrentes x 20 workers cada uno pueden sumar 200
+// intentos simultaneos contra un pool de 25 conexiones (confirmado en vivo:
+// 5% de las llamadas a /marketdata/quotes/rest tardando ~15s por esa cola).
+// Este semaforo es el limite real, independiente de cuantos escaneres existan
+// o como cada cliente configure su propia concurrencia.
+const dbFallbackConcurrencyLimit = 15
+
 type getCurrentPricesService struct {
 	repo    out.CandleRepository
 	gateway out.MarketDataGateway
 	tracker *SnapshotTracker
+	dbSem   chan struct{}
 }
 
 func NewGetCurrentPricesService(repo out.CandleRepository, gateway out.MarketDataGateway, tracker *SnapshotTracker) in.GetCurrentPricesService {
-	return &getCurrentPricesService{repo: repo, gateway: gateway, tracker: tracker}
+	return &getCurrentPricesService{repo: repo, gateway: gateway, tracker: tracker, dbSem: make(chan struct{}, dbFallbackConcurrencyLimit)}
 }
 
 // GetCurrentPrices es la version liviana de GetSnapshot -- solo el precio,
@@ -69,6 +82,17 @@ func (s *getCurrentPricesService) resolvePrice(ctx context.Context, symbol strin
 	if price, _, ok := s.tracker.LastClose(symbol); ok {
 		return price, true
 	}
+
+	select {
+	case s.dbSem <- struct{}{}:
+		defer func() { <-s.dbSem }()
+	case <-ctx.Done():
+		// El caller ya se rindio (timeout del lado de signal-processing) --
+		// no vale la pena tomar un cupo del semaforo para un trabajo que
+		// nadie va a leer.
+		return 0, false
+	}
+
 	lastM1, err := s.repo.GetCandles(ctx, symbol, domain.M1, 1, nil)
 	if err != nil || len(lastM1) == 0 {
 		return 0, false
