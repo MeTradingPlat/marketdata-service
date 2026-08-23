@@ -49,6 +49,9 @@ const batchWindowMargin = 6
 // sola consulta -- mismo patron time_bucket que getAggregatedCandlesSQL,
 // pero con JOIN LATERAL en vez de la subconsulta escalar (un solo simbolo
 // por consulta ahi) porque aca hay que resolver el lote entero de una vez.
+// Solo se usa cuando el timeframe base es D1 (ver sourcePeriodOf) -- M1/H1
+// usan seriesRawBatchSQL + aggregateIntoBuckets (mucho mas rapido, ver esa
+// consulta mas abajo).
 //
 // JOIN LATERAL, no JOIN + ROW_NUMBER -- confirmado en vivo el 2026-08-21
 // con EXPLAIN ANALYZE (entonces contra el continuous aggregate, mismo
@@ -81,18 +84,54 @@ const seriesAggregatedBatchSQL = `
 	ORDER BY s.symbol, agg.bucket
 `
 
+// seriesRawBatchSQL trae las ultimas $2 velas CRUDAS por simbolo (sin
+// GROUP BY) para que la agregacion en buckets la haga aggregateIntoBuckets
+// en Go -- confirmado en vivo el 2026-08-23 con EXPLAIN ANALYZE sobre 700
+// simbolos reales: la version con GROUP BY+ARRAY_AGG+Sort de
+// seriesAggregatedBatchSQL tardaba 1064ms contra 75ms de esta misma lectura
+// sin agrupar (14x), porque ARRAY_AGG+GroupAggregate+Sort le cuesta a
+// Postgres mucho mas que un Index Scan simple -- el trabajo de agrupar 5-60x
+// menos filas en un loop de Go es órdenes de magnitud mas barato. Devuelve
+// en orden DESC (mismo orden que espera aggregateIntoBuckets).
+const seriesRawBatchSQL = `
+	SELECT s.symbol, raw.ts, raw.open, raw.high, raw.low, raw.close, raw.volume, raw.trade_count
+	FROM tracked_symbols s
+	JOIN LATERAL (
+		SELECT c.ts, c.open, c.high, c.low, c.close, c.volume, c.trade_count
+		FROM candles c
+		WHERE c.symbol_id = s.symbol_id AND c.timeframe = $3 AND c.ts >= $4
+		ORDER BY c.ts DESC
+		LIMIT $2
+	) raw ON true
+	WHERE s.symbol = ANY($1)
+	ORDER BY s.symbol, raw.ts DESC
+`
+
+// rawFetchMargin: cuantas veces bars*ratio de filas crudas se piden de mas,
+// para no quedar cortos por huecos (fin de semana, mercado cerrado) dentro
+// de la ventana de fecha -- mismo espiritu que windowWidenFactor, pero como
+// tope de LIMIT en vez de ensanche de ventana (el batch no reintenta por
+// simbolo, ver el comentario de batchWindowMargin).
+const rawFetchMargin = 4
+
 // GetSeriesAggregatedBatch es GetSeries (ver candle_repository.go) para un
 // timeframe derivado -- agrega el timeframe base (source/bucket/approxPeriod,
 // ver domain.Timeframe.Aggregation) on-the-fly para TODO el lote en una sola
 // consulta, sin depender de un continuous aggregate materializado (retirado:
 // solo cubria M5/M15 y su politica de refresco no backfillea historia
 // vieja, confirmado en vivo el 2026-08-23 como causa de un hueco real de
-// datos en M5).
+// datos en M5). Cuando el timeframe base es M1/H1 agrega crudo en Go
+// (mucho mas rapido, ver seriesRawBatchSQL); D1 sigue agregandose en SQL
+// (ver sourcePeriodOf).
 func (r *CandleRepository) GetSeriesAggregatedBatch(ctx context.Context, symbols []string, timeframe, source domain.Timeframe, bucket string, approxPeriod time.Duration, bars int) (map[string][]domain.Candle, error) {
 	if len(symbols) == 0 {
 		return map[string][]domain.Candle{}, nil
 	}
 	since := time.Now().Add(-time.Duration(bars*batchWindowMargin+60) * approxPeriod)
+
+	if sourcePeriod, ok := sourcePeriodOf(source); ok {
+		return r.getSeriesAggregatedBatchRaw(ctx, symbols, timeframe, source, approxPeriod, sourcePeriod, bars, since)
+	}
 
 	rows, err := r.pool.Query(ctx, seriesAggregatedBatchSQL, symbols, bars, string(source), bucket, since)
 	if err != nil {
@@ -113,6 +152,94 @@ func (r *CandleRepository) GetSeriesAggregatedBatch(ctx context.Context, symbols
 	return result, rows.Err()
 }
 
+func (r *CandleRepository) getSeriesAggregatedBatchRaw(ctx context.Context, symbols []string, timeframe, source domain.Timeframe, approxPeriod, sourcePeriod time.Duration, bars int, since time.Time) (map[string][]domain.Candle, error) {
+	ratio := int(approxPeriod / sourcePeriod)
+	if ratio < 1 {
+		ratio = 1
+	}
+	rawLimit := bars*ratio*rawFetchMargin + 60
+
+	rows, err := r.pool.Query(ctx, seriesRawBatchSQL, symbols, rawLimit, string(source), since)
+	if err != nil {
+		return nil, fmt.Errorf("querying raw series batch for %d symbols: %w", len(symbols), err)
+	}
+	defer rows.Close()
+
+	rawBySymbol := make(map[string][]domain.Candle)
+	for rows.Next() {
+		var c domain.Candle
+		if err := rows.Scan(&c.Symbol, &c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount); err != nil {
+			return nil, fmt.Errorf("scanning raw series batch row: %w", err)
+		}
+		rawBySymbol[c.Symbol] = append(rawBySymbol[c.Symbol], c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string][]domain.Candle, len(rawBySymbol))
+	for symbol, raw := range rawBySymbol {
+		buckets := aggregateIntoBuckets(raw, timeframe, approxPeriod, bars)
+		for i, j := 0, len(buckets)-1; i < j; i, j = i+1, j-1 {
+			buckets[i], buckets[j] = buckets[j], buckets[i]
+		}
+		result[symbol] = buckets
+	}
+	return result, nil
+}
+
+// rawCandlesForBucketingSQL: identica a la subconsulta interna de
+// getCandlesSQL (candle_repository.go) pero sin el reordenado final a ASC
+// -- aggregateIntoBuckets necesita orden DESC (ver su comentario), y solo
+// hacen falta las columnas OHLCV, no vwap/source.
+const rawCandlesForBucketingSQL = `
+	SELECT c.ts, c.open, c.high, c.low, c.close, c.volume, c.trade_count
+	FROM candles c
+	WHERE c.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
+		AND c.timeframe = $2 AND c.ts >= $3
+		AND ($4::timestamptz IS NULL OR c.ts < $4)
+	ORDER BY c.ts DESC LIMIT $5
+`
+
+func (r *CandleRepository) queryRawCandles(ctx context.Context, symbol string, source domain.Timeframe, from time.Time, before *time.Time, limit int) ([]domain.Candle, error) {
+	rows, err := r.pool.Query(ctx, rawCandlesForBucketingSQL, symbol, string(source), from, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying raw candles for bucketing %s %s: %w", symbol, source, err)
+	}
+	defer rows.Close()
+
+	raw := make([]domain.Candle, 0, limit)
+	for rows.Next() {
+		c := domain.Candle{Symbol: symbol}
+		if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount); err != nil {
+			return nil, fmt.Errorf("scanning raw candle for bucketing: %w", err)
+		}
+		raw = append(raw, c)
+	}
+	return raw, rows.Err()
+}
+
+func (r *CandleRepository) queryGroupedCandles(ctx context.Context, symbol string, timeframe, source domain.Timeframe, bucket string, from time.Time, before *time.Time, bars int) ([]domain.Candle, error) {
+	rows, err := r.pool.Query(ctx, getAggregatedCandlesSQL, symbol, string(source), bucket, from, before, bars)
+	if err != nil {
+		return nil, fmt.Errorf("querying aggregated candles for %s %s: %w", symbol, timeframe, err)
+	}
+	defer rows.Close()
+
+	// candles arranca como slice vacio, no nil -- un nil slice serializa
+	// como "null" en JSON en vez de "[]", rompiendo al frontend en
+	// loadMoreHistory (ver el mismo comentario en GetCandles).
+	candles := make([]domain.Candle, 0)
+	for rows.Next() {
+		c := domain.Candle{Symbol: symbol, Timeframe: timeframe, Source: "aggregated"}
+		if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount); err != nil {
+			return nil, fmt.Errorf("scanning aggregated candle row: %w", err)
+		}
+		candles = append(candles, c)
+	}
+	return candles, rows.Err()
+}
+
 func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol string, timeframe, source domain.Timeframe, bucket string, approxPeriod time.Duration, bars int, before *time.Time) ([]domain.Candle, error) {
 	anchor := before
 	if anchor == nil {
@@ -125,6 +252,20 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 		}
 		anchor = newest
 	}
+
+	// sourcePeriod/ratio: cuando la fuente es M1/H1, se lee crudo y se agrupa
+	// en Go (aggregateIntoBuckets) en vez de GROUP BY en SQL -- confirmado en
+	// vivo el 2026-08-23, mismo motivo que GetSeriesAggregatedBatch (ver esa
+	// funcion en este archivo).
+	sourcePeriod, useRaw := sourcePeriodOf(source)
+	ratio := 1
+	if useRaw {
+		ratio = int(approxPeriod / sourcePeriod)
+		if ratio < 1 {
+			ratio = 1
+		}
+	}
+
 	candles := make([]domain.Candle, 0)
 	window := time.Duration(bars*2+30) * approxPeriod
 	// Mismo ensanchamiento de ventana que GetCandles (ver
@@ -142,25 +283,17 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 	prevCount := -1
 	for attempt := 0; ; attempt++ {
 		from := anchor.Add(-window)
-		rows, err := r.pool.Query(ctx, getAggregatedCandlesSQL, symbol, string(source), bucket, from, before, bars)
-		if err != nil {
-			return nil, fmt.Errorf("querying aggregated candles for %s %s: %w", symbol, timeframe, err)
-		}
-		// candles arranca como slice vacio, no nil -- ver el mismo
-		// comentario en GetCandles (candle_repository.go): un nil slice
-		// serializa como "null" en JSON en vez de "[]", rompiendo al
-		// frontend en loadMoreHistory.
-		candles = candles[:0]
-		for rows.Next() {
-			c := domain.Candle{Symbol: symbol, Timeframe: timeframe, Source: "aggregated"}
-			if err := rows.Scan(&c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning aggregated candle row: %w", err)
+		var err error
+		if useRaw {
+			rawLimit := bars*ratio*rawFetchMargin + 60
+			var raw []domain.Candle
+			raw, err = r.queryRawCandles(ctx, symbol, source, from, before, rawLimit)
+			if err == nil {
+				candles = aggregateIntoBuckets(raw, timeframe, approxPeriod, bars)
 			}
-			candles = append(candles, c)
+		} else {
+			candles, err = r.queryGroupedCandles(ctx, symbol, timeframe, source, bucket, from, before, bars)
 		}
-		err = rows.Err()
-		rows.Close()
 		if err != nil {
 			return nil, err
 		}
