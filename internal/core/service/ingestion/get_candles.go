@@ -143,6 +143,17 @@ func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []strin
 				s.cache.put(candleCacheKey(symbol, timeframe, bars, nil), candles)
 				result[symbol] = candles
 			}
+			// Un simbolo sin filas en el batch (sin dato M1 real, ~9.7% del
+			// universo NYSE+NASDAQ+AMEX confirmado en vivo el 2026-08-23) no
+			// aparece en batch y sin este cacheo quedaba "missing" para
+			// siempre -- pagando el JOIN LATERAL de nuevo en CADA llamada,
+			// sin ningun beneficio del cache. Mismo comportamiento que ya
+			// tiene GetCandles (put incondicional aunque candles sea vacio).
+			for _, symbol := range missing {
+				if _, ok := batch[symbol]; !ok {
+					s.cache.put(candleCacheKey(symbol, timeframe, bars, nil), []domain.Candle{})
+				}
+			}
 			return result
 		}
 	}
