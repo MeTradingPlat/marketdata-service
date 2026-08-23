@@ -90,16 +90,18 @@ func (s *getCandlesService) GetCandles(ctx context.Context, symbol string, timef
 const candlesBatchFallbackWorkers = 4
 
 // GetCandlesBatch resuelve TODO el lote en una sola consulta cuando el
-// timeframe tiene continuous aggregate (M5/M15, ver
-// out.CandleRepository.GetSeriesAggregatedBatch) -- confirmado en vivo el
-// 2026-08-20: el camino per-simbolo (candlesBatchFallbackWorkers) tardaba
-// 14-15s con el universo completo bajo carga concurrente de escaneres,
-// contra 2.1s de la consulta en lote via EXPLAIN ANALYZE. Para el resto de
-// timeframes derivados (sin vista propia) o si el batch agregado da error,
-// cae al camino per-simbolo de siempre.
+// timeframe es derivado (ver domain.Timeframe.Aggregation) -- agrega el
+// timeframe base on-the-fly via out.CandleRepository.GetSeriesAggregatedBatch
+// en vez de depender de un continuous aggregate materializado (retirado:
+// solo cubria M5/M15, y su politica de refresco no backfillea historia
+// vieja -- confirmado en vivo el 2026-08-23 como causa de un hueco real de
+// datos). Antes de este cambio, el resto de timeframes derivados (todos
+// menos M5/M15) no tenian ningun camino en lote y siempre caian al
+// per-simbolo; ahora lo tienen todos por igual. Si el batch agregado da
+// error, cae al camino per-simbolo de siempre.
 func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) map[string][]domain.Candle {
-	if _, bucket, _, ok := timeframe.Aggregation(); ok {
-		if batch, hasView, err := s.repo.GetSeriesAggregatedBatch(ctx, symbols, timeframe, bucket, bars); err == nil && hasView {
+	if source, bucket, approxPeriod, ok := timeframe.Aggregation(); ok {
+		if batch, err := s.repo.GetSeriesAggregatedBatch(ctx, symbols, timeframe, source, bucket, approxPeriod, bars); err == nil {
 			return batch
 		}
 	}

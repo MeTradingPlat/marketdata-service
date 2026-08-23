@@ -15,7 +15,7 @@ import (
 // alinea a limites UTC por defecto (meses/anios incluidos, de forma
 // calendario) sin necesidad de pasar un origin propio.
 // symbol_id resuelto con subconsulta escalar, no JOIN -- ver el comentario
-// de continuousAggregateCandlesSQL mas abajo: con el JOIN, Postgres a veces
+// de seriesAggregatedBatchSQL mas abajo: con el JOIN, Postgres a veces
 // descarta el indice (symbol_id, timeframe) y hace Seq Scan sobre todos los
 // simbolos antes de filtrar.
 const getAggregatedCandlesSQL = `
@@ -37,94 +37,66 @@ const getAggregatedCandlesSQL = `
 	ORDER BY bucket DESC LIMIT $6
 `
 
-// continuousAggregateViews mapea el bucket ("5 minutes"/"15 minutes") a su
-// continuous aggregate de TimescaleDB (ver schema.sql, candles_m5/m15) --
-// solo M5/M15 lo tienen: son los timeframes que de verdad usan los
-// escaneres y los que mas filas M1 agrupan por bucket. El resto de
-// timeframes derivados (M2/M3/M10/M30/M45, H2-H12, D2-Y1) siguen por
-// getAggregatedCandlesSQL -- agrupan pocas filas (base H1/D1) o se piden
-// poco, no justifican otra vista materializada todavia.
-var continuousAggregateViews = map[string]string{
-	"5 minutes":  "candles_m5",
-	"15 minutes": "candles_m15",
-}
+// batchWindowMargin: sin ensanche de ventana (a diferencia de
+// getAggregatedCandles) -- el batch acepta que un simbolo ralo devuelva
+// menos velas de las pedidas en vez de pagar reintentos por simbolo (ver
+// GetSeriesAggregatedBatch). x6 en vez de x2 (que usa el camino de un solo
+// simbolo) cubre fines de semana/horas fuera de mercado sin ese reintento.
+const batchWindowMargin = 6
 
-// continuousAggregateCandlesSQL lee del continuous aggregate ya calculado
-// en vez de agrupar M1 cruda en cada consulta -- mismo contrato de
-// resultado que getAggregatedCandlesSQL (bucket DESC + LIMIT, el llamador
-// invierte a ASC), pero sin el GROUP BY: real-time aggregation (default de
-// TimescaleDB) sigue devolviendo el tramo mas reciente aun no materializado
-// con datos correctos, asi que no hay ventana con huecos mientras la
-// politica de refresco se pone al dia.
-//
-// symbol_id resuelto con una SUBCONSULTA escalar, no un JOIN -- confirmado
-// en vivo el 2026-08-21 con EXPLAIN ANALYZE: la version con JOIN hacia que
-// el planner de Postgres descartara el indice (symbol_id, bucket) que SI
-// existe sobre la tabla materializada y escaneara TODA la tabla (Seq Scan,
-// 2.85 millones de filas de TODOS los simbolos, 2.3s) para despues recien
-// filtrar por symbol_id via el join. Con la subconsulta, Postgres resuelve
-// symbol_id primero y usa Index Scan directo: 44ms, 52x mas rapido, mismo
-// resultado. Esto explicaba la mayor parte de la lentitud de M5/M15 que se
-// veia en el chart y en las señales, no la logica de Go alrededor.
-const continuousAggregateCandlesSQL = `
-	SELECT ca.bucket, ca.open, ca.high, ca.low, ca.close, ca.volume, ca.trade_count
-	FROM %s ca
-	WHERE ca.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
-		AND ca.bucket >= $2
-		AND ($3::timestamptz IS NULL OR ca.bucket < $3)
-	ORDER BY ca.bucket DESC LIMIT $4
-`
-
-// seriesAggregatedBatchSQL trae los ultimos $2 buckets por simbolo para
-// TODO el lote en una sola consulta -- a diferencia de getAggregatedCandles
-// no necesita ensanchar ventana ni watermark por simbolo, cualquier hueco
-// de un simbolo no afecta a los demas.
+// seriesAggregatedBatchSQL agrupa el timeframe base ($3) crudo en buckets
+// de ancho $4 y trae los ultimos $2 por simbolo para TODO el lote en una
+// sola consulta -- mismo patron time_bucket que getAggregatedCandlesSQL,
+// pero con JOIN LATERAL en vez de la subconsulta escalar (un solo simbolo
+// por consulta ahi) porque aca hay que resolver el lote entero de una vez.
 //
 // JOIN LATERAL, no JOIN + ROW_NUMBER -- confirmado en vivo el 2026-08-21
-// con EXPLAIN ANALYZE: la version con JOIN hacia que Postgres descartara el
-// indice (symbol_id, bucket) y escaneara TODA la tabla materializada (Seq
-// Scan sobre 2.85 millones de filas de TODOS los simbolos) para despues
-// filtrar por el lote pedido -- el "2.1s para 8861 simbolos" del commit
-// original de esta consulta ya pagaba ese costo, solo que quedaba oculto
-// porque el universo completo de todas formas necesitaba leer casi toda la
-// tabla. Con LATERAL, Postgres hace un Index Scan real por simbolo (uno a
-// la vez, pero cada uno acotado por el indice) -- medido con el tamano de
-// lote y bars real de signal-processing (700 simbolos, 15-150 barras):
-// 300-400ms, 10-13x mas rapido que el JOIN, y a diferencia del camino de UN
-// simbolo (continuousAggregateCandlesSQL) esto SI escala bien de lote chico
-// a lote de 700 porque el costo por simbolo es bajo con bars_needed
-// tipico (docenas, no cientos).
+// con EXPLAIN ANALYZE (entonces contra el continuous aggregate, mismo
+// principio aca contra la tabla cruda): la version con JOIN hacia que
+// Postgres descartara el indice (symbol_id, timeframe, ts) y escaneara TODA
+// la tabla antes de filtrar por el lote pedido. Con LATERAL, Postgres hace
+// un Index Scan real por simbolo, acotado ademas por c.ts >= $5
+// (batchWindowMargin) para no agrupar mas M1 de la necesaria.
 const seriesAggregatedBatchSQL = `
-	SELECT s.symbol, ca.bucket, ca.open, ca.high, ca.low, ca.close, ca.volume, ca.trade_count
+	SELECT s.symbol, agg.bucket, agg.open, agg.high, agg.low, agg.close, agg.volume, agg.trade_count
 	FROM tracked_symbols s
 	JOIN LATERAL (
-		SELECT bucket, open, high, low, close, volume, trade_count
-		FROM %s ca2
-		WHERE ca2.symbol_id = s.symbol_id
-		ORDER BY ca2.bucket DESC
-		LIMIT $2
-	) ca ON true
+		SELECT bucket, open, high, low, close, volume, trade_count FROM (
+			SELECT
+				time_bucket($4::interval, c.ts) AS bucket,
+				(ARRAY_AGG(c.open ORDER BY c.ts ASC))[1] AS open,
+				MAX(c.high) AS high,
+				MIN(c.low) AS low,
+				(ARRAY_AGG(c.close ORDER BY c.ts DESC))[1] AS close,
+				SUM(c.volume) AS volume,
+				SUM(c.trade_count) AS trade_count
+			FROM candles c
+			WHERE c.symbol_id = s.symbol_id AND c.timeframe = $3 AND c.ts >= $5
+			GROUP BY bucket
+			ORDER BY bucket DESC
+			LIMIT $2
+		) b
+	) agg ON true
 	WHERE s.symbol = ANY($1)
-	ORDER BY s.symbol, ca.bucket
+	ORDER BY s.symbol, agg.bucket
 `
 
 // GetSeriesAggregatedBatch es GetSeries (ver candle_repository.go) para un
-// timeframe derivado con continuous aggregate -- solo cubre los buckets con
-// vista propia (candles_m5/candles_m15, ver continuousAggregateViews). El
-// caller decide el fallback per-simbolo para el resto de timeframes
-// derivados.
-func (r *CandleRepository) GetSeriesAggregatedBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe, bucket string, bars int) (map[string][]domain.Candle, bool, error) {
-	view, ok := continuousAggregateViews[bucket]
-	if !ok {
-		return nil, false, nil
-	}
+// timeframe derivado -- agrega el timeframe base (source/bucket/approxPeriod,
+// ver domain.Timeframe.Aggregation) on-the-fly para TODO el lote en una sola
+// consulta, sin depender de un continuous aggregate materializado (retirado:
+// solo cubria M5/M15 y su politica de refresco no backfillea historia
+// vieja, confirmado en vivo el 2026-08-23 como causa de un hueco real de
+// datos en M5).
+func (r *CandleRepository) GetSeriesAggregatedBatch(ctx context.Context, symbols []string, timeframe, source domain.Timeframe, bucket string, approxPeriod time.Duration, bars int) (map[string][]domain.Candle, error) {
 	if len(symbols) == 0 {
-		return map[string][]domain.Candle{}, true, nil
+		return map[string][]domain.Candle{}, nil
 	}
+	since := time.Now().Add(-time.Duration(bars*batchWindowMargin+60) * approxPeriod)
 
-	rows, err := r.pool.Query(ctx, fmt.Sprintf(seriesAggregatedBatchSQL, view), symbols, bars)
+	rows, err := r.pool.Query(ctx, seriesAggregatedBatchSQL, symbols, bars, string(source), bucket, since)
 	if err != nil {
-		return nil, true, fmt.Errorf("querying aggregated series batch for %d symbols: %w", len(symbols), err)
+		return nil, fmt.Errorf("querying aggregated series batch for %d symbols: %w", len(symbols), err)
 	}
 	defer rows.Close()
 
@@ -132,13 +104,13 @@ func (r *CandleRepository) GetSeriesAggregatedBatch(ctx context.Context, symbols
 	for rows.Next() {
 		var c domain.Candle
 		if err := rows.Scan(&c.Symbol, &c.Timestamp, &c.Open, &c.High, &c.Low, &c.Close, &c.Volume, &c.TradeCount); err != nil {
-			return nil, true, fmt.Errorf("scanning aggregated series batch row: %w", err)
+			return nil, fmt.Errorf("scanning aggregated series batch row: %w", err)
 		}
 		c.Timeframe = timeframe
 		c.Source = "aggregated"
 		result[c.Symbol] = append(result[c.Symbol], c)
 	}
-	return result, true, rows.Err()
+	return result, rows.Err()
 }
 
 func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol string, timeframe, source domain.Timeframe, bucket string, approxPeriod time.Duration, bars int, before *time.Time) ([]domain.Candle, error) {
@@ -153,13 +125,6 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 		}
 		anchor = newest
 	}
-	query := getAggregatedCandlesSQL
-	buildArgs := func(from time.Time) []any { return []any{symbol, string(source), bucket, from, before, bars} }
-	if view, ok := continuousAggregateViews[bucket]; ok {
-		query = fmt.Sprintf(continuousAggregateCandlesSQL, view)
-		buildArgs = func(from time.Time) []any { return []any{symbol, from, before, bars} }
-	}
-
 	candles := make([]domain.Candle, 0)
 	window := time.Duration(bars*2+30) * approxPeriod
 	// Mismo ensanchamiento de ventana que GetCandles (ver
@@ -177,7 +142,7 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 	prevCount := -1
 	for attempt := 0; ; attempt++ {
 		from := anchor.Add(-window)
-		rows, err := r.pool.Query(ctx, query, buildArgs(from)...)
+		rows, err := r.pool.Query(ctx, getAggregatedCandlesSQL, symbol, string(source), bucket, from, before, bars)
 		if err != nil {
 			return nil, fmt.Errorf("querying aggregated candles for %s %s: %w", symbol, timeframe, err)
 		}

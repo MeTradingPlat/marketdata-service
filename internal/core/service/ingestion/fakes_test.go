@@ -81,8 +81,8 @@ func (f *fakeRepo) GetSeriesPriority(ctx context.Context, symbols []string, tf d
 	return map[string][]domain.Candle{}, nil
 }
 
-func (f *fakeRepo) GetSeriesAggregatedBatch(ctx context.Context, symbols []string, tf domain.Timeframe, bucket string, bars int) (map[string][]domain.Candle, bool, error) {
-	return map[string][]domain.Candle{}, false, nil
+func (f *fakeRepo) GetSeriesAggregatedBatch(ctx context.Context, symbols []string, timeframe, source domain.Timeframe, bucket string, approxPeriod time.Duration, bars int) (map[string][]domain.Candle, error) {
+	return map[string][]domain.Candle{}, nil
 }
 
 func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {

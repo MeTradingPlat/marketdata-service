@@ -131,7 +131,7 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 }
 
 // symbol_id resuelto con subconsulta escalar, no JOIN -- ver el comentario
-// de continuousAggregateCandlesSQL (candle_aggregation.go): con el JOIN,
+// de seriesAggregatedBatchSQL (candle_aggregation.go): con el JOIN,
 // Postgres a veces descarta el indice (symbol_id, timeframe) y hace Seq
 // Scan sobre todos los simbolos antes de filtrar.
 const getCandlesSQL = `

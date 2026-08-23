@@ -31,13 +31,13 @@ type CandleRepository interface {
 	// de esas agregaciones). No usar para barridos masivos (RefreshBeta
 	// sigue en GetSeries, el pool dedicado es de solo 3 conexiones).
 	GetSeriesPriority(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error)
-	// GetSeriesAggregatedBatch es GetSeries para un timeframe derivado con
-	// continuous aggregate propio (M5/M15) -- una sola consulta con
-	// ROW_NUMBER particionado por simbolo, sin el ensanche de ventana que
-	// necesita GetCandles per-simbolo (ver GetCandlesBatch). El bool
-	// devuelto es false cuando bucket no tiene vista propia (el caller debe
-	// caer al camino per-simbolo para ese timeframe).
-	GetSeriesAggregatedBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe, bucket string, bars int) (candles map[string][]domain.Candle, hasView bool, err error)
+	// GetSeriesAggregatedBatch es GetSeries para un timeframe derivado (ver
+	// domain.Timeframe.Aggregation) -- una sola consulta que agrega el
+	// timeframe base (M1/H1/D1) via time_bucket con JOIN LATERAL por
+	// simbolo, sin el ensanche de ventana que necesita GetCandles
+	// per-simbolo (ver GetCandlesBatch): un simbolo con menos velas de las
+	// pedidas simplemente devuelve menos, no afecta a los demas del lote.
+	GetSeriesAggregatedBatch(ctx context.Context, symbols []string, timeframe, source domain.Timeframe, bucket string, approxPeriod time.Duration, bars int) (map[string][]domain.Candle, error)
 	GetWatermark(ctx context.Context, symbol string, timeframe domain.Timeframe) (newest *time.Time, err error)
 	// GetWatermarksBatch lee los watermarks de un lote de simbolos en UNA
 	// query (el barrido leia uno por uno: 13k queries por fase, la mayor

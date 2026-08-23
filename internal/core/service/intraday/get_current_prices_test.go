@@ -42,8 +42,8 @@ func (f *fakeSlowRepo) GetSeries(ctx context.Context, symbols []string, tf domai
 func (f *fakeSlowRepo) GetSeriesPriority(ctx context.Context, symbols []string, tf domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
 	return nil, nil
 }
-func (f *fakeSlowRepo) GetSeriesAggregatedBatch(ctx context.Context, symbols []string, tf domain.Timeframe, bucket string, bars int) (map[string][]domain.Candle, bool, error) {
-	return nil, false, nil
+func (f *fakeSlowRepo) GetSeriesAggregatedBatch(ctx context.Context, symbols []string, timeframe, source domain.Timeframe, bucket string, approxPeriod time.Duration, bars int) (map[string][]domain.Candle, error) {
+	return nil, nil
 }
 func (f *fakeSlowRepo) GetWatermark(ctx context.Context, symbol string, tf domain.Timeframe) (*time.Time, error) {
 	return nil, nil
