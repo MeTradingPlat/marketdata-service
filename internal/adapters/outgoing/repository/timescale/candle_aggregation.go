@@ -114,6 +114,20 @@ const seriesRawBatchSQL = `
 // simbolo, ver el comentario de batchWindowMargin).
 const rawFetchMargin = 4
 
+// rawBatchWindowMargin (fecha, no filas -- ver rawFetchMargin de arriba)
+// mucho mas chico que batchWindowMargin=6: ese margen se calibro para el
+// camino SQL con GROUP BY, donde una ventana ancha era barata porque
+// Postgres reducia todo del lado del servidor antes de mandarlo. Para el
+// camino crudo, una ventana ancha significa mas filas SIN reducir viajando
+// de Postgres a Go, Y ademas -- confirmado en vivo el 2026-08-23 con
+// EXPLAIN ANALYZE -- cruza a chunks mas viejos (ya comprimidos) del
+// hypertable, forzando un Sort + Merge Append por simbolo en vez del Index
+// Scan directo de un solo chunk: M15 con margen=6 (~10 dias de ventana)
+// tardaba 541ms para 700 simbolos contra 66ms de M5 con margen=2 (~3.3
+// dias, un solo chunk). Con margen=2 el batch entero (700 simbolos, 12
+// lotes) paso de 33.35s a bajar al rango de M5.
+const rawBatchWindowMargin = 2
+
 // GetSeriesAggregatedBatch es GetSeries (ver candle_repository.go) para un
 // timeframe derivado -- agrega el timeframe base (source/bucket/approxPeriod,
 // ver domain.Timeframe.Aggregation) on-the-fly para TODO el lote en una sola
@@ -127,12 +141,13 @@ func (r *CandleRepository) GetSeriesAggregatedBatch(ctx context.Context, symbols
 	if len(symbols) == 0 {
 		return map[string][]domain.Candle{}, nil
 	}
-	since := time.Now().Add(-time.Duration(bars*batchWindowMargin+60) * approxPeriod)
 
 	if sourcePeriod, ok := sourcePeriodOf(source); ok {
+		since := time.Now().Add(-time.Duration(bars*rawBatchWindowMargin+60) * approxPeriod)
 		return r.getSeriesAggregatedBatchRaw(ctx, symbols, timeframe, source, approxPeriod, sourcePeriod, bars, since)
 	}
 
+	since := time.Now().Add(-time.Duration(bars*batchWindowMargin+60) * approxPeriod)
 	rows, err := r.pool.Query(ctx, seriesAggregatedBatchSQL, symbols, bars, string(source), bucket, since)
 	if err != nil {
 		return nil, fmt.Errorf("querying aggregated series batch for %d symbols: %w", len(symbols), err)
