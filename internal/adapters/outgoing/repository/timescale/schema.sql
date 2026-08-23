@@ -189,89 +189,15 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close_updated_at TIMESTAMPTZ
 -- se re-escriben.
 ALTER TABLE candles ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT FALSE;
 
--- candles_m5/candles_m15: continuous aggregates de TimescaleDB sobre M1 --
--- getAggregatedCandles agrupaba M5/M15 en vivo con GROUP BY sobre M1 cruda
--- en CADA consulta (confirmado en vivo el 2026-08-19: 7 de esas consultas
--- concurrentes, 20-77s cada una en espera de disco, CPU del VAIO al 316%,
--- con varios escaneres evaluando filtros tecnicos en M5/M15 a la vez). Un
--- continuous aggregate calcula eso UNA vez, de forma incremental, cada vez
--- que llega una vela M1 nueva -- las lecturas pasan de "agrupar miles de
--- filas" a "leer un puñado ya calculado". first()/last() son los agregados
--- nativos de TimescaleDB para open/close (mismo resultado que el
--- ARRAY_AGG ORDER BY de la version en vivo, sin construir el array).
--- WITH NO DATA + la politica de refresco de abajo: no bloquea el deploy
--- materializando años de historia de una -- arranca vacio y la real-time
--- aggregation (default) sigue devolviendo datos correctos escaneando en
--- vivo lo que todavia no se materializo, hasta que la politica lo alcance.
-CREATE MATERIALIZED VIEW IF NOT EXISTS candles_m5
-WITH (timescaledb.continuous) AS
-SELECT
-    symbol_id,
-    time_bucket('5 minutes', ts) AS bucket,
-    first(open, ts) AS open,
-    max(high) AS high,
-    min(low) AS low,
-    last(close, ts) AS close,
-    sum(volume) AS volume,
-    sum(trade_count) AS trade_count
-FROM candles
-WHERE timeframe = 'M1'
-GROUP BY symbol_id, bucket
-WITH NO DATA;
-
--- start_offset bajado de 3 dias a 1 dia el 2026-08-21: el unico caso que
--- de verdad necesita re-materializar hacia atras es noWatermarkM1Fallback
--- (daily_catchup.go) -- 24h para simbolos con datos pero sin watermark
--- real. El viejo chequeo de huecos de 10 dias que hubiera justificado una
--- ventana mas ancha ya no existe (ver universe_cycle.go: se saco por
--- redundante y costoso, el M1 sweep retoma del watermark, solo re-juega
--- el hueco del downtime). Con 3 dias, este job releia y recomputaba 3
--- dias completos de M1 CADA 5 minutos -- confirmado en vivo el 2026-08-21:
--- contribuia a que el VAIO llegara a load average 30 y entrara en swap
--- bajo carga concurrente de escaneres.
-SELECT add_continuous_aggregate_policy('candles_m5',
-    start_offset => INTERVAL '1 day',
-    end_offset => INTERVAL '10 minutes',
-    schedule_interval => INTERVAL '5 minutes',
-    if_not_exists => TRUE);
-
--- Confirmado en vivo el 2026-08-20: pese al comentario de arriba, esta vista
--- SI termino con materialized_only=true (la causa exacta no quedo clara --
--- no es compresion, esa nunca se habilito en el hypertable materializado),
--- dejando cada lectura topada al ultimo refresh de la politica (hasta 15
--- min de atraso real) en vez de caer a agregar en vivo lo no materializado
--- todavia. Esto hacia que filtros tecnicos en M5 (y M15 mas abajo) dispararan
--- señales hasta ~15-35 min despues de que la vela que las causo realmente
--- cerro -- confirmado con una señal real: vela cerrada 13:40 UTC, señal
--- recien publicada 13:55:42 UTC. ALTER explicito (no solo el default de
--- CREATE) para que quede asi sin importar como haya quedado antes.
-ALTER MATERIALIZED VIEW candles_m5 SET (timescaledb.materialized_only = false);
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS candles_m15
-WITH (timescaledb.continuous) AS
-SELECT
-    symbol_id,
-    time_bucket('15 minutes', ts) AS bucket,
-    first(open, ts) AS open,
-    max(high) AS high,
-    min(low) AS low,
-    last(close, ts) AS close,
-    sum(volume) AS volume,
-    sum(trade_count) AS trade_count
-FROM candles
-WHERE timeframe = 'M1'
-GROUP BY symbol_id, bucket
-WITH NO DATA;
-
--- start_offset bajado de 7 dias a 1 dia el 2026-08-21 -- mismo motivo que
--- candles_m5, ver el comentario de esa politica arriba.
-SELECT add_continuous_aggregate_policy('candles_m15',
-    start_offset => INTERVAL '1 day',
-    end_offset => INTERVAL '20 minutes',
-    schedule_interval => INTERVAL '15 minutes',
-    if_not_exists => TRUE);
-
--- Ver el comentario de candles_m5 de arriba -- mismo problema, peor aca:
--- end_offset de 20 min + schedule de 15 min sin real-time aggregation
--- significaba hasta 35 min de atraso real en filtros tecnicos M15.
-ALTER MATERIALIZED VIEW candles_m15 SET (timescaledb.materialized_only = false);
+-- candles_m5/candles_m15 (continuous aggregates de TimescaleDB sobre M1)
+-- RETIRADOS el 2026-08-23: GetSeriesAggregatedBatch/getAggregatedCandles ya
+-- no leen ninguna vista propia, agregan M1 cruda on-the-fly para TODOS los
+-- timeframes derivados (ver candle_aggregation.go) -- el refresh policy de
+-- estas vistas solo mantenia una ventana reciente (start_offset de 1 dia) y
+-- nunca hizo backfill de historia vieja, dejando un hueco real de datos
+-- confirmado en vivo (M5 sin nada antes del 17 de agosto). Sin este DROP
+-- los jobs de refresco (job_id 1002/1003) seguirian corriendo cada 5/15 min
+-- releyendo M1 y escribiendo en las hypertables materializadas sin que
+-- ningun caller las lea mas -- puro gasto de CPU/IO en el VAIO.
+DROP MATERIALIZED VIEW IF EXISTS candles_m5 CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS candles_m15 CASCADE;
