@@ -50,10 +50,18 @@ CREATE TABLE IF NOT EXISTS candles (
 
 CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf ON candles (symbol_id, timeframe);
 
--- Mismo patron probado en historical-data-service: hypertable de 7 dias,
--- comprimida por serie (symbol_id+timeframe), con buffer de 7 dias antes de
--- comprimir para que los UPSERTs de la vela recien cerrada sigan aceptados.
-SELECT create_hypertable('candles', 'ts', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
+-- Mismo patron probado en historical-data-service: hypertable de 2 dias,
+-- comprimida por serie (symbol_id+timeframe). chunk_time_interval bajado de
+-- 7 a 2 dias el 2026-08-23: compress_after de TimescaleDB cuenta desde el
+-- FINAL del rango del chunk, no desde que se escribe cada fila -- con
+-- chunks de 7 dias, un chunk recien era candidato a comprimirse 7+2=9 dias
+-- despues de su primera vela (confirmado en vivo: el chunk activo pesaba
+-- 640MB sin comprimir y seguia creciendo). Con chunks de 2 dias el retraso
+-- real baja a ~4 dias (2+2) y el chunk caliente pesa una fraccion de eso.
+-- set_chunk_time_interval() (mas abajo) solo afecta chunks NUEVOS, no
+-- migra los ya creados con el ancho viejo -- sin downtime ni reproceso.
+SELECT create_hypertable('candles', 'ts', chunk_time_interval => INTERVAL '2 days', if_not_exists => TRUE);
+SELECT set_chunk_time_interval('candles', INTERVAL '2 days');
 
 ALTER TABLE candles SET (
     timescaledb.compress,
@@ -61,14 +69,18 @@ ALTER TABLE candles SET (
     timescaledb.compress_orderby = 'ts DESC'
 );
 
--- Compresion a los 2 dias, no 7: desde que Save() distingue velas
--- verificadas (verified=TRUE, las que avanzan watermark = vienen del
--- refill/backfill) de las provisionales en vivo (verified=FALSE, sin
--- watermark -- un reinicio las re-pide y reemplaza), las velas viejas
--- nunca se re-escriben: el refill solo pide hacia adelante desde el
--- watermark y el replay en vivo toca minutos recientes. El margen
--- incremental se redujo a 1 barra (IncrementalMargin) para que ningun
--- re-fetch atrasado intente upsertear un chunk ya comprimido.
+-- compress_after sigue en 2 dias (cuenta desde el FINAL del rango del
+-- chunk, ver el comentario de arriba) -- con chunks de 2 dias esto da un
+-- buffer real de ~4 dias antes de que un chunk sea candidato a comprimirse,
+-- tiempo de sobra para que Save() reciba UPSERTs de velas recien cerradas.
+-- Desde que Save() distingue velas verificadas (verified=TRUE, las que
+-- avanzan watermark = vienen del refill/backfill) de las provisionales en
+-- vivo (verified=FALSE, sin watermark -- un reinicio las re-pide y
+-- reemplaza), las velas viejas nunca se re-escriben: el refill solo pide
+-- hacia adelante desde el watermark y el replay en vivo toca minutos
+-- recientes. El margen incremental se redujo a 1 barra (IncrementalMargin)
+-- para que ningun re-fetch atrasado intente upsertear un chunk ya
+-- comprimido.
 SELECT add_compression_policy('candles', INTERVAL '2 days', if_not_exists => TRUE);
 
 -- Mismo tuning de historical-data-service: evita la pasada de vacuum de
