@@ -23,7 +23,16 @@ import (
 // repeticion sin tocar la frescura visible.
 const candleCacheTTL = 60 * time.Second
 
-const candleCacheMaxEntries = 20000
+// candleCacheMaxEntries: 20000 (valor original) podia pesar hasta ~400MB
+// en el peor caso (bars=151 tipico, ~19KB por entrada) -- confirmado en
+// vivo el 2026-08-23 que el contenedor ya usa 773MB de un limite duro de
+// 1GB (--memory 1g --memory-swap 1g en cd.yml, sin colchon de swap), asi
+// que llenar el cache entero lo hubiera empujado a que Docker lo matara
+// por OOM. 8000 entradas topea el peor caso en ~150MB, dejando margen real
+// bajo el limite actual sin tocar la asignacion de memoria del contenedor
+// (el VAIO entero ya esta ajustado: 915MB libres compartidos entre 26
+// contenedores, subir el limite del contenedor le resta margen a los demas).
+const candleCacheMaxEntries = 8000
 
 type candleCacheEntry struct {
 	expires time.Time
