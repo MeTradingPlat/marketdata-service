@@ -15,6 +15,20 @@ import (
 
 const initialHistoryBars = 500
 
+// pingInterval/pongWait: el dominio se expone via Cloudflare Tunnel (ver
+// systemctl cloudflared.service en el VAIO) -- confirmado en vivo el
+// 2026-08-24 que /ws/candles se cerraba solo cada ~125.6s de forma
+// consistente pese a que ni el Gateway (esa ruta no tiene response-timeout
+// propio) ni Echo/gorilla-websocket de este lado tienen ningun timeout
+// configurado: Cloudflare corta una conexion que no ve trafico en unos
+// ~100-125s. Un Ping cada 30s (bien por debajo del umbral observado)
+// mantiene el tunel viendo actividad real. pongWait > pingInterval deja
+// tolerancia a 1-2 pings perdidos antes de dar la conexion por muerta.
+const (
+	pingInterval = 30 * time.Second
+	pongWait     = 90 * time.Second
+)
+
 type candleSubscribeRequest struct {
 	Action    string `json:"action"`
 	Symbol    string `json:"symbol"`
@@ -43,6 +57,11 @@ func newWSSession(conn *websocket.Conn, getCandles in.GetCandlesService, current
 
 func (s *wsSession) run(ctx context.Context) {
 	defer s.closeAll()
+	_ = s.conn.SetReadDeadline(time.Now().Add(pongWait))
+	s.conn.SetPongHandler(func(string) error {
+		return s.conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
+	go s.pingLoop()
 	for {
 		var req candleSubscribeRequest
 		if err := s.conn.ReadJSON(&req); err != nil {
@@ -53,6 +72,23 @@ func (s *wsSession) run(ctx context.Context) {
 			s.handleSubscribe(ctx, req.Symbol, req.Timeframe)
 		case "unsubscribe":
 			s.handleUnsubscribe(req.Symbol, req.Timeframe)
+		}
+	}
+}
+
+// pingLoop mantiene el tunel de Cloudflare viendo trafico real (ver
+// pingInterval) -- WriteControl es seguro de llamar en paralelo con
+// WriteJSON/WriteMessage (godoc de gorilla/websocket: "Close and
+// WriteControl methods can be called concurrently with all other
+// methods"), no necesita competir por writeMu. Un error de escritura (el
+// socket ya se cerro) simplemente termina el loop -- closeAll() ya se
+// encarga de liberar todo lo demas cuando run() retorna.
+func (s *wsSession) pingLoop() {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+			return
 		}
 	}
 }
