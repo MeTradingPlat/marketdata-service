@@ -43,11 +43,10 @@ func Load() *Config {
 	viper.SetDefault("TT_BASE_URL", "https://api.tastytrade.com")
 	viper.SetDefault("MAX_CANDLE_POOL_CONNECTIONS", 40)
 	viper.SetDefault("SWEEP_WORKERS", 25)
-	// Reset diario de sesiones de TastyTrade a las 22:15 UTC (mercado US ya
-	// cerrado, misma hora que la compresion de TimescaleDB) -- ver
-	// StartSessionResetLoop.
-	viper.SetDefault("SESSION_RESET_HOUR", 22)
-	viper.SetDefault("SESSION_RESET_MINUTE", 15)
+	// Reset diario de sesiones de TastyTrade a medianoche UTC (mercado US
+	// cerrado desde las 00:00 UTC) -- ver StartSessionResetLoop.
+	viper.SetDefault("SESSION_RESET_HOUR", 0)
+	viper.SetDefault("SESSION_RESET_MINUTE", 0)
 	viper.SetDefault("DB_HOST", "localhost")
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_NAME", "marketdata_db")
