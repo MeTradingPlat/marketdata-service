@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type OAuthConfig struct {
@@ -124,4 +126,26 @@ func (o *OAuth) LogoutAllSessions(ctx context.Context) error {
 		return nil
 	}
 	return fmt.Errorf("sessions logout returned status %d", resp.StatusCode)
+}
+
+// ResetSessions cierra todas las sesiones de TastyTrade y rota el access
+// token -- la limpieza ordenada que el reconnect reactivo necesita para no
+// quedarse atrapado en "sessions exceeded". El logout va primero porque
+// DELETE /sessions invalida el token con el que se llama; si falla (403
+// tipico cuando el access token ya vencio), se refresca igual y se reintenta
+// una vez con el token fresco -- sin ese reintento un token vencido deja las
+// sesiones huerfanas saturando el limite indefinidamente (confirmado en vivo
+// el 2026-08-25: logout 403 + refill cayendo de 250k a 3k velas/hora).
+func (o *OAuth) ResetSessions(ctx context.Context) error {
+	if err := o.LogoutAllSessions(ctx); err != nil {
+		log.Warn().Err(err).Msg("dxlink: logout de sesiones falló, refrescando token y reintentando")
+		if _, rerr := o.RefreshAccessToken(ctx); rerr != nil {
+			return rerr
+		}
+		if rerr := o.LogoutAllSessions(ctx); rerr != nil {
+			log.Warn().Err(rerr).Msg("dxlink: segundo logout también falló, siguiendo con token fresco")
+		}
+	}
+	_, err := o.RefreshAccessToken(ctx)
+	return err
 }

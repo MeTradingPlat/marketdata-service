@@ -165,11 +165,7 @@ func provideCandlePool(cfg *configs.Config, qt *tastytrade.QuoteToken, oauth *ta
 	connFactory := func(ctx context.Context) (*tastytrade.DxLinkConn, error) {
 		conn := tastytrade.NewDxLinkConn(urlFunc, qt.Token)
 		conn.OnSessionReset(func(sctx context.Context) error {
-			if err := oauth.LogoutAllSessions(sctx); err != nil {
-				return err
-			}
-			_, err := oauth.RefreshAccessToken(sctx)
-			return err
+			return oauth.ResetSessions(sctx)
 		})
 		if err := conn.Connect(ctx); err != nil {
 			return nil, err

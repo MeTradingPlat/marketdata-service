@@ -18,6 +18,8 @@ type Config struct {
 	DxlinkURLOverride        string
 	MaxCandlePoolConnections int
 	SweepWorkers             int
+	SessionResetHour         int
+	SessionResetMinute       int
 
 	DBHost     string
 	DBPort     string
@@ -41,6 +43,11 @@ func Load() *Config {
 	viper.SetDefault("TT_BASE_URL", "https://api.tastytrade.com")
 	viper.SetDefault("MAX_CANDLE_POOL_CONNECTIONS", 40)
 	viper.SetDefault("SWEEP_WORKERS", 25)
+	// Reset diario de sesiones de TastyTrade a las 22:15 UTC (mercado US ya
+	// cerrado, misma hora que la compresion de TimescaleDB) -- ver
+	// StartSessionResetLoop.
+	viper.SetDefault("SESSION_RESET_HOUR", 22)
+	viper.SetDefault("SESSION_RESET_MINUTE", 15)
 	viper.SetDefault("DB_HOST", "localhost")
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_NAME", "marketdata_db")
@@ -66,6 +73,8 @@ func Load() *Config {
 		DxlinkURLOverride:        viper.GetString("DXLINK_URL"),
 		MaxCandlePoolConnections: viper.GetInt("MAX_CANDLE_POOL_CONNECTIONS"),
 		SweepWorkers:             viper.GetInt("SWEEP_WORKERS"),
+		SessionResetHour:         viper.GetInt("SESSION_RESET_HOUR"),
+		SessionResetMinute:       viper.GetInt("SESSION_RESET_MINUTE"),
 		DBHost:                   viper.GetString("DB_HOST"),
 		DBPort:                   viper.GetString("DB_PORT"),
 		DBName:                   viper.GetString("DB_NAME"),
