@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
 )
 
 const handshakeTimeout = 30 * time.Second
@@ -180,6 +181,15 @@ func (c *DxLinkConn) cleanup() {
 	c.channels = make(map[int]*dxLinkChannel)
 }
 
+// dxLinkMaxMessageBytes es el limite documentado por dxFeed para un solo
+// mensaje FEED_SUBSCRIPTION (kb.dxfeed.com/en/market-data-api/dxlink.html):
+// pasado esto el servidor responde INVALID_MESSAGE "content length exceeded
+// 65536 bytes." -- logueamos ANTES de mandar cualquier mensaje que se
+// acerque, para tener la evidencia (cuantos simbolos, que canal) la proxima
+// vez que pase, en vez de reconstruirlo despues por logs indirectos.
+const dxLinkMaxMessageBytes = 65536
+const dxLinkWarnMessageBytes = 55000
+
 func (c *DxLinkConn) send(v interface{}) error {
 	c.mu.RLock()
 	conn := c.conn
@@ -191,9 +201,20 @@ func (c *DxLinkConn) send(v interface{}) error {
 	if err != nil {
 		return fmt.Errorf("encoding dxlink message: %w", err)
 	}
+	if len(body) >= dxLinkWarnMessageBytes {
+		logOutgoingMessageSize(v, len(body))
+	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	return conn.WriteMessage(websocket.TextMessage, body)
+}
+
+func logOutgoingMessageSize(v interface{}, bytes int) {
+	event := log.Warn().Int("bytes", bytes).Int("limit", dxLinkMaxMessageBytes)
+	if msg, ok := v.(feedSubscriptionMessage); ok {
+		event = event.Int("channel", msg.Channel).Int("add", len(msg.Add)).Int("remove", len(msg.Remove))
+	}
+	event.Msg("dxlink outgoing message near or over the documented size limit")
 }
 
 func (c *DxLinkConn) OpenChannel(ctx context.Context) (*dxLinkChannel, error) {

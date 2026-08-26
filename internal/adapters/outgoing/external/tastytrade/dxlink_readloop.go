@@ -124,6 +124,21 @@ func (c *DxLinkConn) handleError(ctx context.Context, env inboundEnvelope) {
 		c.authenticated = false
 		c.mu.Unlock()
 		c.scheduleReconnect(ctx)
+	case "INVALID_MESSAGE":
+		// Un mensaje rechazado (ej. "content length exceeded 65536 bytes",
+		// limite documentado por dxFeed) deja la conexion en un estado que
+		// nadie corrige -- sin esto, el canal seguia mudo hasta que
+		// idleReadTimeout/staleConnectionThreshold lo notaban por las malas
+		// (60-90s despues) y forzaban una reconexion que repetia la MISMA
+		// resuscripcion rota, ciclando sin fin. Reconectar de una vez acorta
+		// la ventana de silencio; el mensaje culpable ya quedo logueado por
+		// logOutgoingMessageSize (ver dxlink_conn.go) para diagnosticar cual
+		// suscripcion especifica lo causo.
+		log.Error().Str("error", env.Error).Str("message", env.Message).Msg("dxlink INVALID_MESSAGE, forcing reconnect")
+		c.mu.Lock()
+		c.authenticated = false
+		c.mu.Unlock()
+		c.scheduleReconnect(ctx)
 	default:
 		log.Error().Str("error", env.Error).Str("message", env.Message).Msg("dxlink error")
 	}
