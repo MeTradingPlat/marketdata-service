@@ -37,10 +37,15 @@ func (c *DxLinkConn) handleDisconnect(ctx context.Context) {
 	c.scheduleReconnect(ctx)
 }
 
-// scheduleReconnect nunca se da por vencido -- una racha larga de fallos
-// (ej. host con I/O lento retrasando el handshake mas alla del timeout)
-// solo alarga el delay hasta el techo, nunca deja la conexion muerta para
-// siempre sin reintentar.
+// scheduleReconnect arranca el bucle de reintentos si no hay uno ya
+// corriendo. Antes, un intento fallido programaba el siguiente llamandose a
+// si misma DESDE DENTRO de la goroutine que todavia tenia reconnecting=true
+// -- esa llamada se auto-descartaba en silencio (el guard de arriba la veia
+// como "ya hay una reconexion en curso"), dejando la conexion muerta para
+// siempre sin ningun rastro en el log. Confirmado en vivo el 2026-08-27:
+// ~40 canales quedaron mudos 2 horas en pleno mercado abierto por esto.
+// reconnectLoop reemplaza esa recursion con un bucle dentro de UNA sola
+// goroutine que nunca suelta la bandera a mitad de camino.
 func (c *DxLinkConn) scheduleReconnect(ctx context.Context) {
 	if c.closing.Load() {
 		return
@@ -51,8 +56,6 @@ func (c *DxLinkConn) scheduleReconnect(ctx context.Context) {
 		return
 	}
 	c.reconnecting = true
-	c.reconnectAttempts++
-	attempts := c.reconnectAttempts
 	c.reconnectMu.Unlock()
 
 	if c.Connected() {
@@ -62,23 +65,7 @@ func (c *DxLinkConn) scheduleReconnect(ctx context.Context) {
 		return
 	}
 
-	delay := reconnectDelay(int(attempts))
-	if c.sessionSaturated.Load() && delay < sessionSaturatedDelay {
-		delay = sessionSaturatedDelay
-	}
-	go func() {
-		defer func() {
-			c.reconnectMu.Lock()
-			c.reconnecting = false
-			c.reconnectMu.Unlock()
-		}()
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			return
-		}
-		c.performReconnect(ctx)
-	}()
+	go c.reconnectLoop(ctx)
 }
 
 func reconnectDelay(attempts int) time.Duration {
@@ -92,9 +79,46 @@ func reconnectDelay(attempts int) time.Duration {
 	return delay
 }
 
-func (c *DxLinkConn) performReconnect(ctx context.Context) {
-	if c.Connected() {
+// reconnectLoop reintenta hasta conectar o hasta que ctx se cancele -- nunca
+// se da por vencido (una racha larga de fallos, ej. host con I/O lento,
+// solo alarga el delay hasta el techo) y nunca resetea reconnecting a mitad
+// de camino, asi un intento fallido SIEMPRE programa el siguiente dentro de
+// este mismo bucle en vez de una llamada recursiva que puede perderse.
+func (c *DxLinkConn) reconnectLoop(ctx context.Context) {
+	defer func() {
+		c.reconnectMu.Lock()
+		c.reconnecting = false
+		c.reconnectMu.Unlock()
+	}()
+	for {
+		c.reconnectMu.Lock()
+		c.reconnectAttempts++
+		attempts := c.reconnectAttempts
+		c.reconnectMu.Unlock()
+
+		delay := reconnectDelay(int(attempts))
+		if c.sessionSaturated.Load() && delay < sessionSaturatedDelay {
+			delay = sessionSaturatedDelay
+		}
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return
+		}
+		if c.closing.Load() {
+			return
+		}
+		if err := c.performReconnect(ctx); err != nil {
+			log.Error().Err(err).Msg("dxlink reconnect failed")
+			continue
+		}
 		return
+	}
+}
+
+func (c *DxLinkConn) performReconnect(ctx context.Context) error {
+	if c.Connected() {
+		return nil
 	}
 	// Sesiones huerfanas saturando el limite: cerrarlas via REST (logout +
 	// refresh del token) antes del handshake -- si el logout falla se
@@ -107,13 +131,12 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) {
 	}
 	c.cleanup()
 	if err := c.Connect(ctx); err != nil {
-		log.Error().Err(err).Msg("dxlink reconnect failed")
-		c.scheduleReconnect(ctx)
-		return
+		return err
 	}
 	if c.onReconnect != nil {
 		c.onReconnect(ctx, c)
 	}
+	return nil
 }
 
 // healthCheckLoop es el vigia real de la conexion -- ver el comentario de

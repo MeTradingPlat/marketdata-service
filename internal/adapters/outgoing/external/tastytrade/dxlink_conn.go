@@ -147,8 +147,14 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 			return err
 		}
 	case <-time.After(handshakeTimeout):
+		// Sin este cleanup, el socket recien abierto (AUTH nunca llego a
+		// AUTHORIZED) y su readLoop quedan colgando sin ningun vigia: el
+		// healthCheckLoop que detecta conexiones zombie solo arranca DESPUES
+		// de un handshake exitoso (mas abajo), asi que nadie mas los cierra.
+		c.cleanup()
 		return fmt.Errorf("dxlink handshake timed out")
 	case <-ctx.Done():
+		c.cleanup()
 		return ctx.Err()
 	}
 
