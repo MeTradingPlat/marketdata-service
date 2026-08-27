@@ -254,12 +254,25 @@ func startLiveUniverse(ctx context.Context, ingest in.IngestCandlesService, trac
 	log.Info().Int("symbols", len(tracked)).Dur("elapsed", time.Since(start)).Msg("live M1 rollout finished")
 }
 
+// seedRetryDelay le da tiempo a Postgres a soltar la presion de escritura
+// del sweep M1 (confirmado en vivo el 2026-08-26: la consulta de lote de
+// ~13k simbolos corrio justo en medio de "out of shared memory" del sweep y
+// devolvio filas para solo 11590/13222 -- sin error, silenciosamente
+// incompleta. Repetir la MISMA consulta minutos despues, ya sin esa presion,
+// encontro los datos completos y correctos para los simbolos que habian
+// faltado). No hay forma barata de distinguir "de verdad no opero hoy" de
+// "la consulta lo perdio por presion" solo con el conteo, asi que se
+// reintenta sin condicion cuando falta alguno -- si de verdad no opero, la
+// segunda vuelta tampoco trae nada y no hace daño.
+const seedRetryDelay = 30 * time.Second
+
 // seedSnapshotTracker carga la sesion de hoy para todo el universo en UNA
 // sola consulta de lote (el mismo costo que antes pagaba CADA request de
 // fundamentals/realtime, ver el comentario de GetSnapshotsBatch) -- corre
 // una vez por ventana de mantenimiento, no en el camino caliente. Un error
 // aca no frena el arranque: GetSnapshotsBatch sigue cubriendo lo que falte
-// via su propio fallback a BD por-simbolo.
+// via su propio fallback a BD por-simbolo (pero solo para ESA respuesta, no
+// persiste en el tracker -- de ahi el reintento aca).
 func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, tracker *intraday.SnapshotTracker, tracked []domain.Symbol) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -280,6 +293,26 @@ func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, trac
 		log.Error().Err(err).Msg("seeding snapshot tracker failed, falling back to per-request DB reads")
 		return
 	}
+
+	if missing := missingSymbols(symbols, snapshots); len(missing) > 0 {
+		log.Warn().Int("missing", len(missing)).Int("total", len(symbols)).
+			Msg("snapshot tracker seed came back incomplete, retrying missing symbols")
+		select {
+		case <-time.After(seedRetryDelay):
+		case <-ctx.Done():
+			tracker.Seed(day, snapshots)
+			return
+		}
+		if retried, retryErr := candles.GetIntradaySessionsBatch(ctx, missing); retryErr == nil {
+			for symbol, snap := range retried {
+				snapshots[symbol] = snap
+			}
+			log.Info().Int("recovered", len(retried)).Msg("snapshot tracker seed retry finished")
+		} else {
+			log.Error().Err(retryErr).Msg("snapshot tracker seed retry failed")
+		}
+	}
+
 	tracker.Seed(day, snapshots)
 	log.Info().Int("symbols", len(snapshots)).Dur("elapsed", time.Since(start)).Msg("snapshot tracker seeded")
 
@@ -302,6 +335,16 @@ func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, trac
 	}
 	tracker.SeedLastClose(lastClose)
 	log.Info().Int("symbols", len(lastClose)).Dur("elapsed", time.Since(lastStart)).Msg("last-close tracker seeded")
+}
+
+func missingSymbols(symbols []string, snapshots map[string]domain.IntradaySnapshot) []string {
+	missing := make([]string, 0, len(symbols)-len(snapshots))
+	for _, symbol := range symbols {
+		if _, ok := snapshots[symbol]; !ok {
+			missing = append(missing, symbol)
+		}
+	}
+	return missing
 }
 
 // isMarketActive: mismo rango que effective_start/effective_end en
