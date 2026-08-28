@@ -28,11 +28,13 @@ func TestGetCandles(t *testing.T) {
 // en vivo el 2026-08-27 con EMAT. GetCandles(M1, before=nil) debe traer lo
 // mas reciente de RecentCache, no solo lo que la BD ya tenga.
 func TestGetCandles_M1UpToNow_UsesRecentCacheForTheTail(t *testing.T) {
-	older := domain.Candle{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: time.Unix(1000, 0)}
+	// Alineados al minuto (:00 segundos) -- como cualquier vela M1 real.
+	minute := time.Date(2026, 8, 27, 18, 16, 0, 0, time.UTC)
+	older := domain.Candle{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: minute}
 	repo := &fakeRepo{getResult: []domain.Candle{older}}
 
 	cache := livecandles.NewDefaultRecentCache()
-	freshest := domain.Candle{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: time.Unix(1060, 0), Volume: 27165}
+	freshest := domain.Candle{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: minute.Add(time.Minute), Volume: 27165}
 	cache.Put(freshest, true)
 
 	svc := ingestion.NewGetCandlesService(repo, cache)
@@ -89,5 +91,39 @@ func TestGetCandles_DerivedTimeframeUpToNow_FoldsFreshM1FromCache(t *testing.T) 
 	}
 	if got[0].Close != 3.06 {
 		t.Errorf("expected close 3.06 (from fresh M1), got %v", got[0].Close)
+	}
+}
+
+// Regression: un timeframe cuyo bucket es mas ancho que lo que RecentCache
+// alcanza a cubrir (H1 = 60 M1, el cache retiene ~20) NO debe tocarse --
+// armar ese bucket con las pocas M1 que hay produciria un OHLCV incompleto
+// (le falta la parte de atras, que ya salio de la ventana del cache) Y
+// ademas duplicaria la fila que ya traia la BD para ese mismo bucket.
+func TestGetCandles_BucketWiderThanCacheCoverage_LeavesBaseUntouched(t *testing.T) {
+	hourStart := time.Date(2026, 8, 27, 18, 0, 0, 0, time.UTC)
+	fromDB := domain.Candle{
+		Symbol: "EMAT", Timeframe: domain.H1, Timestamp: hourStart,
+		Open: 3.20, High: 3.20, Low: 3.00, Close: 3.10, Volume: 500000,
+	}
+	repo := &fakeRepo{getResult: []domain.Candle{fromDB}}
+
+	cache := livecandles.NewDefaultRecentCache()
+	// Solo unos pocos M1 recientes (bien lejos de cubrir la hora entera) --
+	// simula el cache real, que solo retiene ~20 barras.
+	cache.Put(domain.Candle{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: hourStart.Add(40 * time.Minute), Close: 3.06, Volume: 27165}, true)
+	cache.Put(domain.Candle{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: hourStart.Add(41 * time.Minute), Close: 3.08, Volume: 11453}, true)
+
+	svc := ingestion.NewGetCandlesService(repo, cache)
+
+	got, err := svc.GetCandles(context.Background(), "EMAT", domain.H1, 10, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected the original DB bucket untouched (1 candle), got %d", len(got))
+	}
+	if got[0].Volume != fromDB.Volume || got[0].Close != fromDB.Close {
+		t.Errorf("expected the DB candle unchanged (volume=%d close=%v), got volume=%d close=%v",
+			fromDB.Volume, fromDB.Close, got[0].Volume, got[0].Close)
 	}
 }

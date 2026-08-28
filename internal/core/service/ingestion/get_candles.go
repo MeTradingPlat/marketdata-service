@@ -139,13 +139,24 @@ func (s *getCandlesService) freshen(symbol string, base []domain.Candle, timefra
 	if !hasCached {
 		return base
 	}
+	// Un bucket cuyo INICIO cae antes de lo que el cache alcanza a cubrir
+	// (H1+ con 20 M1 en cache: nunca cubre un bucket entero) esta armado con
+	// M1 incompleto -- le falta la parte de atras, que ya salio de la
+	// ventana del cache. Ni se usa la version del cache para ESE bucket, ni
+	// se descarta el de la BD: se deja tal cual venia, mismo comportamiento
+	// que tenia antes de este cambio. Solo los buckets que el cache cubre
+	// DESDE SU PROPIO INICIO son seguros de reconstruir enteros.
+	firstFullBucketStart := oldestCached.Truncate(bucket)
+	if firstFullBucketStart.Before(oldestCached) {
+		firstFullBucketStart = firstFullBucketStart.Add(bucket)
+	}
 	kept := make([]domain.Candle, 0, len(base))
 	for _, c := range base {
-		if c.Timestamp.Before(oldestCached) {
+		if c.Timestamp.Before(firstFullBucketStart) {
 			kept = append(kept, c)
 		}
 	}
-	fresh := s.recentCache.RangeAggregated(symbol, oldestCached, time.Now().Add(time.Second), bucket, timeframe)
+	fresh := s.recentCache.RangeAggregated(symbol, firstFullBucketStart, time.Now().Add(time.Second), bucket, timeframe)
 	merged := append(kept, fresh...)
 	if len(merged) > bars {
 		merged = merged[len(merged)-bars:]
