@@ -73,6 +73,16 @@ func (c *RecentCache) Put(candle domain.Candle, closed bool) {
 	}
 }
 
+// Get devuelve la vela cacheada de un timestamp exacto -- el caller lo usa
+// como base para fusionar una correccion tardia (dxLink en formato COMPACT
+// solo reenvia los campos que cambiaron; sin la base se pierden los que no).
+func (c *RecentCache) Get(symbol string, ts time.Time) (domain.Candle, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.data[symbol][ts.Unix()]
+	return entry.candle, ok
+}
+
 func oldestKey(bucket map[int64]cachedCandle) int64 {
 	var oldest int64
 	first := true

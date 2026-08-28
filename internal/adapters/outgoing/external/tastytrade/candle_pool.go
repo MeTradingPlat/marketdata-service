@@ -89,6 +89,13 @@ type CandlePool struct {
 
 	currentMu sync.Mutex
 	current   map[string]domain.Candle
+	// lastClosed guarda la ULTIMA vela ya cerrada por simbolo (un solo
+	// slot, no historia completa) -- base para fusionar una correccion
+	// tardia que llega en formato COMPACT (solo trae los campos que
+	// cambiaron): sin esta base, un campo que dxLink no reenvio se pierde
+	// en vez de conservar el ultimo valor conocido. Protegido por currentMu,
+	// no un mutex aparte -- ambos mapas cambian juntos en el mismo evento.
+	lastClosed map[string]domain.Candle
 
 	// orphanEvents cuenta eventos que llegan para un simbolo+temporalidad
 	// que ya no tiene handler registrado -- si esto crece SIN PARAR con el
@@ -102,9 +109,10 @@ type CandlePool struct {
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
 	p := &CandlePool{
 		dispatch: make(map[string]dispatchEntry),
-		liveSubs:  make(map[string]func(domain.Candle)),
-		liveTicks: make(map[string]func(domain.Candle)),
-		current:  make(map[string]domain.Candle),
+		liveSubs:   make(map[string]func(domain.Candle)),
+		liveTicks:  make(map[string]func(domain.Candle)),
+		current:    make(map[string]domain.Candle),
+		lastClosed: make(map[string]domain.Candle),
 	}
 	p.allocator = newChannelAllocator(connFactory, p.wireChannel, p.handleConnectionReconnect, maxConnections)
 	return p
@@ -206,13 +214,43 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 
 // handleLiveEvent detecta el cierre de una vela: mientras los eventos que
 // llegan comparten el mismo timestamp, son actualizaciones de la vela en
-// formacion; un timestamp nuevo significa que la anterior ya cerro. En los
-// dos casos se reenvia la vela en formacion actualizada (dispatchTick) --
-// los graficos la necesitan tick a tick, no solo al cierre.
+// formacion; un timestamp MAS NUEVO significa que la anterior ya cerro. En
+// los dos casos se reenvia la vela en formacion actualizada (dispatchTick)
+// -- los graficos la necesitan tick a tick, no solo al cierre.
+//
+// Un timestamp MAS VIEJO que la vela en formacion es un caso aparte: una
+// correccion tardia de una vela YA cerrada (el trade real ocurrio en ese
+// minuto pero el reporte del exchange/SIP llego despues de que ya cerramos
+// el minuto siguiente -- documentado, no un caso raro: "el primer trade del
+// minuto nuevo puede llegar varios segundos despues del cierre formal si el
+// simbolo opera poco o hay demoras tecnicas"). Antes, el simple "timestamp
+// distinto" de mas abajo confundia esto con una vela nueva -- cerraba de
+// golpe la vela en formacion REAL con datos a medio completar y reabria la
+// vieja como si fuera la actual. Confirmado en vivo el 2026-08-27/28: el
+// volumen real de un pico de un minuto tardaba varios ciclos del escaner en
+// reflejarse completo rio abajo. Ahora se despacha aparte via dispatchClosed,
+// SIN tocar current -- fusionada contra lastClosed[symbol] (la ultima vela
+// que SI cerro de verdad) para no perder los campos que dxLink no reenvio
+// (formato COMPACT: solo manda lo que cambio). Si lastClosed no tiene ese
+// timestamp exacto (la correccion apunta mas atras de una vela, caso raro),
+// se fusiona sobre una base vacia como antes -- mejor esfuerzo, no hay de
+// donde mas sacar el resto de los campos.
 func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 	p.currentMu.Lock()
-	var forming domain.Candle
 	prev, exists := p.current[symbol]
+	if exists && ev.Timestamp.Before(prev.Timestamp) {
+		base := domain.Candle{}
+		if last, ok := p.lastClosed[symbol]; ok && last.Timestamp.Equal(ev.Timestamp) {
+			base = last
+		}
+		corrected := mergeCandle(base, ev, symbol, domain.M1)
+		p.lastClosed[symbol] = corrected
+		p.currentMu.Unlock()
+		p.dispatchClosed(symbol, corrected)
+		return
+	}
+
+	var forming domain.Candle
 	if exists && !prev.Timestamp.Equal(ev.Timestamp) {
 		// Un minuto sin ticks no deja vela -- por diseño: la vela solo se
 		// cierra cuando llega un tick del minuto siguiente, y un minuto
@@ -224,6 +262,7 @@ func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 		// hubo movimiento real (como antes de a19301a).
 		closed := prev
 		p.current[symbol] = mergeCandle(domain.Candle{}, ev, symbol, domain.M1)
+		p.lastClosed[symbol] = closed
 		forming = p.current[symbol]
 		p.currentMu.Unlock()
 		p.dispatchClosed(symbol, closed)
