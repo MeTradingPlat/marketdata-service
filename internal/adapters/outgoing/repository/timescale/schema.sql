@@ -209,7 +209,15 @@ ALTER TABLE candles ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT F
 -- -- confirmado en vivo el 2026-08-27 con EMAT: un pico de volumen en un M1
 -- parecia tardar varios minutos en reflejarse completo rio abajo, sin forma
 -- de medirlo directo hasta ahora.
-ALTER TABLE candles ADD COLUMN IF NOT EXISTS last_written_at TIMESTAMPTZ NOT NULL DEFAULT now();
+--
+-- NULLABLE, sin DEFAULT: TimescaleDB rechaza agregar una columna con
+-- default no constante (now()) a una hypertable con columnstore activado
+-- -- confirmado en vivo el 2026-08-28, tumbo TODOS los guardados de velas
+-- (sweep y en vivo) hasta que se corrigio. Las filas viejas ya comprimidas
+-- se quedan en NULL para siempre (no se pueden backfillear sin
+-- descomprimir); Save() ya manda now() explicito en cada INSERT/UPDATE, asi
+-- que toda fila nueva o tocada de aca en adelante si la tiene.
+ALTER TABLE candles ADD COLUMN IF NOT EXISTS last_written_at TIMESTAMPTZ;
 
 -- candles_m5/candles_m15 (continuous aggregates de TimescaleDB sobre M1)
 -- RETIRADOS el 2026-08-23: GetSeriesAggregatedBatch/getAggregatedCandles ya
