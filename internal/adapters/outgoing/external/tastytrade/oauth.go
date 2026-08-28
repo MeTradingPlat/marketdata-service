@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/singleflight"
 )
 
 type OAuthConfig struct {
@@ -25,6 +26,20 @@ type OAuth struct {
 
 	mu          sync.RWMutex
 	accessToken string
+
+	// resetGroup: cada DxLinkConn del pool (30-40 en produccion) llama
+	// ResetSessions por su cuenta cuando detecta su propia sesion saturada
+	// -- sin coordinacion, si varias lo detectan casi al mismo tiempo (tipico
+	// en la apertura del mercado, cuando el host se congela un momento y
+	// todas quedan "silenciosas" juntas), cada una manda su propio DELETE
+	// /sessions + refresh de token, y el DELETE de una invalida la sesion
+	// recien creada por otra -- una tormenta que se auto-alimenta
+	// indefinidamente (confirmado en vivo el 2026-08-18 y otra vez el
+	// 2026-08-28: silencio total de DxLink por horas en pleno mercado
+	// abierto, sin recuperarse solo). singleflight colapsa las llamadas
+	// concurrentes en UNA sola ejecucion real -- el resto espera su
+	// resultado en vez de pisarlo.
+	resetGroup singleflight.Group
 }
 
 func NewOAuth(cfg OAuthConfig) *OAuth {
@@ -136,7 +151,21 @@ func (o *OAuth) LogoutAllSessions(ctx context.Context) error {
 // una vez con el token fresco -- sin ese reintento un token vencido deja las
 // sesiones huerfanas saturando el limite indefinidamente (confirmado en vivo
 // el 2026-08-25: logout 403 + refill cayendo de 250k a 3k velas/hora).
+//
+// singleflight.Do colapsa llamadas concurrentes (ver el comentario de
+// resetGroup): sin esto, cada DxLinkConn del pool que detecta su sesion
+// saturada casi al mismo tiempo manda su propio DELETE /sessions, y cada
+// uno invalida la sesion recien creada por el anterior -- confirmado en
+// vivo el 2026-08-28: silencio total de DxLink por horas en pleno mercado
+// abierto, sin recuperarse solo.
 func (o *OAuth) ResetSessions(ctx context.Context) error {
+	_, err, _ := o.resetGroup.Do("reset", func() (interface{}, error) {
+		return nil, o.resetSessionsOnce(ctx)
+	})
+	return err
+}
+
+func (o *OAuth) resetSessionsOnce(ctx context.Context) error {
 	if err := o.LogoutAllSessions(ctx); err != nil {
 		log.Warn().Err(err).Msg("dxlink: logout de sesiones falló, refrescando token y reintentando")
 		if _, rerr := o.RefreshAccessToken(ctx); rerr != nil {
