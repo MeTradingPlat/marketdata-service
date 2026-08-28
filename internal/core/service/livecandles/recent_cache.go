@@ -106,6 +106,53 @@ func (c *RecentCache) Range(symbol string, from, to time.Time) []domain.Candle {
 	return result
 }
 
+// RangeAggregated pliega las velas M1 cacheadas del simbolo en buckets de
+// `bucket` de ancho -- el mismo plegado que ya usa GetCurrentCandle para la
+// vela en formacion de un timeframe derivado (foldM1Bar/foldBar), aplicado
+// aca tambien a los buckets ya cerrados dentro de la ventana que cubre el
+// cache. Alineado por duracion exacta desde la epoca UTC (Truncate), misma
+// convencion que la agregacion SQL de Postgres (time_bucket) y que
+// FormingPeriodStart -- no hace falta un cache nuevo por timeframe, M1 ya
+// tiene todo lo necesario para armar cualquier derivado al vuelo.
+func (c *RecentCache) RangeAggregated(symbol string, from, to time.Time, bucket time.Duration, timeframe domain.Timeframe) []domain.Candle {
+	m1 := c.Range(symbol, from, to)
+	if len(m1) == 0 {
+		return nil
+	}
+	result := make([]domain.Candle, 0, len(m1))
+	var current domain.Candle
+	var bucketEnd time.Time
+	open := false
+	for _, bar := range m1 {
+		if !open || !bar.Timestamp.Before(bucketEnd) {
+			if open {
+				result = append(result, current)
+			}
+			bucketStart := bar.Timestamp.Truncate(bucket)
+			bucketEnd = bucketStart.Add(bucket)
+			current = domain.Candle{
+				Symbol: symbol, Timeframe: timeframe, Timestamp: bucketStart,
+				Open: bar.Open, High: bar.High, Low: bar.Low, Close: bar.Close,
+				Volume: bar.Volume, Source: bar.Source,
+			}
+			open = true
+			continue
+		}
+		if bar.High > current.High {
+			current.High = bar.High
+		}
+		if bar.Low < current.Low {
+			current.Low = bar.Low
+		}
+		current.Close = bar.Close
+		current.Volume += bar.Volume
+	}
+	if open {
+		result = append(result, current)
+	}
+	return result
+}
+
 // OldestCovered devuelve el timestamp mas viejo cacheado del simbolo -- el
 // caller lo usa para saber desde donde ya no necesita ir a Postgres.
 func (c *RecentCache) OldestCovered(symbol string) (time.Time, bool) {

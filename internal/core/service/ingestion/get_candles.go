@@ -100,50 +100,71 @@ func NewGetCandlesService(repo out.CandleRepository, recentCache *livecandles.Re
 }
 
 func (s *getCandlesService) GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
-	// "M1 hasta ahora" (before=nil) es exactamente lo que RecentCache cubre
-	// en vivo -- saltarse el cache de 60s aca evita devolver el mismo
-	// volumen incompleto varias veces seguidas mientras la fila recien
-	// cerrada todavia no es visible en Postgres (confirmado en vivo el
-	// 2026-08-27 con EMAT). Una fecha puntual (before != nil) es historico
-	// ya cerrado, sigue por el camino de siempre.
-	if timeframe == domain.M1 && before == nil {
-		return s.getFreshM1(ctx, symbol, bars)
-	}
 	key := candleCacheKey(symbol, timeframe, bars, before)
-	if candles, ok := s.cache.get(key); ok {
-		return candles, nil
+	var candles []domain.Candle
+	if cached, ok := s.cache.get(key); ok {
+		candles = cached
+	} else {
+		fetched, err := s.repo.GetCandles(ctx, symbol, timeframe, bars, before)
+		if err != nil {
+			return nil, fmt.Errorf("getting candles for %s %s: %w", symbol, timeframe, err)
+		}
+		s.cache.put(key, fetched)
+		candles = fetched
 	}
-	candles, err := s.repo.GetCandles(ctx, symbol, timeframe, bars, before)
-	if err != nil {
-		return nil, fmt.Errorf("getting candles for %s %s: %w", symbol, timeframe, err)
+	// "hasta ahora" (before=nil): la cola de lo que RecentCache ya cubre se
+	// reemplaza por su version agregada en vivo, sin importar si el resto
+	// vino del cache de 60s o de Postgres recien -- ninguno de los dos
+	// garantiza que la fila mas reciente ya sea visible/completa (confirmado
+	// en vivo el 2026-08-27 con EMAT: volumen incompleto de una vela recien
+	// cerrada). Una fecha puntual (before != nil) es historico ya cerrado,
+	// no necesita nada de esto.
+	if before == nil {
+		candles = s.freshen(symbol, candles, timeframe, bars)
 	}
-	s.cache.put(key, candles)
 	return candles, nil
 }
 
-// getFreshM1 combina Postgres (todo lo anterior a lo que RecentCache ya
-// cubre) con RecentCache (la cola reciente, nunca mas atrasada que el
-// ultimo tick procesado) -- sin solape: el limite superior de la consulta a
-// Postgres es exclusivo justo donde arranca lo cacheado.
-func (s *getCandlesService) getFreshM1(ctx context.Context, symbol string, bars int) ([]domain.Candle, error) {
+// freshen pliega el M1 recien llegado (RecentCache) al mismo bucket que el
+// timeframe pedido -- mismo plegado que ya usa GetCurrentCandle para la
+// vela en formacion, aplicado aca tambien a los buckets ya cerrados. No
+// hace falta un cache por timeframe: M1 en RecentCache ya tiene todo lo
+// necesario para armar cualquier derivado al vuelo (ver RecentCache.RangeAggregated).
+func (s *getCandlesService) freshen(symbol string, base []domain.Candle, timeframe domain.Timeframe, bars int) []domain.Candle {
+	bucket, err := bucketDuration(timeframe)
+	if err != nil {
+		return base // timeframe de calendario (semana/mes/anio): RecentCache jamas alcanza a cubrir tanto
+	}
 	oldestCached, hasCached := s.recentCache.OldestCovered(symbol)
 	if !hasCached {
-		candles, err := s.repo.GetCandles(ctx, symbol, domain.M1, bars, nil)
-		if err != nil {
-			return nil, fmt.Errorf("getting candles for %s M1: %w", symbol, err)
+		return base
+	}
+	kept := make([]domain.Candle, 0, len(base))
+	for _, c := range base {
+		if c.Timestamp.Before(oldestCached) {
+			kept = append(kept, c)
 		}
-		return candles, nil
 	}
-	older, err := s.repo.GetCandles(ctx, symbol, domain.M1, bars, &oldestCached)
-	if err != nil {
-		return nil, fmt.Errorf("getting candles for %s M1: %w", symbol, err)
-	}
-	recent := s.recentCache.Range(symbol, oldestCached, time.Now().Add(time.Second))
-	merged := append(older, recent...)
+	fresh := s.recentCache.RangeAggregated(symbol, oldestCached, time.Now().Add(time.Second), bucket, timeframe)
+	merged := append(kept, fresh...)
 	if len(merged) > bars {
 		merged = merged[len(merged)-bars:]
 	}
-	return merged, nil
+	return merged
+}
+
+// bucketDuration: Duration() cubre M1/H1/D1 (base, ya con duracion fija);
+// Aggregation() cubre los derivados (M5, M15...). Sin ninguna de las dos
+// (semana/mes/anio, calendario) freshen se lo salta -- RecentCache retiene
+// unas pocas decenas de barras M1, nunca alcanza a cubrir nada de ese tamano.
+func bucketDuration(tf domain.Timeframe) (time.Duration, error) {
+	if d, err := tf.Duration(); err == nil {
+		return d, nil
+	}
+	if _, _, approx, ok := tf.Aggregation(); ok && approx > 0 {
+		return approx, nil
+	}
+	return 0, fmt.Errorf("no hay duracion de bucket fija para %s", tf)
 }
 
 // candlesBatchFallbackWorkers: concurrencia acotada para el camino
@@ -172,13 +193,12 @@ func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []strin
 	result := make(map[string][]domain.Candle, len(symbols))
 	missing := make([]string, 0, len(symbols))
 	for _, symbol := range symbols {
-		// M1 nunca lee del cache de 60s aca -- ver el comentario de
-		// getFreshM1: cae al camino per-simbolo de abajo, que si lo usa.
-		if timeframe != domain.M1 {
-			if candles, ok := s.cache.get(candleCacheKey(symbol, timeframe, bars, nil)); ok {
-				result[symbol] = candles
-				continue
-			}
+		if candles, ok := s.cache.get(candleCacheKey(symbol, timeframe, bars, nil)); ok {
+			// GetCandlesBatch no tiene parametro `before` -- toda llamada es
+			// "hasta ahora", asi que el cache de 60s (bulk historico, cacheable
+			// sin riesgo) siempre se refresca con RecentCache antes de servirse.
+			result[symbol] = s.freshen(symbol, candles, timeframe, bars)
+			continue
 		}
 		missing = append(missing, symbol)
 	}
@@ -190,7 +210,7 @@ func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []strin
 		if batch, err := s.repo.GetSeriesAggregatedBatch(ctx, missing, timeframe, source, bucket, approxPeriod, bars); err == nil {
 			for symbol, candles := range batch {
 				s.cache.put(candleCacheKey(symbol, timeframe, bars, nil), candles)
-				result[symbol] = candles
+				result[symbol] = s.freshen(symbol, candles, timeframe, bars)
 			}
 			// Un simbolo sin filas en el batch (sin dato M1 real, ~9.7% del
 			// universo NYSE+NASDAQ+AMEX confirmado en vivo el 2026-08-23) no
@@ -201,6 +221,9 @@ func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []strin
 			for _, symbol := range missing {
 				if _, ok := batch[symbol]; !ok {
 					s.cache.put(candleCacheKey(symbol, timeframe, bars, nil), []domain.Candle{})
+					if fresh := s.freshen(symbol, nil, timeframe, bars); len(fresh) > 0 {
+						result[symbol] = fresh
+					}
 				}
 			}
 			return result

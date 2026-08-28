@@ -48,3 +48,46 @@ func TestGetCandles_M1UpToNow_UsesRecentCacheForTheTail(t *testing.T) {
 		t.Errorf("expected the freshest candle from the cache, got volume %d", got[len(got)-1].Volume)
 	}
 }
+
+// Regression: el caso real de EMAT (2026-08-27, RELATIVE_VOLUME en M5) --
+// una consulta de un timeframe DERIVADO "hasta ahora" tambien debe usar el
+// M1 fresco de RecentCache, no solo M1 directo. El bucket M5 se arma
+// plegando el M1 cacheado, sin necesidad de un cache propio por timeframe.
+func TestGetCandles_DerivedTimeframeUpToNow_FoldsFreshM1FromCache(t *testing.T) {
+	bucketStart := time.Date(2026, 8, 27, 18, 10, 0, 0, time.UTC)
+	staleFromDB := domain.Candle{
+		Symbol: "EMAT", Timeframe: domain.M5, Timestamp: bucketStart,
+		Open: 3.15, High: 3.15, Low: 3.15, Close: 3.15, Volume: 100, // "vista antes de completarse"
+	}
+	repo := &fakeRepo{getResult: []domain.Candle{staleFromDB}}
+
+	cache := livecandles.NewDefaultRecentCache()
+	// Las velas M1 reales del bucket 18:10-18:15, con el volumen real
+	// (27165 en el minuto del pico, como el caso real).
+	m1s := []domain.Candle{
+		{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: bucketStart, Open: 3.18, High: 3.18, Low: 3.18, Close: 3.18, Volume: 200},
+		{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: bucketStart.Add(time.Minute), Open: 3.18, High: 3.18, Low: 3.18, Close: 3.18, Volume: 400},
+		{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: bucketStart.Add(3 * time.Minute), Open: 3.18, High: 3.18, Low: 3.18, Close: 3.18, Volume: 7000},
+		{Symbol: "EMAT", Timeframe: domain.M1, Timestamp: bucketStart.Add(4 * time.Minute), Open: 3.15, High: 3.15, Low: 3.06, Close: 3.06, Volume: 27165},
+	}
+	for _, c := range m1s {
+		cache.Put(c, true)
+	}
+
+	svc := ingestion.NewGetCandlesService(repo, cache)
+
+	got, err := svc.GetCandles(context.Background(), "EMAT", domain.M5, 10, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 folded M5 candle, got %d", len(got))
+	}
+	const wantVolume = 200 + 400 + 7000 + 27165
+	if got[0].Volume != wantVolume {
+		t.Errorf("expected the folded volume %d (from fresh M1), got %d (stale DB value was %d)", wantVolume, got[0].Volume, staleFromDB.Volume)
+	}
+	if got[0].Close != 3.06 {
+		t.Errorf("expected close 3.06 (from fresh M1), got %v", got[0].Close)
+	}
+}
