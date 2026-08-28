@@ -395,6 +395,11 @@ func (p *CandlePool) StopAllLive(ctx context.Context) {
 
 	p.currentMu.Lock()
 	p.current = make(map[string]domain.Candle)
+	// lastClosed tambien se limpia aca -- el hueco hasta el proximo
+	// SubscribeLive es de horas (mercado cerrado de por medio), asi que
+	// cualquier tick tardio que llegue del otro lado ya pertenece a un dia
+	// distinto y no debe fusionarse contra la vela vieja.
+	p.lastClosed = make(map[string]domain.Candle)
 	p.currentMu.Unlock()
 
 	log.Info().Int("symbols", len(stopped)).Msg("stopped all live M1 subscriptions for the maintenance window")
