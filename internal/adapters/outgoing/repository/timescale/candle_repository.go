@@ -59,12 +59,12 @@ func execWithDeadlockRetry(ctx context.Context, exec func(context.Context) error
 // un valor mas viejo de la misma barra; y viceversa, el live jamas pisa una
 // verificada con su provisional.
 const upsertCandleSQL = `
-	INSERT INTO candles (symbol_id, timeframe, ts, open, high, low, close, volume, trade_count, vwap, source, verified)
-	SELECT symbol_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12 FROM tracked_symbols WHERE symbol = $1
+	INSERT INTO candles (symbol_id, timeframe, ts, open, high, low, close, volume, trade_count, vwap, source, verified, last_written_at)
+	SELECT symbol_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now() FROM tracked_symbols WHERE symbol = $1
 	ON CONFLICT (symbol_id, timeframe, ts) DO UPDATE SET
 		open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
 		volume = EXCLUDED.volume, trade_count = EXCLUDED.trade_count, vwap = EXCLUDED.vwap,
-		verified = candles.verified OR EXCLUDED.verified
+		verified = candles.verified OR EXCLUDED.verified, last_written_at = now()
 `
 
 const upsertWatermarkSQL = `

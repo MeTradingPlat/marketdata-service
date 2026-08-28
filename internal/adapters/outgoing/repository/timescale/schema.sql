@@ -201,6 +201,16 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close_updated_at TIMESTAMPTZ
 -- se re-escriben.
 ALTER TABLE candles ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT FALSE;
 
+-- last_written_at: hora real (reloj de Postgres) de la ULTIMA escritura de
+-- esta fila -- distinta de "ts" (el minuto de mercado que representa). Se
+-- actualiza en cada upsert (Save() la fuerza siempre, no solo al crear la
+-- fila), asi que compararla contra ts+timeframe mide cuanto tarda una vela
+-- en verse "quieta" (dejar de recibir revisiones) despues de su cierre real
+-- -- confirmado en vivo el 2026-08-27 con EMAT: un pico de volumen en un M1
+-- parecia tardar varios minutos en reflejarse completo rio abajo, sin forma
+-- de medirlo directo hasta ahora.
+ALTER TABLE candles ADD COLUMN IF NOT EXISTS last_written_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
 -- candles_m5/candles_m15 (continuous aggregates de TimescaleDB sobre M1)
 -- RETIRADOS el 2026-08-23: GetSeriesAggregatedBatch/getAggregatedCandles ya
 -- no leen ninguna vista propia, agregan M1 cruda on-the-fly para TODOS los
