@@ -39,7 +39,7 @@ func TestBackfill(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gw := &fakeGateway{probeResult: tt.probeResult, probeErr: tt.probeErr}
 			repo := &fakeRepo{}
-			svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster(), intraday.NewSnapshotTracker())
+			svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster(), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
 
 			err := svc.Backfill(context.Background(), "AAPL", domain.D1)
 
@@ -62,7 +62,7 @@ func TestBackfill(t *testing.T) {
 func TestStreamLive(t *testing.T) {
 	gw := &fakeGateway{}
 	repo := &fakeRepo{}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster(), intraday.NewSnapshotTracker())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster(), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
 
 	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -81,7 +81,7 @@ func TestStreamLive(t *testing.T) {
 func TestStreamLive_BuffersFailedSaveForRetry(t *testing.T) {
 	gw := &fakeGateway{}
 	repo := &fakeRepo{saveErr: errors.New("db down")}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster(), intraday.NewSnapshotTracker())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster(), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
 
 	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
 		t.Fatalf("unexpected error: %v", err)

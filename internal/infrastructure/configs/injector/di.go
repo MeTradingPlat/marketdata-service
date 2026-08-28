@@ -44,6 +44,7 @@ func BuildContainer() *dig.Container {
 
 	checkErr(container.Provide(provideDiscoveryClient))
 	checkErr(container.Provide(livecandles.NewBroadcaster))
+	checkErr(container.Provide(livecandles.NewDefaultRecentCache))
 	checkErr(container.Provide(intraday.NewSnapshotTracker))
 
 	checkErr(container.Provide(provideTickerCikLookup))

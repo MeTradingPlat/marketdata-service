@@ -19,14 +19,15 @@ type ingestCandlesService struct {
 	repo        out.CandleRepository
 	broadcaster *livecandles.Broadcaster
 	tracker     *intraday.SnapshotTracker
+	recentCache *livecandles.RecentCache
 	retryBuffer *saveRetryBuffer
 	liveMu      sync.RWMutex
 	live        map[string]bool
 	attempted   map[string]bool
 }
 
-func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster, tracker *intraday.SnapshotTracker) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, tracker: tracker, retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
+func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster, tracker *intraday.SnapshotTracker, recentCache *livecandles.RecentCache) in.IngestCandlesService {
+	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, tracker: tracker, recentCache: recentCache, retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
 }
 
 // IncrementalMargin son barras de mas antes del watermark que se vuelven a
@@ -135,6 +136,12 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 			s.retryBuffer.add(c)
 		}
 		s.tracker.RecordClosedCandle(c)
+		// Ademas de Postgres: una lectura de candles del minuto que acaba de
+		// cerrar no debe depender de que la fila ya sea visible en la BD --
+		// confirmado en vivo el 2026-08-27 con EMAT (RELATIVE_VOLUME M5): el
+		// volumen real de una vela recien cerrada tardo varios ciclos del
+		// escaner en reflejarse completo rio abajo.
+		s.recentCache.Put(c, true)
 		s.broadcaster.Publish(c)
 	}, func(c domain.Candle) {
 		// La vela M1 en formacion tras cada tick -- el WS de /ws/candles la
@@ -142,6 +149,7 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 		// agregacion). Sin publicador en el Broadcaster no habria forma de
 		// que una sesion WS vea la vela a medio formar: solo se publicaba
 		// al cerrar.
+		s.recentCache.Put(c, false)
 		s.broadcaster.Publish(c)
 	}); err != nil {
 		s.setLive(symbol, false)
