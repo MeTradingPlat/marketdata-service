@@ -45,6 +45,14 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 	select {
 	case <-c.ready:
 		return nil
+	// client.Done() cubre el caso donde el socket muere (zombie, sessions
+	// exceeded, INVALID_MESSAGE) despues de mandar el CHANNEL_REQUEST pero
+	// antes de que CHANNEL_OPENED/FEED_CONFIG lleguen -- sin esto, el unico
+	// recurso era ctx, y ctx aca es el del barrido/backfill (vive horas, sin
+	// timeout propio), asi que esta espera podia quedar colgada para
+	// siempre. Ver el comentario de connDone en dxlink_conn.go.
+	case <-c.client.Done():
+		return fmt.Errorf("dxlink connection closed while opening channel %d", c.id)
 	case <-ctx.Done():
 		return ctx.Err()
 	}

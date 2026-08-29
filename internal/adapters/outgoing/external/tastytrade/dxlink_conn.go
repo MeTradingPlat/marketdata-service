@@ -70,6 +70,35 @@ type DxLinkConn struct {
 	onSessionReset func(ctx context.Context) error
 
 	closing atomic.Bool
+
+	// connDone se cierra en cleanup() -- es la señal de "esta conexion en
+	// particular ya murio" para cualquier goroutine bloqueada esperando algo
+	// que solo puede llegar por ESTE socket (ver dxLinkChannel.open). Antes
+	// de esto, ese select solo tenia el ctx del llamador como salida, y ese
+	// ctx es de vida larga (el barrido nocturno, sin timeout propio) -- si
+	// el socket moria (zombie, sessions exceeded, INVALID_MESSAGE) justo
+	// mientras se abria un canal nuevo, CHANNEL_OPENED/FEED_CONFIG ya nunca
+	// iban a llegar y ese worker quedaba colgado para siempre. Confirmado en
+	// vivo el 2026-08-29: una tanda de reconexiones forzadas (salto de reloj
+	// del host) dejo el barrido D1 completamente detenido casi 2 horas, sin
+	// un solo error en el log, con CPU en reposo -- el perfil exacto de
+	// varios workers bloqueados en un canal que nunca se cierra, no de un
+	// crash ni de lentitud real.
+	connDone chan struct{}
+}
+
+// Done devuelve la señal de muerte de la conexion ACTUAL -- si ya esta
+// caida (connDone es nil), devuelve un canal ya cerrado para que un select
+// no bloquee esperando una conexion que ni siquiera existe todavia.
+func (c *DxLinkConn) Done() <-chan struct{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.connDone == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	return c.connDone
 }
 
 func (c *DxLinkConn) touchLastMessage() {
@@ -129,6 +158,7 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 	c.authenticated = false
 	c.handshakeDone = handshakeDone
 	c.channels = make(map[int]*dxLinkChannel)
+	c.connDone = make(chan struct{})
 	c.mu.Unlock()
 	c.touchLastMessage()
 
@@ -185,6 +215,10 @@ func (c *DxLinkConn) cleanup() {
 	}
 	c.conn = nil
 	c.channels = make(map[int]*dxLinkChannel)
+	if c.connDone != nil {
+		close(c.connDone)
+		c.connDone = nil
+	}
 }
 
 // dxLinkMaxMessageBytes es el limite documentado por dxFeed para un solo
