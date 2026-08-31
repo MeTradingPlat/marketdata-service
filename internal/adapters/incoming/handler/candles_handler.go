@@ -7,16 +7,26 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
+	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/labstack/echo/v4"
 )
 
 type CandlesHandler struct {
 	service in.GetCandlesService
 	current in.GetCurrentCandleService
+
+	// batchSema: ver el comentario de MAX_CONCURRENT_BATCH_RESPONSES en
+	// config.go -- acota cuantas respuestas de /historical/batch (~9MB sin
+	// comprimir cada una) se arman en memoria a la vez.
+	batchSema chan struct{}
 }
 
-func NewCandlesHandler(service in.GetCandlesService, current in.GetCurrentCandleService) *CandlesHandler {
-	return &CandlesHandler{service: service, current: current}
+func NewCandlesHandler(service in.GetCandlesService, current in.GetCurrentCandleService, cfg *configs.Config) *CandlesHandler {
+	max := cfg.MaxConcurrentBatchResponses
+	if max <= 0 {
+		max = 4
+	}
+	return &CandlesHandler{service: service, current: current, batchSema: make(chan struct{}, max)}
 }
 
 // GetCurrentCandle sirve la vela EN FORMACION del simbolo+timeframe (query

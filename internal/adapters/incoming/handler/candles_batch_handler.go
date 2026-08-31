@@ -32,6 +32,17 @@ func (h *CandlesHandler) GetCandlesBatch(c echo.Context) error {
 		bars = 100
 	}
 
+	// Ver batchSema en candles_handler.go -- sin este tope, cada llamada
+	// grande concurrente (varios scanners evaluando a la vez) apila su
+	// propio buffer de ~9MB de JSON crudo en memoria al mismo tiempo, la
+	// causa confirmada (dmesg) de dos de los OOM del contenedor.
+	select {
+	case h.batchSema <- struct{}{}:
+		defer func() { <-h.batchSema }()
+	case <-c.Request().Context().Done():
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "request cancelled while waiting for batch capacity")
+	}
+
 	result := h.service.GetCandlesBatch(c.Request().Context(), req.Symbols, timeframe, bars)
 	return c.JSON(http.StatusOK, dto.CandlesBatchResponse{CandlesPorSimbolo: result})
 }
