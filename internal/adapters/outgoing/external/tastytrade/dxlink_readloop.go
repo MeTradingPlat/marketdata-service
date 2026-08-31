@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
 
@@ -42,6 +43,18 @@ func (c *DxLinkConn) readLoop(ctx context.Context) {
 }
 
 func (c *DxLinkConn) notifyHandshakeFailure(err error) {
+	// Un cierre NORMAL (1000, tipicamente con texto "Bye") antes de terminar
+	// el handshake es atipico: un servidor sano no cierra asi una conexion
+	// recien abierta que todavia esta autenticando. En la practica es la
+	// forma en que TastyTrade rechaza un intento cuando el limite de
+	// sesiones ya esta saturado -- no llega como ERROR de protocolo (ver el
+	// caso "sessions" en handleError) porque nunca se completa el AUTH.
+	// Confirmado en vivo el 2026-08-30/31: el barrido pedia conexiones
+	// nuevas para el backfill y cada una se cerraba asi durante el storm.
+	if ce, ok := err.(*websocket.CloseError); ok && ce.Code == websocket.CloseNormalClosure {
+		c.markSessionSaturated()
+	}
+
 	c.mu.Lock()
 	done := c.handshakeDone
 	c.handshakeDone = nil
@@ -118,7 +131,7 @@ func (c *DxLinkConn) handleError(ctx context.Context, env inboundEnvelope) {
 			// "The number of user sessions has exceeded the configured limit":
 			// sesiones huerfanas de conexiones previas saturaron el limite --
 			// la reconexion debe limpiarlas via REST primero (OnSessionReset).
-			c.sessionSaturated.Store(true)
+			c.markSessionSaturated()
 		}
 		c.mu.Lock()
 		c.authenticated = false

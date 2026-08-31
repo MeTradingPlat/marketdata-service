@@ -40,6 +40,24 @@ type OAuth struct {
 	// concurrentes en UNA sola ejecucion real -- el resto espera su
 	// resultado en vez de pisarlo.
 	resetGroup singleflight.Group
+
+	// breaker: ventana compartida entre TODAS las conexiones del proceso
+	// cuando el limite de sesiones de TastyTrade esta saturado -- ver
+	// session_breaker.go para el porque hace falta ademas de resetGroup.
+	breaker SessionBreaker
+}
+
+// MarkSessionsSaturated extiende la ventana compartida de espera -- llamado
+// por cualquier DxLinkConn (en vivo o efimera del barrido) que detecta un
+// rechazo por limite de sesiones.
+func (o *OAuth) MarkSessionsSaturated() {
+	o.breaker.MarkSaturated()
+}
+
+// WaitForSessionCooldown bloquea hasta que la ventana compartida termine, si
+// esta activa -- llamado antes de CUALQUIER intento de dial nuevo.
+func (o *OAuth) WaitForSessionCooldown(ctx context.Context) error {
+	return o.breaker.Wait(ctx)
 }
 
 func NewOAuth(cfg OAuthConfig) *OAuth {

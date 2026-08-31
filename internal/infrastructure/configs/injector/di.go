@@ -168,6 +168,8 @@ func provideCandlePool(cfg *configs.Config, qt *tastytrade.QuoteToken, oauth *ta
 		conn.OnSessionReset(func(sctx context.Context) error {
 			return oauth.ResetSessions(sctx)
 		})
+		conn.OnSessionSaturated(oauth.MarkSessionsSaturated)
+		conn.OnWaitForSessionCooldown(oauth.WaitForSessionCooldown)
 		if err := conn.Connect(ctx); err != nil {
 			return nil, err
 		}

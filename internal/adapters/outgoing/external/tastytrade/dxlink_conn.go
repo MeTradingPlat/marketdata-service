@@ -69,6 +69,13 @@ type DxLinkConn struct {
 
 	onSessionReset func(ctx context.Context) error
 
+	// onSessionSaturated/waitForSessionCooldown: el lado compartido del
+	// mismo problema que sessionSaturated -- ver session_breaker.go. Se
+	// llaman en TODA conexion (en vivo o efimera del barrido), no solo en
+	// la que detecto el rechazo.
+	onSessionSaturated     func()
+	waitForSessionCooldown func(ctx context.Context) error
+
 	closing atomic.Bool
 
 	// connDone se cierra en cleanup() -- es la señal de "esta conexion en
@@ -132,6 +139,27 @@ func (c *DxLinkConn) OnSessionReset(fn func(ctx context.Context) error) {
 	c.onSessionReset = fn
 }
 
+// OnSessionSaturated registra el hook que extiende la ventana compartida de
+// espera (ver session_breaker.go) -- se llama en cuanto ESTA conexion
+// detecta un rechazo por limite de sesiones, para que las demas (en vivo y
+// del barrido) tambien esperen antes de gastar otro intento.
+func (c *DxLinkConn) OnSessionSaturated(fn func()) {
+	c.onSessionSaturated = fn
+}
+
+// OnWaitForSessionCooldown registra el hook que bloquea antes de dialear si
+// la ventana compartida sigue activa.
+func (c *DxLinkConn) OnWaitForSessionCooldown(fn func(ctx context.Context) error) {
+	c.waitForSessionCooldown = fn
+}
+
+func (c *DxLinkConn) markSessionSaturated() {
+	c.sessionSaturated.Store(true)
+	if c.onSessionSaturated != nil {
+		c.onSessionSaturated()
+	}
+}
+
 func (c *DxLinkConn) Connected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -139,6 +167,12 @@ func (c *DxLinkConn) Connected() bool {
 }
 
 func (c *DxLinkConn) Connect(ctx context.Context) error {
+	if c.waitForSessionCooldown != nil {
+		if err := c.waitForSessionCooldown(ctx); err != nil {
+			return fmt.Errorf("waiting for session cooldown: %w", err)
+		}
+	}
+
 	conn, _, err := dxLinkDialer.DialContext(ctx, c.urlFunc(), nil)
 	if err != nil {
 		return fmt.Errorf("dialing dxlink websocket: %w", err)
