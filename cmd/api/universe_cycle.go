@@ -119,8 +119,15 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		return catchup.RefreshBeta(ctx, candles, fundamentals, windowStart)
 	})
 
+	// Simbolos sin D1 nuevo hace demasiado (fusion de SPAC, deslistado, nota
+	// vencida -- TastyTrade los sigue listando "activos" pero dxFeed no manda
+	// mas dato) no pagan H1/M1/suscripcion en vivo -- el D1 de ARRIBA, que
+	// SIEMPRE corre para el universo completo, es la unica señal de "¿ya
+	// volvio?" que hace falta (ver FilterStaleSymbols).
+	activeTracked := catchup.FilterStaleSymbols(ctx, candles, tracked, time.Now())
+
 	// FASE 2: H1, desde cero sesiones (RunSweepPhase cierra al terminar).
-	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.H1, cfg.SweepWorkers)
+	catchup.RunSweepPhase(ctx, gateway, candles, ingest, activeTracked, domain.H1, cfg.SweepWorkers)
 
 	// FASE 3: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
 	// las velas M1 de la sesion anterior, asi que va DESPUES del rollout
@@ -137,16 +144,16 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// simbolo (rollout de 11+ min, confirmado en vivo el 2026-08-18). Con el
 	// sweep, el watermark avanza diario y el rollout solo re-juega el hueco
 	// del downtime (~minutos).
-	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.M1, cfg.SweepWorkers)
+	catchup.RunSweepPhase(ctx, gateway, candles, ingest, activeTracked, domain.M1, cfg.SweepWorkers)
 
 	// Sembrar el SnapshotTracker con UNA sola consulta de lote (el mismo
 	// costo que antes pagaba CADA request de fundamentals/realtime) justo
 	// despues del sweep M1 y antes de abrir las suscripciones en vivo -- sin
 	// esto, GetSnapshotsBatch caeria al fallback de BD para el universo
 	// entero hasta que cada simbolo recibiera su primer tick en vivo.
-	seedSnapshotTracker(ctx, candles, tracker, tracked)
+	seedSnapshotTracker(ctx, candles, tracker, activeTracked)
 
-	startLiveUniverse(ctx, ingest, tracked)
+	startLiveUniverse(ctx, ingest, activeTracked)
 	refreshWithRetry("prev close", func() error {
 		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
 	})

@@ -72,12 +72,22 @@ func NextMaintenanceWindowAt(now time.Time) time.Time {
 // vuelve vacio (fallo silencioso del lado de TastyTrade), no se toca nada
 // -- mejor un universo desactualizado que desactivar todo por un fetch roto.
 // testSymbolPatterns: los simbolos de prueba que TastyTrade publica en su
-// propio universo de equities (NTEST/PTEST y sus variantes ZAZZT/ZCZZT) --
-// el usuario los excluyo del mercado nuestro; no deben entrar al Tracked ni
-// aparecer en el screener. El prefijo cubre las variantes (NTEST/A, /Z...).
-var testSymbolPatterns = []string{"NTEST", "PTEST", "ZAZZT", "ZCZZT"}
+// propio universo de equities (NTEST/PTEST) -- el usuario los excluyo del
+// mercado nuestro; no deben entrar al Tracked ni aparecer en el screener. El
+// prefijo cubre las variantes (NTEST/A, ...).
+var testSymbolPatterns = []string{"NTEST", "PTEST"}
+
+// testSymbolSuffix: la familia UTP/NASDAQ "Z..ZZT" (ZAZZT, ZCZZT, ZWZZT,
+// ZXZZT...) -- confirmado en vivo el 2026-08-31: ZWZZT y ZXZZT (descripcion
+// "NASDAQ TEST STOCK") se colaron al universo rastreado porque el filtro
+// anterior solo enumeraba dos variantes puntuales (ZAZZT/ZCZZT) en vez del
+// patron completo. Ninguna accion real termina en ZZT.
+const testSymbolSuffix = "ZZT"
 
 func isTestSymbol(symbol string) bool {
+	if strings.HasSuffix(symbol, testSymbolSuffix) {
+		return true
+	}
 	for _, p := range testSymbolPatterns {
 		if strings.HasPrefix(symbol, p) {
 			return true
@@ -108,8 +118,15 @@ func reconcileUniverse(ctx context.Context, gateway out.MarketDataGateway, symbo
 	if err != nil {
 		return fmt.Errorf("listing tracked symbols: %w", err)
 	}
-	activeSet := make(map[string]struct{}, len(active))
-	for _, s := range active {
+	// activeSet se arma desde `real` (ya filtrado), no `active` -- `real :=
+	// active[:0]` reutiliza el mismo array de abajo (filtro in-place comun en
+	// Go), asi que `active` queda con su cola sin sobreescribir despues del
+	// loop de arriba: iterarlo de nuevo aca colaba symbolos de prueba
+	// (isTestSymbol) de vuelta al set de "activos", dejandolos is_active=true
+	// para siempre porque Deactivate() nunca los veia como stale (confirmado
+	// en vivo el 2026-08-31 con ZWZZT/ZXZZT).
+	activeSet := make(map[string]struct{}, len(real))
+	for _, s := range real {
 		activeSet[s.Symbol] = struct{}{}
 	}
 	var stale []string
