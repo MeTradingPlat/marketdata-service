@@ -68,6 +68,29 @@ jobs:
             docker start postgres-marketdata
           fi
 
+      - name: Harden postgres locks for full-universe rebuilds (max_locks_per_transaction)
+        run: |
+          # max_locks_per_transaction=256 (ya subido una vez de 64 tras un
+          # incidente anterior, ver el comentario de connect() en
+          # internal/infrastructure/configs/storage/timescale.go) volvio a
+          # quedarse corto el 2026-08-31: reconstruir el universo COMPLETO
+          # (D1+H1+M1 de los 13k simbolos a la vez, tras un reinicio) toca
+          # muchos mas chunks del hypertable de una sola vez que el barrido
+          # incremental de siempre, y goleo "out of shared memory" otra vez.
+          # Ese ajuste se habia hecho a mano con ALTER SYSTEM directo en el
+          # servidor -- nunca quedo en el repo, asi que un volumen nuevo lo
+          # perdia en silencio (confirmado: postgresql.auto.conf lo tenia,
+          # git no). Esto lo deja versionado -- se re-aplica en cada deploy
+          # (ALTER SYSTEM es idempotente) y sobrevive a un volumen nuevo.
+          # Requiere reinicio de postgres para tomar efecto (PGC_POSTMASTER,
+          # afecta el tamano de la tabla de locks compartida).
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
+          docker restart postgres-marketdata
+          for i in $(seq 1 15); do
+            docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
+            sleep 2
+          done
+
       - name: Harden postgres memory against OOM (memory.high)
         run: |
           # El cgroup de postgres se llena de page cache de las lecturas/
