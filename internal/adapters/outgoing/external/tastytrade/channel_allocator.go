@@ -156,6 +156,19 @@ func (a *channelAllocator) drainAll() []*pooledConnection {
 	return conns
 }
 
+// forceReconnectAll fuerza el cierre+reconexion de TODAS las conexiones del
+// pool -- ver CandlePool.ForceReconnectAll. Copia la lista bajo lock y
+// suelta ANTES de llamar a ForceReconnect (que hace I/O de socket) por el
+// mismo motivo que el resto de este archivo evita I/O bajo un.mu compartido.
+func (a *channelAllocator) forceReconnectAll(ctx context.Context) {
+	a.mu.Lock()
+	conns := append([]*pooledConnection(nil), a.connections...)
+	a.mu.Unlock()
+	for _, pc := range conns {
+		pc.conn.ForceReconnect(ctx)
+	}
+}
+
 func (a *channelAllocator) connectionCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()

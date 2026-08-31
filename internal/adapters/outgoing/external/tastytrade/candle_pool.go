@@ -97,6 +97,18 @@ type CandlePool struct {
 	// no un mutex aparte -- ambos mapas cambian juntos en el mismo evento.
 	lastClosed map[string]domain.Candle
 
+	// lastLiveEventAtUnixNano: se toca en CADA evento M1 en vivo que procesa
+	// handleLiveEvent, sin importar el simbolo -- LiveDataWatchdog lo usa
+	// para medir "hace cuanto no llega NINGUNA vela nueva de NINGUN simbolo",
+	// la unica señal que de verdad importa (ver live_data_watchdog.go). A
+	// diferencia de lastMessageAtUnixNano de cada DxLinkConn (que se toca con
+	// CUALQUIER mensaje, KEEPALIVE incluido), esta se toca solo con datos
+	// reales -- confirmado en vivo el 2026-08-31: el socket seguia
+	// respondiendo KEEPALIVE con normalidad 3+ horas despues de que la
+	// suscripcion de datos se murio en silencio, asi que lastMessageAtUnixNano
+	// nunca lo detecto.
+	lastLiveEventAtUnixNano atomic.Int64
+
 	// orphanEvents cuenta eventos que llegan para un simbolo+temporalidad
 	// que ya no tiene handler registrado -- si esto crece SIN PARAR con el
 	// tiempo, confirma una fuga de suscripcion server-side (lo que se vio y
@@ -236,6 +248,7 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 // se fusiona sobre una base vacia como antes -- mejor esfuerzo, no hay de
 // donde mas sacar el resto de los campos.
 func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
+	p.lastLiveEventAtUnixNano.Store(time.Now().UnixNano())
 	p.currentMu.Lock()
 	prev, exists := p.current[symbol]
 	if exists && ev.Timestamp.Before(prev.Timestamp) {
@@ -472,6 +485,38 @@ func (p *CandlePool) LiveSubscribed(symbol string) bool {
 	defer p.liveMu.Unlock()
 	_, ok := p.liveSubs[symbol]
 	return ok
+}
+
+// LiveSubscribedCount es cuantos simbolos tienen streaming M1 registrado
+// ahora mismo -- LiveDataWatchdog solo tiene sentido revisar el silencio si
+// hay algo que deberia estar sonando.
+func (p *CandlePool) LiveSubscribedCount() int {
+	p.liveMu.Lock()
+	defer p.liveMu.Unlock()
+	return len(p.liveSubs)
+}
+
+// LastLiveEventAge es hace cuanto no llega NINGUNA vela en vivo de NINGUN
+// simbolo -- ver el comentario de lastLiveEventAtUnixNano. Cero significa
+// "todavia no llego la primera desde que arranco el proceso".
+func (p *CandlePool) LastLiveEventAge() time.Duration {
+	last := p.lastLiveEventAtUnixNano.Load()
+	if last == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, last))
+}
+
+// ForceReconnectAll cierra y reconecta CADA conexion del pool, sin importar
+// si el socket se ve sano -- la unica forma confirmada de recuperar un
+// silencio de datos donde el KEEPALIVE seguia respondiendo con normalidad
+// (ver live_data_watchdog.go). Reusa el mismo camino de cleanup+reconexion
+// que ya usa healthCheckLoop por conexion individual, asi que cada una
+// vuelve a autenticar y a resuscribir sus simbolos en vivo por su cuenta
+// (ver handleConnectionReconnect) -- no hace falta reimplementar nada de
+// eso aca.
+func (p *CandlePool) ForceReconnectAll(ctx context.Context) {
+	p.allocator.forceReconnectAll(ctx)
 }
 
 // CurrentCandle devuelve la vela M1 en formacion ahora mismo -- precio y

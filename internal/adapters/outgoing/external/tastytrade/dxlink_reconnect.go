@@ -30,6 +30,18 @@ const (
 	staleConnectionThreshold = 90 * time.Second
 )
 
+// ForceReconnect cierra la conexion y arranca una reconexion nueva sin
+// esperar a que nada la detecte como caida -- mismo camino que usa
+// healthCheckLoop cuando SI detecta un silencio a nivel de socket
+// (cleanup+scheduleReconnect), expuesto aca para que LiveDataWatchdog pueda
+// dispararlo por un motivo distinto: silencio a nivel de DATO, no de
+// mensaje (ver CandlePool.ForceReconnectAll). cleanup() ya es seguro de
+// llamar sobre una conexion que ya esta reconectando o caida.
+func (c *DxLinkConn) ForceReconnect(ctx context.Context) {
+	c.cleanup()
+	c.scheduleReconnect(ctx)
+}
+
 func (c *DxLinkConn) handleDisconnect(ctx context.Context) {
 	c.mu.Lock()
 	c.authenticated = false
