@@ -1,6 +1,9 @@
-# Incidentes de "sessions exceeded" en DxLink -- bitácora
+# Incidentes de conexiones/pool/memoria en marketdata-service -- bitácora
 
-Antes de tocar de nuevo la reconexión/sesiones de DxLink, leer esto completo.
+Cubre dos problemas relacionados pero distintos: el storm de "sessions
+exceeded" de DxLink, y los OOM del contenedor ("se satura, solo arregla el
+reinicio"). Antes de tocar de nuevo la reconexión/sesiones/memoria, leer
+esto completo.
 Varios intentos ya se probaron y fallaron o quedaron incompletos -- repetirlos
 sin saberlo hace perder tiempo.
 
@@ -68,6 +71,57 @@ como las conexiones efímeras del barrido, porque ambas pasan por el mismo
 
 Verificado en vivo: de 500-1000 errores/min a 0 tras el deploy, sweep H1
 avanzando sin fallos de conexión.
+
+## Incidente relacionado pero DISTINTO: OOM del contenedor ("se satura, solo arregla el reinicio")
+
+No es lo mismo que el storm de sesiones de arriba -- ahí el proceso seguía
+vivo y se recuperaba solo (o con el fix del breaker, ya no falla). Este otro
+patrón es el **kernel matando el proceso por memoria** (`docker inspect`
+mostraba `RestartCount=0`/sin auto-restart útil porque cada OOM exige que
+alguien note el servicio caído y lo reinicie).
+
+**Evidencia real** (`journalctl -k`, cgroup OOM, NO teoría):
+
+| Fecha (UTC) | RSS al morir | Contexto |
+|---|---|---|
+| 2026-08-19 15:53 | -- | Durante el barrido normal D1/H1/M1 |
+| 2026-08-19 16:16 | -- | 23 min después del anterior -- volvió a caer casi de inmediato |
+| 2026-08-24 15:11 | ~1.02GB | Ya con el límite en 1g (ver abajo) -- lo tocó igual |
+
+**Ya se "arregló" una vez y volvió a pasar**: el límite de memoria del
+contenedor (`docker run --memory`, ver `cd.yml`) se subió de `512m` a `1g`
+tras los dos OOM del 08-19 -- con el comentario de que el proceso llegó a
+~518-522MB de RSS real. Pero el 08-24 volvió a pasar, esta vez tocando el
+nuevo techo de 1GB casi exacto. **Conclusión: subir el límite solo pospone
+el problema, no lo resuelve** -- el consumo real crece con la carga, no es
+un tope fijo que ya se superó una vez.
+
+Dos causas ya diagnosticadas (comentario de `cd.yml`):
+1. El barrido D1/H1/M1 en sí (pool de hasta 40 conexiones + 25 workers).
+2. `/marketdata/historical/batch`: arma la respuesta ENTERA (~9MB de JSON
+   crudo por lote de 800 símbolos, ver `signal-processing-service`
+   `_CANDLE_CHUNK_SIZE`) en memoria antes de comprimir con gzip. Varias
+   llamadas grandes en paralelo (varios scanners evaluando a la vez) apilan
+   varios buffers de ese tamaño al mismo tiempo.
+
+**Fix del 2026-08-31 (`cfbc866`)**: semáforo (`MAX_CONCURRENT_BATCH_RESPONSES`,
+default 4) que acota cuántas respuestas de `/historical/batch` se arman en
+memoria a la vez -- ataca la causa #2 sin tocar el límite de memoria de
+nuevo. La causa #1 (footprint del barrido en sí) sigue sin un fix dedicado
+-- si el OOM vuelve a pasar específicamente durante la ventana del barrido
+(00:05-01:00 UTC aprox.) y no durante uso normal de `/historical/batch`,
+es la próxima señal a seguir.
+
+**El host tiene memoria genuinamente escasa** (VAIO: 11GiB totales, ~3GiB
+disponibles con todo lo demás corriendo -- ver [[reference_vaio_server]]):
+subir el límite de este contenedor de nuevo compite en serio con los otros
+~20 contenedores del mismo host, no es una perilla gratis.
+
+**Antes de subir el límite de memoria otra vez**: confirmar primero que no
+es la causa #1 sin resolver, y capturar `docker logs`/`docker stats` (o un
+`pprof` si se agrega) ANTES de reiniciar -- cada reinicio borra el log del
+contenedor anterior (se perdió toda evidencia de antes del 2026-08-31 por
+esto mismo).
 
 ## Antes de tocar esto de nuevo
 
