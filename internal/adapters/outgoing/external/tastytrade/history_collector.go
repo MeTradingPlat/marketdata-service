@@ -15,6 +15,13 @@ const (
 	historyQuietPeriod  = 700 * time.Millisecond
 )
 
+// eventFlagsConfirmedOnce: TastyTrade no siempre puebla todo lo documentado
+// por dxFeed (ver profileEventFields) -- esto confirma UNA sola vez por
+// proceso, a nivel Info (el resto del logging de este archivo es Debug,
+// invisible con el SetGlobalLevel de main.go), si el feed realmente manda
+// eventFlags o si el fix de snapshotDone es un no-op silencioso.
+var eventFlagsConfirmedOnce sync.Once
+
 type historyCollector struct {
 	symbol string
 	tf     domain.Timeframe
@@ -41,6 +48,10 @@ func (h *historyCollector) onCandle(ev rawCandleEvent) {
 		snipped := ev.EventFlags&eventFlagSnapshotSnip != 0
 		log.Debug().Str("symbol", h.symbol).Str("timeframe", string(h.tf)).Bool("snipped", snipped).
 			Msg("dxlink marked historical snapshot done via eventFlags")
+		eventFlagsConfirmedOnce.Do(func() {
+			log.Info().Str("symbol", h.symbol).Str("timeframe", string(h.tf)).Bool("snipped", snipped).
+				Msg("confirmed: dxlink populates eventFlags for Candle, snapshot completion no longer guessed by timeout alone")
+		})
 	}
 }
 
