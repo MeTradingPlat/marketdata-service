@@ -629,6 +629,14 @@ func (p *CandlePool) FetchHistory(ctx context.Context, symbol string, tf domain.
 	return p.fetchHistory(ctx, symbol, tf, from, historyDefaultWait)
 }
 
+// FetchHistoryWithWait expone fetchHistory con un wait a eleccion -- solo
+// para cmd/verify-depth (confirmar en vivo cuanto tarda de verdad la
+// rafaga historica de un simbolo puntual, sin el limite de historyDeepWait
+// de por medio).
+func (p *CandlePool) FetchHistoryWithWait(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time, wait time.Duration) ([]domain.Candle, error) {
+	return p.fetchHistory(ctx, symbol, tf, from, wait)
+}
+
 func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time, wait time.Duration) ([]domain.Candle, error) {
 	// Un fetch M1 puntual para un simbolo que YA esta en vivo competiria por
 	// la MISMA suscripcion server-side (dxFeed fusiona el "add" de esta

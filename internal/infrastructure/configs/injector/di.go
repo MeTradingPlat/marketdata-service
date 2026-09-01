@@ -81,6 +81,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(handler.NewMetadataHandler))
 	checkErr(container.Provide(handler.NewCandleWSHandler))
 	checkErr(container.Provide(handler.NewCurrentPricesHandler))
+	checkErr(container.Provide(handler.NewDebugProbeHandler))
 
 	checkErr(container.Provide(server.NewServer))
 	checkErr(container.Provide(provideBackfillGate))

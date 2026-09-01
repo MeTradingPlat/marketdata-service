@@ -42,6 +42,15 @@ func (g *Gateway) ProbeMaxDepth(ctx context.Context, symbol string, timeframe do
 	return g.pool.FetchHistoryDeep(ctx, symbol, timeframe, ProbeFromTime)
 }
 
+// ProbeMaxDepthWithWait es ProbeMaxDepth con un wait a eleccion -- solo para
+// el diagnostico de profundidad (ver debug_probe_handler.go). NO forma
+// parte de out.MarketDataGateway a proposito: agregarla ahi obligaria a
+// implementarla en cada fake de test de ese puerto para una funcion que
+// ningun flujo de produccion real necesita, solo este diagnostico puntual.
+func (g *Gateway) ProbeMaxDepthWithWait(ctx context.Context, symbol string, timeframe domain.Timeframe, wait time.Duration) ([]domain.Candle, error) {
+	return g.pool.FetchHistoryWithWait(ctx, symbol, timeframe, ProbeFromTime, wait)
+}
+
 // SubscribeLiveCandles trata "from" en cero (sin watermark todavia, simbolo
 // nuevo) igual que ProbeMaxDepth: pide toda la profundidad M1 real que
 // TastyTrade entregue en vez de arrancar la suscripcion en vivo sin nada de
