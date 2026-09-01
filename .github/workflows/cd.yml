@@ -91,7 +91,14 @@ jobs:
           #
           # Ambos requieren reinicio de postgres para tomar efecto
           # (PGC_POSTMASTER) -- se aplican juntos para no reiniciar dos veces.
-          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512; ALTER SYSTEM SET max_connections = 200;"
+          # Dos "-c" separados, no uno con ";" en el medio -- confirmado en
+          # vivo el 2026-09-01: psql -c con mas de un statement los manda
+          # como una sola query de multiples comandos, que Postgres corre
+          # dentro de un bloque de transaccion implicito, y ALTER SYSTEM
+          # explicitamente no puede correr adentro de una transaccion
+          # ("ALTER SYSTEM cannot run inside a transaction block").
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_connections = 200;"
           docker restart postgres-marketdata
           for i in $(seq 1 15); do
             docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
