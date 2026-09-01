@@ -288,6 +288,31 @@ func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 	p.dispatchTick(symbol, forming)
 }
 
+// flushFormingCandles guarda la vela EN FORMACION de cada simbolo antes de
+// que StopAllLive/CloseAllConnections la descarten -- confirmado en vivo el
+// 2026-09-01: ninguno de los dos guardaba la vela a medio cerrar, asi que
+// se perdia en silencio cada vez que el proceso se reinicia (hoy paso 6+
+// veces) o en cada ventana de mantenimiento nocturna, hasta que el barrido
+// M1 la volvia a traer de TastyTrade horas despues. Reusa dispatchClosed
+// (mismo camino de guardado que un cierre real, con su chequeo IsComplete)
+// en vez de inventar uno nuevo -- del lado de afuera es indistinguible de
+// un cierre real, solo que forzado por el apagado en vez de un tick nuevo.
+// Guardar por este camino usa withWatermark=false igual que un cierre
+// normal, asi que si quedo incompleta el proximo barrido M1 la reemplaza
+// con la version real de TastyTrade sin conflicto.
+func (p *CandlePool) flushFormingCandles() {
+	p.currentMu.Lock()
+	pending := make(map[string]domain.Candle, len(p.current))
+	for symbol, c := range p.current {
+		pending[symbol] = c
+	}
+	p.currentMu.Unlock()
+
+	for symbol, c := range pending {
+		p.dispatchClosed(symbol, c)
+	}
+}
+
 func (p *CandlePool) dispatchClosed(symbol string, c domain.Candle) {
 	if !c.IsComplete() {
 		return
@@ -402,6 +427,10 @@ func (p *CandlePool) StopAllLive(ctx context.Context) {
 	}
 	p.dispatchMu.Unlock()
 
+	// Antes de descartar cualquier estado -- ver el comentario de
+	// flushFormingCandles.
+	p.flushFormingCandles()
+
 	p.liveMu.Lock()
 	p.liveSubs = make(map[string]func(domain.Candle))
 	p.liveMu.Unlock()
@@ -433,6 +462,15 @@ func (p *CandlePool) CloseAllConnections() {
 	p.dispatchMu.Lock()
 	p.dispatch = make(map[string]dispatchEntry)
 	p.dispatchMu.Unlock()
+
+	// Antes de descartar cualquier estado -- ver el comentario de
+	// flushFormingCandles. CloseAllConnections corre en CADA reinicio del
+	// proceso (ResetLiveConnections en el shutdown, ver cmd/api/main.go) y
+	// en cada frontera D1->H1->M1 del barrido -- confirmado en vivo el
+	// 2026-09-01: sin esto, la vela en formacion de cada simbolo se perdia
+	// en silencio en cada uno de esos reinicios (6+ solo hoy), no solo en
+	// StopAllLive una vez por noche.
+	p.flushFormingCandles()
 
 	p.liveMu.Lock()
 	p.liveSubs = make(map[string]func(domain.Candle))

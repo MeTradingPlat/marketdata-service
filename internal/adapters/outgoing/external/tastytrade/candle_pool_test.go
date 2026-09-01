@@ -82,3 +82,52 @@ func TestHandleLiveEvent_LateTickDoesNotDisturbCurrentForming(t *testing.T) {
 		t.Fatalf("expected 18:11 to close normally next, got %+v", closedEvents)
 	}
 }
+
+// TestFlushFormingCandles_SavesBeforeDiscard confirma el fix del 2026-09-01:
+// StopAllLive/CloseAllConnections descartaban la vela en formacion de cada
+// simbolo sin guardarla -- confirmado en vivo que esto pasaba en CADA
+// reinicio del proceso, no solo en el StopAllLive nocturno.
+func TestFlushFormingCandles_SavesBeforeDiscard(t *testing.T) {
+	p := newTestPool()
+	ts := time.Date(2026, 9, 1, 14, 30, 0, 0, time.UTC)
+
+	var closedEvents []domain.Candle
+	p.liveSubs["AAPL"] = func(c domain.Candle) { closedEvents = append(closedEvents, c) }
+	p.liveTicks["AAPL"] = func(domain.Candle) {}
+
+	p.handleLiveEvent("AAPL", rawCandleEvent{
+		Symbol: "AAPL", Timestamp: ts,
+		Open: f(230), High: f(231), Low: f(229.5), Close: f(230.5), Volume: f(1500),
+	})
+	if _, ok := p.current["AAPL"]; !ok {
+		t.Fatal("expected AAPL to be forming before the flush")
+	}
+	if len(closedEvents) != 0 {
+		t.Fatalf("expected no closed events yet, got %+v", closedEvents)
+	}
+
+	p.flushFormingCandles()
+
+	if len(closedEvents) != 1 {
+		t.Fatalf("expected the forming candle to be dispatched as closed on flush, got %d events", len(closedEvents))
+	}
+	if closedEvents[0].Timestamp != ts || closedEvents[0].Volume != 1500 {
+		t.Errorf("expected the flushed candle to match what was forming, got %+v", closedEvents[0])
+	}
+}
+
+// TestFlushFormingCandles_SkipsIncompleteCandle confirma que un candle sin
+// OHLC completo (dispatchClosed ya filtra esto) no se guarda a medias.
+func TestFlushFormingCandles_SkipsIncompleteCandle(t *testing.T) {
+	p := newTestPool()
+	p.current["ZZZ"] = domain.Candle{Symbol: "ZZZ", Timestamp: time.Now()}
+
+	var closedEvents []domain.Candle
+	p.liveSubs["ZZZ"] = func(c domain.Candle) { closedEvents = append(closedEvents, c) }
+
+	p.flushFormingCandles()
+
+	if len(closedEvents) != 0 {
+		t.Fatalf("expected an incomplete candle not to be dispatched, got %+v", closedEvents)
+	}
+}
