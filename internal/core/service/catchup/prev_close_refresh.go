@@ -3,16 +3,23 @@ package catchup
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/rs/zerolog/log"
 )
 
-// prevCloseChunk: lotes de a mil simbolos para la lectura del prevClose --
-// GetPreviousSessionClose es por-simbolo y la query de la subasta es
-// barata; el lote solo acota la memoria de la lista.
-const prevCloseChunk = 1000
+// prevCloseWorkers: RefreshPrevClose era un for secuencial, un round-trip a
+// la vez -- confirmado en vivo el 2026-09-01: 9676 simbolos tardaron 34
+// MINUTOS (un solo symbol/query cada vez), el paso mas lento por lejos de
+// todo el ciclo posterior al rollout en vivo, extendiendo cada reinicio del
+// dia con el mismo gate de backfill cerrado de mas. Mismo criterio de
+// concurrencia acotada que liveRolloutWorkers (cmd/api/universe_cycle.go) y
+// candlesBatchFallbackWorkers (ingestion/get_candles.go) -- pgxpool ya es
+// seguro para uso concurrente, no hace falta nada especial del lado de BD.
+const prevCloseWorkers = 20
 
 // RefreshPrevClose calcula el prevClose (cierre de la subasta de la sesion
 // anterior, ver GetPreviousSessionClose) SOLO para los simbolos cuyo
@@ -33,30 +40,48 @@ func RefreshPrevClose(ctx context.Context, candles out.CandleRepository, fundame
 	}
 
 	start := time.Now()
-	done := 0
-	for i := 0; i < len(stale); i += prevCloseChunk {
-		end := min(i+prevCloseChunk, len(stale))
-		for _, symbol := range stale[i:end] {
-			close, err := candles.GetPreviousSessionClose(ctx, symbol, time.Now())
-			if err != nil {
-				continue
-			}
-			if close == nil {
-				// Sin datos M1 (warrants/OTC sin historia): estampar
-				// "intentado" para no re-procesarlo en cada ciclo -- el
-				// proximo window lo reintenta igual (el guard compara contra
-				// windowStart).
-				if err := fundamentals.MarkPrevCloseAttempted(ctx, symbol); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := fundamentals.UpsertPrevClose(ctx, symbol, *close); err != nil {
-				return err
-			}
-			done++
-		}
+	var done, failed atomic.Int64
+
+	jobs := make(chan string, len(stale))
+	for _, symbol := range stale {
+		jobs <- symbol
 	}
-	log.Info().Int("symbols", done).Dur("elapsed", time.Since(start)).Msg("prev close refresh finished")
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for i := 0; i < prevCloseWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for symbol := range jobs {
+				if refreshOnePrevClose(ctx, candles, fundamentals, symbol) {
+					done.Add(1)
+				} else {
+					failed.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	log.Info().Int64("symbols", done.Load()).Int64("failed", failed.Load()).Dur("elapsed", time.Since(start)).Msg("prev close refresh finished")
 	return nil
+}
+
+// refreshOnePrevClose devuelve false en cualquier fallo (de lectura o de
+// escritura) -- un simbolo fallido no debe frenar a los demas, el proximo
+// window lo reintenta igual (mismo criterio que el resto del barrido
+// nocturno: mejor un universo parcialmente al dia que ninguno).
+func refreshOnePrevClose(ctx context.Context, candles out.CandleRepository, fundamentals out.FundamentalsRepository, symbol string) bool {
+	closePrice, err := candles.GetPreviousSessionClose(ctx, symbol, time.Now())
+	if err != nil {
+		return false
+	}
+	if closePrice == nil {
+		// Sin datos M1 (warrants/OTC sin historia): estampar "intentado"
+		// para no re-procesarlo en cada ciclo -- el proximo window lo
+		// reintenta igual (el guard compara contra windowStart).
+		return fundamentals.MarkPrevCloseAttempted(ctx, symbol) == nil
+	}
+	return fundamentals.UpsertPrevClose(ctx, symbol, *closePrice) == nil
 }
