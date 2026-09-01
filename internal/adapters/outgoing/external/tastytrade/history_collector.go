@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -18,9 +19,10 @@ type historyCollector struct {
 	symbol string
 	tf     domain.Timeframe
 
-	mu         sync.Mutex
-	data       map[int64]domain.Candle
-	lastUpdate time.Time
+	mu              sync.Mutex
+	data            map[int64]domain.Candle
+	lastUpdate      time.Time
+	sawSnapshotDone bool
 }
 
 func newHistoryCollector(symbol string, tf domain.Timeframe) *historyCollector {
@@ -33,6 +35,13 @@ func (h *historyCollector) onCandle(ev rawCandleEvent) {
 	key := ev.Timestamp.UnixMilli()
 	h.data[key] = mergeCandle(h.data[key], ev, h.symbol, h.tf)
 	h.lastUpdate = time.Now()
+
+	if !h.sawSnapshotDone && ev.snapshotDone() {
+		h.sawSnapshotDone = true
+		snipped := ev.EventFlags&eventFlagSnapshotSnip != 0
+		log.Debug().Str("symbol", h.symbol).Str("timeframe", string(h.tf)).Bool("snipped", snipped).
+			Msg("dxlink marked historical snapshot done via eventFlags")
+	}
 }
 
 func (h *historyCollector) hasData() bool {
@@ -46,12 +55,20 @@ func (h *historyCollector) hasData() bool {
 	return false
 }
 
-// settled es verdadero una vez que ya llego al menos una vela Y paso un
-// periodo sin recibir nada nuevo -- dxLink puede repartir una rafaga
-// historica en varios mensajes FEED_DATA separados en el tiempo (no
-// necesariamente uno solo atomico), asi que "ya hay datos" no es lo mismo
-// que "ya llego toda la rafaga" (confirmado en vivo: cortar en la primera
-// vela completa daba solo 2 filas de D1 en vez de años de historia).
+// settled es verdadero cuando ya hay al menos una vela Y (a) dxLink marco
+// el final real de la rafaga via eventFlags (SNAPSHOT_END/SNAPSHOT_SNIP,
+// ver rawCandleEvent.snapshotDone) o, si ese campo no llega poblado para
+// este feed, (b) paso un periodo sin recibir nada nuevo -- dxLink puede
+// repartir una rafaga historica en varios mensajes FEED_DATA separados en
+// el tiempo (no necesariamente uno solo atomico), asi que "ya hay datos"
+// no es lo mismo que "ya llego toda la rafaga" (confirmado en vivo: cortar
+// en la primera vela completa daba solo 2 filas de D1 en vez de años de
+// historia). (b) es el respaldo original -- un timeout de reloj fijo
+// (historyDeepWait) puede cortar a mitad de una rafaga todavia activa para
+// un simbolo de mucho volumen, confirmado en vivo el 2026-08-31 con
+// FXI/PFE/IBIT (profundidad M1 mucho mas corta que el resto del universo,
+// cada uno cortado en una fecha distinta). (a) evita ese corte prematuro
+// cuando dxFeed si puebla el campo.
 func (h *historyCollector) settled() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -65,7 +82,10 @@ func (h *historyCollector) settled() bool {
 			break
 		}
 	}
-	return hasComplete && time.Since(h.lastUpdate) >= historyQuietPeriod
+	if !hasComplete {
+		return false
+	}
+	return h.sawSnapshotDone || time.Since(h.lastUpdate) >= historyQuietPeriod
 }
 
 func (h *historyCollector) complete() []domain.Candle {

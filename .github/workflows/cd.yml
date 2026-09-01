@@ -68,7 +68,7 @@ jobs:
             docker start postgres-marketdata
           fi
 
-      - name: Harden postgres locks for full-universe rebuilds (max_locks_per_transaction)
+      - name: Harden postgres locks/connections for full-universe rebuilds
         run: |
           # max_locks_per_transaction=256 (ya subido una vez de 64 tras un
           # incidente anterior, ver el comentario de connect() en
@@ -82,9 +82,16 @@ jobs:
           # perdia en silencio (confirmado: postgresql.auto.conf lo tenia,
           # git no). Esto lo deja versionado -- se re-aplica en cada deploy
           # (ALTER SYSTEM es idempotente) y sobrevive a un volumen nuevo.
-          # Requiere reinicio de postgres para tomar efecto (PGC_POSTMASTER,
-          # afecta el tamano de la tabla de locks compartida).
-          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
+          #
+          # max_connections=100 se quedo corto el mismo dia: confirmado en
+          # vivo DOS veces durante la misma ventana de reconstruccion
+          # (pg_stat_activity llego a 96/100) -- "sorry, too many clients
+          # already" tumbando el refresh de fundamentales externos. 200 deja
+          # margen real sobre el pico observado.
+          #
+          # Ambos requieren reinicio de postgres para tomar efecto
+          # (PGC_POSTMASTER) -- se aplican juntos para no reiniciar dos veces.
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512; ALTER SYSTEM SET max_connections = 200;"
           docker restart postgres-marketdata
           for i in $(seq 1 15); do
             docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break

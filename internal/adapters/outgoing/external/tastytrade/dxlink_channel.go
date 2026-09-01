@@ -10,7 +10,21 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 )
 
-var candleEventFields = []string{"eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility"}
+// eventFlags al final (indice 9, ver candle_event.go): pedido nuevo,
+// defensivo -- dxFeed documenta Candle como IndexedEvent con esta propiedad
+// (SNAPSHOT_END/SNAPSHOT_SNIP/TX_PENDING, ver kb.dxfeed.com IndexedEvent),
+// que le diria a historyCollector con certeza cuando una rafaga historica
+// termino de verdad en vez de adivinar por un timeout de reloj (ver
+// historyDeepWait en candle_pool.go). Confirmado en vivo el 2026-08-31:
+// FXI/PFE/IBIT -- todos simbolos liquidos -- quedaron con profundidad M1
+// mucho mas corta que el piso general (~43 dias) del resto del universo,
+// cada uno cortado en una fecha distinta, la firma de un timeout que
+// corta a mitad de una rafaga todavia activa, no un limite real del
+// proveedor. TastyTrade no siempre puebla todos los campos documentados de
+// dxFeed (ver el comentario de profileEventFields, mismo problema con
+// Profile) -- si eventFlags tampoco llega poblado aca, el codigo cae de
+// vuelta al timeout de siempre sin romper nada; se sabra por el log.
+var candleEventFields = []string{"eventSymbol", "time", "open", "high", "low", "close", "volume", "VWAP", "impVolatility", "eventFlags"}
 
 // profileEventFields: el feed retail de TastyTrade solo entrega estos 5
 // campos del evento Profile de forma confiable -- confirmado empiricamente
