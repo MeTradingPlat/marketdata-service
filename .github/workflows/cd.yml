@@ -105,9 +105,20 @@ jobs:
           # -- alarga las pasadas de compresion nocturna sin necesidad, igual
           # que el resto de los ajustes de esta seccion vivia solo en el
           # servidor sin quedar versionado.
+          # statement_timeout/idle_in_transaction_session_timeout (5min cada
+          # uno) el 2026-09-02: sin esto, una conexion colgada (query
+          # trabada o "idle in transaction" por un bug del caller) se queda
+          # con su memoria y sus locks para siempre -- practica estandar de
+          # Postgres para que el propio servidor corte lo que se cuelga, en
+          # vez de depender de que alguien lo note. No requieren reinicio
+          # (son reloadable), pero se aplican aca para no repetir el mismo
+          # "vivia solo en el servidor, se perdia con un volumen nuevo" que
+          # ya paso con el resto de esta seccion.
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_connections = 200;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET maintenance_work_mem = '256MB';"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET statement_timeout = '5min';"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET idle_in_transaction_session_timeout = '5min';"
           docker restart postgres-marketdata
           for i in $(seq 1 15); do
             docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
