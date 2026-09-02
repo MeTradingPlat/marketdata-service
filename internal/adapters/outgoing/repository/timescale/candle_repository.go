@@ -539,13 +539,17 @@ func (r *CandleRepository) GetIntradaySessions(ctx context.Context, symbol strin
 // GetIntradaySessionsBatch es intradaySessionsSQL con GROUP BY s.symbol --
 // ver el comentario del puerto (GetIntradaySessionsBatch) sobre por que esto
 // reemplaza N queries secuenciales por una sola.
-// intradaySessionsBatchChunkSize: acota cuantos simbolos se agregan por
-// consulta (ver chunkSymbols) -- con los ~13k simbolos activos de una sola
-// pasada, esta misma consulta infla la conexion del snapshotPool a mas de
-// 1GB de RSS que Postgres no devuelve despues. 9-10 lotes secuenciales de
-// este tamaño acotan el pico de memoria por consulta sin perder ningun dato
-// (el resultado final es identico, solo mas repartido en el tiempo).
-const intradaySessionsBatchChunkSize = 1500
+// universeBatchChunkSize: acota cuantos simbolos entran en un solo ANY($1)
+// contra el universo activo entero (ver chunkSymbols) -- usado tanto por
+// GetIntradaySessionsBatch (ARRAY_AGG por symbol, el caso mas caro: infló el
+// snapshotPool a mas de 1GB de RSS por conexion el 2026-09-02, ver
+// MaxConnLifetime en storage/timescale.go) como por
+// GetPreviousSessionCloseBatch (DISTINCT ON, mucho mas liviano por fila,
+// pero mismo principio de no mandarle los ~13k simbolos activos a Postgres
+// de una sola vez). 9-10 lotes secuenciales acotan el pico de memoria por
+// consulta sin perder ningun dato -- el resultado final es identico, solo
+// mas repartido en el tiempo.
+const universeBatchChunkSize = 1500
 
 func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols []string) (map[string]domain.IntradaySnapshot, error) {
 	result := make(map[string]domain.IntradaySnapshot, len(symbols))
@@ -562,7 +566,7 @@ func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols
 	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
 	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
 
-	for _, batch := range chunkSymbols(symbols, intradaySessionsBatchChunkSize) {
+	for _, batch := range chunkSymbols(symbols, universeBatchChunkSize) {
 		if err := r.queryIntradaySessionsBatch(ctx, batch, dayStart, dayEnd, marketOpen, marketClose, result); err != nil {
 			return nil, err
 		}
@@ -663,26 +667,28 @@ func (r *CandleRepository) GetPreviousSessionCloseBatch(ctx context.Context, sym
 		from := day.Add(15*time.Hour + 58*time.Minute)
 		to := day.Add(16*time.Hour + time.Minute)
 
-		rows, err := r.snapshotPool.Query(ctx, previousSessionCloseWindowSQL, pending, from, to)
-		if err != nil {
-			return nil, fmt.Errorf("querying previous session close window (day -%d) for %d symbols: %w", d, len(pending), err)
-		}
 		resolved := make(map[string]struct{}, len(pending))
-		for rows.Next() {
-			var symbol string
-			var close float64
-			if err := rows.Scan(&symbol, &close); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning previous session close window row: %w", err)
+		for _, batch := range chunkSymbols(pending, universeBatchChunkSize) {
+			rows, err := r.snapshotPool.Query(ctx, previousSessionCloseWindowSQL, batch, from, to)
+			if err != nil {
+				return nil, fmt.Errorf("querying previous session close window (day -%d) for %d symbols: %w", d, len(batch), err)
 			}
-			result[symbol] = close
-			resolved[symbol] = struct{}{}
-		}
-		if err := rows.Err(); err != nil {
+			for rows.Next() {
+				var symbol string
+				var close float64
+				if err := rows.Scan(&symbol, &close); err != nil {
+					rows.Close()
+					return nil, fmt.Errorf("scanning previous session close window row: %w", err)
+				}
+				result[symbol] = close
+				resolved[symbol] = struct{}{}
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("iterating previous session close window rows: %w", err)
+			}
 			rows.Close()
-			return nil, fmt.Errorf("iterating previous session close window rows: %w", err)
 		}
-		rows.Close()
 
 		if len(resolved) == 0 {
 			continue
