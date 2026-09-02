@@ -55,8 +55,8 @@ jobs:
               --network "metradingplat-network" \
               --restart "always" \
               --cpus "1.0" \
-              --memory "4g" \
-              --memory-swap "4g" \
+              --memory "6g" \
+              --memory-swap "6g" \
               --shm-size "1g" \
               -e POSTGRES_DB="marketdata_db" \
               -e POSTGRES_USER="user_marketdata" \
@@ -108,18 +108,25 @@ jobs:
       - name: Harden postgres memory against OOM (memory.high)
         run: |
           # El cgroup de postgres se llena de page cache de las lecturas/
-          # escrituras de velas (4GiB de cache bajo un tope duro de 4GiB) --
-          # el refresh de beta OOM-mato a postgres dos veces el 2026-08-17
-          # (recovery mode, SQLSTATE 57P03, sin escrituras durante minutos).
-          # memory.high (cgroup v2) fuerza reclaim temprano del cache a
-          # 3.2GiB, bajo el tope duro, en vez de esperar al OOM killer.
+          # escrituras de velas -- el refresh de beta OOM-mato a postgres dos
+          # veces el 2026-08-17 (recovery mode, SQLSTATE 57P03, sin escrituras
+          # durante minutos). memory.high (cgroup v2) fuerza reclaim temprano
+          # del cache, bajo el tope duro, en vez de esperar al OOM killer.
+          #
+          # Subido de 4GiB/3.2GiB a 6GiB/5GiB el 2026-09-02: memory.events
+          # del cgroup mostro ~4.9M hits de "high" en 41h (throttling casi
+          # constante) y un oom_kill real (mato un solo backend, no todo el
+          # postmaster -- por eso el contenedor nunca aparecia reiniciado).
+          # 6GiB/5GiB mantiene el mismo margen relativo (80%) entre soft y
+          # hard limit con mas headroom absoluto.
+          #
           # NOTA: se re-aplica en cada deploy porque el scope de systemd se
           # recrea con cada `docker rm`/`docker run` de postgres.
           PG_ID=$(docker inspect -f '{{.Id}}' postgres-marketdata)
           if sudo -n true 2>/dev/null; then
-            echo 3435973836 | sudo tee "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high" >/dev/null
+            echo 5368709120 | sudo tee "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high" >/dev/null
           else
-            echo 3435973836 > "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
+            echo 5368709120 > "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
           fi
           cat "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
 
