@@ -87,7 +87,14 @@ ALTER TABLE candles SET (
 -- toca minutos recientes. El margen incremental se redujo a 1 barra
 -- (IncrementalMargin) para que ningun re-fetch atrasado intente upsertear
 -- un chunk ya comprimido.
-SELECT add_compression_policy('candles', INTERVAL '1 day', if_not_exists => TRUE);
+-- initial_start en 02:30 UTC: vivia sin versionar en el servidor a las
+-- 23:26 UTC (perdido si se recrea el volumen) -- ANTES de que arranque el
+-- barrido nocturno (20:05 ET = 00:05 UTC en horario de verano, 01:05 UTC en
+-- invierno, ver NextMaintenanceWindowAt), asi que corria todas las noches
+-- sin comprimir nunca nada reciente. 02:30 UTC da margen real sobre el fin
+-- del barrido observado en vivo (~00:34 UTC en verano) incluso en horario
+-- de invierno (~01:45 UTC estimado).
+SELECT add_compression_policy('candles', INTERVAL '1 day', if_not_exists => TRUE, initial_start => '2026-01-01 02:30:00+00'::timestamptz);
 
 -- Mismo tuning de historical-data-service: evita la pasada de vacuum de
 -- 30+ min vista en produccion con esta tabla bajo escritura constante.
