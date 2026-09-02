@@ -11,7 +11,11 @@ import (
 type IngestCandlesService interface {
 	Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error
 	StreamLive(ctx context.Context, symbol string) error
-	RetryPendingSaves(ctx context.Context)
+	// RetryPendingSaves intenta guardar lo que quedo bufferizado -- devuelve
+	// false solo si habia algo pendiente y el intento fallo (para que el
+	// caller sepa cuando hacer backoff), true si no habia nada pendiente o
+	// si se guardo todo.
+	RetryPendingSaves(ctx context.Context) bool
 	IsLive(symbol string) bool
 	IsAttempted(symbol string) bool
 }

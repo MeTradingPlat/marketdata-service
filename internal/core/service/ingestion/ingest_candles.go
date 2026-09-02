@@ -188,16 +188,19 @@ func (s *ingestCandlesService) IsAttempted(symbol string) bool {
 // RetryPendingSaves reintenta las velas en vivo que fallaron al guardarse --
 // llamado periodicamente desde cmd/api, no en el hilo de lectura del
 // WebSocket (ver comentario de saveRetryBuffer sobre por que la suscripcion
-// DxLink no necesita tocarse para esto).
-func (s *ingestCandlesService) RetryPendingSaves(ctx context.Context) {
+// DxLink no necesita tocarse para esto). El bool de retorno le dice al
+// caller si hacer backoff (ver StartSaveRetryLoop): false solo cuando habia
+// algo pendiente y el intento fallo.
+func (s *ingestCandlesService) RetryPendingSaves(ctx context.Context) bool {
 	pending := s.retryBuffer.drain()
 	if len(pending) == 0 {
-		return
+		return true
 	}
 	if err := s.repo.Save(ctx, pending, false); err != nil {
 		log.Error().Err(err).Int("candles", len(pending)).Msg("retrying pending candle saves failed, will retry again")
 		s.retryBuffer.requeue(pending)
-		return
+		return false
 	}
 	log.Info().Int("candles", len(pending)).Msg("recovered pending candle saves")
+	return true
 }
