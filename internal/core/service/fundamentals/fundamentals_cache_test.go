@@ -18,6 +18,9 @@ func (f *fakeSymbolRepo) Upsert(ctx context.Context, symbols []domain.Symbol) er
 func (f *fakeSymbolRepo) Tracked(ctx context.Context) ([]domain.Symbol, error) {
 	return f.tracked, f.err
 }
+func (f *fakeSymbolRepo) TrackedWithVolume(ctx context.Context) ([]domain.Symbol, error) {
+	return f.tracked, f.err
+}
 func (f *fakeSymbolRepo) GetBySymbol(ctx context.Context, symbol string) (domain.Symbol, error) {
 	return domain.Symbol{}, nil
 }

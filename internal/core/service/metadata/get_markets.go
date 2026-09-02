@@ -6,7 +6,6 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
-	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 )
 
 // marketNames son los mismos nombres amigables que ya usaba MetadataController
@@ -21,10 +20,10 @@ var marketNames = map[string]string{
 }
 
 type getMarketsService struct {
-	symbols out.SymbolRepository
+	symbols *SymbolsCache
 }
 
-func NewGetMarketsService(symbols out.SymbolRepository) in.GetMarketsService {
+func NewGetMarketsService(symbols *SymbolsCache) in.GetMarketsService {
 	return &getMarketsService{symbols: symbols}
 }
 

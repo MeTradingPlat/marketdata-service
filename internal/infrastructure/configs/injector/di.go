@@ -68,6 +68,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(fundamentals.NewFundamentalsCache))
 	checkErr(container.Provide(fundamentals.NewGetFundamentalsService))
 	checkErr(container.Provide(fundamentals.NewGetFundamentalsRealtimeService))
+	checkErr(container.Provide(metadata.NewSymbolsCache))
 	checkErr(container.Provide(metadata.NewGetSymbolsService))
 	checkErr(container.Provide(metadata.NewGetMarketsService))
 	checkErr(container.Provide(metadata.NewGetTimeframesService))

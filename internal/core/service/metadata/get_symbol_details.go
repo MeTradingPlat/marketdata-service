@@ -11,13 +11,13 @@ import (
 )
 
 type getSymbolDetailsService struct {
-	symbols      out.SymbolRepository
+	symbols      *SymbolsCache
 	fundamentals *fundamentalscache.FundamentalsCache
 	intraday     in.GetIntradaySnapshotService
 	openInterest out.OpenInterestGateway
 }
 
-func NewGetSymbolDetailsService(symbols out.SymbolRepository, fundamentals *fundamentalscache.FundamentalsCache, intraday in.GetIntradaySnapshotService, openInterest out.OpenInterestGateway) in.GetSymbolDetailsService {
+func NewGetSymbolDetailsService(symbols *SymbolsCache, fundamentals *fundamentalscache.FundamentalsCache, intraday in.GetIntradaySnapshotService, openInterest out.OpenInterestGateway) in.GetSymbolDetailsService {
 	return &getSymbolDetailsService{symbols: symbols, fundamentals: fundamentals, intraday: intraday, openInterest: openInterest}
 }
 

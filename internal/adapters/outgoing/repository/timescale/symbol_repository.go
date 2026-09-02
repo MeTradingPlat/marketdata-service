@@ -63,6 +63,30 @@ func (r *SymbolRepository) Tracked(ctx context.Context) ([]domain.Symbol, error)
 	return symbols, rows.Err()
 }
 
+const trackedSymbolsWithVolumeSQL = `SELECT symbol, market, description, is_etf, last_volume FROM tracked_symbols WHERE is_active = TRUE`
+
+// TrackedWithVolume alimenta SymbolsCache.ReloadAll -- last_volume es el
+// mismo campo que Search() ya usa para ordenar por actividad real en vez de
+// alfabetico (ver Save() en candle_repository.go, que lo actualiza en cada
+// vela D1 nueva).
+func (r *SymbolRepository) TrackedWithVolume(ctx context.Context) ([]domain.Symbol, error) {
+	rows, err := r.pool.Query(ctx, trackedSymbolsWithVolumeSQL)
+	if err != nil {
+		return nil, fmt.Errorf("querying tracked symbols with volume: %w", err)
+	}
+	defer rows.Close()
+
+	var symbols []domain.Symbol
+	for rows.Next() {
+		var s domain.Symbol
+		if err := rows.Scan(&s.Symbol, &s.Market, &s.Description, &s.IsEtf, &s.LastVolume); err != nil {
+			return nil, fmt.Errorf("scanning symbol with volume row: %w", err)
+		}
+		symbols = append(symbols, s)
+	}
+	return symbols, rows.Err()
+}
+
 const marketsSQL = `SELECT DISTINCT market FROM tracked_symbols WHERE is_active = TRUE ORDER BY market`
 
 func (r *SymbolRepository) Markets(ctx context.Context) ([]string, error) {

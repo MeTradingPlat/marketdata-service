@@ -11,6 +11,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
 	fundamentals2 "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/metadata"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/rs/zerolog/log"
 )
@@ -57,22 +58,22 @@ func refreshWithRetry(name string, fn func() error) {
 // /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
 // (ver topSymbolsPerMarket) despues del rollout M1 -- REST puro, no compite
 // por conexiones DxLink con las fases de velas.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, liveRolloutDone *atomic.Bool) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, liveRolloutDone, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, liveRolloutDone, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
 	// Pipeline del backfill (diseno del usuario): D1 primero, se cierran
 	// las conexiones, se calcula TODO lo que se calcula con D1 (beta y
 	// prevClose, por-simbolo con fecha), luego H1 (se cierra, se calcula lo
@@ -85,6 +86,10 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		log.Error().Msg("universe sweep returned no symbols, skipping live M1 rollout")
 		return
 	}
+	// Justo despues de reconciliar (unico punto que escribe Upsert/Deactivate
+	// en tracked_symbols) -- asi SymbolsCache siempre refleja el universo
+	// recien reconciliado antes de que el gate se abra a peticiones externas.
+	symbolsCache.ReloadAll(ctx)
 
 	// El gate solo tiene sentido cuando el barrido corre en la ventana de
 	// mantenimiento real (mercado cerrado) -- ahi bloquear no cuesta nada,

@@ -18,6 +18,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/metadata"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/injector"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
@@ -56,6 +57,7 @@ func main() {
 		backfilling *atomic.Bool,
 		snapshotTracker *intraday.SnapshotTracker,
 		fundamentalsCache *fundamentals.FundamentalsCache,
+		symbolsCache *metadata.SymbolsCache,
 		recentCache *livecandles.RecentCache,
 	) {
 		// signal.NotifyContext cancela ctx al recibir SIGTERM/SIGINT --
@@ -111,7 +113,7 @@ func main() {
 		// reconciler (que lo consulta antes de reintentar un simbolo nunca
 		// intentado) -- ver shouldSkipReconcileRetry.
 		var liveRolloutDone atomic.Bool
-		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, &liveRolloutDone)
+		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, symbolsCache, &liveRolloutDone)
 		StartLiveReconcileLoop(ctx, ingest, gateway, symbols, candleRepo, &liveRolloutDone)
 		StartSaveRetryLoop(ctx, ingest)
 		StartRecentCacheEvictLoop(ctx, recentCache)

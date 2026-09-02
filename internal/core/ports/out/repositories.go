@@ -72,6 +72,12 @@ type CandleRepository interface {
 type SymbolRepository interface {
 	Upsert(ctx context.Context, symbols []domain.Symbol) error
 	Tracked(ctx context.Context) ([]domain.Symbol, error)
+	// TrackedWithVolume es Tracked() con LastVolume incluido -- solo para
+	// SymbolsCache.ReloadAll, que necesita ese dato para reproducir el orden
+	// de Search() en memoria. Separado de Tracked() para no tocar sus otros
+	// llamadores (reconciliador, barrido nocturno) con una columna que no
+	// necesitan.
+	TrackedWithVolume(ctx context.Context) ([]domain.Symbol, error)
 	GetBySymbol(ctx context.Context, symbol string) (domain.Symbol, error)
 	// GetBatch es una sola consulta acotada por symbol = ANY(...), no N
 	// consultas individuales -- para /marketdata/fundamentals/realtime.

@@ -8,4 +8,8 @@ type Symbol struct {
 	Description string `json:"description"`
 	Market      string `json:"listedMarket"`
 	IsEtf       bool   `json:"isEtf"`
+	// LastVolume: solo para ordenar SymbolsCache.Search por actividad real
+	// (ver Save() en el repositorio) -- no es un campo que el frontend
+	// espere en esta forma, de ahi el json:"-".
+	LastVolume int64 `json:"-"`
 }

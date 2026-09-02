@@ -6,14 +6,13 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
-	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 )
 
 type searchSymbolsService struct {
-	symbols out.SymbolRepository
+	symbols *SymbolsCache
 }
 
-func NewSearchSymbolsService(symbols out.SymbolRepository) in.SearchSymbolsService {
+func NewSearchSymbolsService(symbols *SymbolsCache) in.SearchSymbolsService {
 	return &searchSymbolsService{symbols: symbols}
 }
 
