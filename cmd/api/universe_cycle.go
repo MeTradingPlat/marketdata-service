@@ -57,22 +57,22 @@ func refreshWithRetry(name string, fn func() error) {
 // /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
 // (ver topSymbolsPerMarket) despues del rollout M1 -- REST puro, no compite
 // por conexiones DxLink con las fases de velas.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, liveRolloutDone *atomic.Bool) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, liveRolloutDone, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, liveRolloutDone, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
 	// Pipeline del backfill (diseno del usuario): D1 primero, se cierran
 	// las conexiones, se calcula TODO lo que se calcula con D1 (beta y
 	// prevClose, por-simbolo con fecha), luego H1 (se cierra, se calcula lo
@@ -108,6 +108,12 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	if !firstRun {
 		gateway.ResetLiveConnections()
 	}
+
+	// En falso durante TODO el rollout de esta ventana -- ver
+	// shouldSkipReconcileRetry: mientras este en falso, el reconciler deja
+	// en paz a los simbolos nunca intentados en vez de pelear con este mismo
+	// rollout por su turno.
+	liveRolloutDone.Store(false)
 
 	// FASE 1: D1 + beta (guard por-simbolo, se calcula con D1 propio).
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.D1, cfg.SweepWorkers)
@@ -154,6 +160,12 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	seedSnapshotTracker(ctx, candles, tracker, activeTracked)
 
 	startLiveUniverse(ctx, ingest, activeTracked)
+	// A partir de aca un simbolo que siga sin IsAttempted no esta "esperando
+	// su turno" -- se cayo de la foto de tracked/activeTracked (ver
+	// seedRetryDelay mas abajo para el precedente de esa consulta fallando
+	// en silencio bajo presion) y el reconciler ya lo puede tratar como
+	// cualquier otro caido.
+	liveRolloutDone.Store(true)
 	refreshWithRetry("prev close", func() error {
 		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
 	})

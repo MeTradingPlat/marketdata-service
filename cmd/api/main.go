@@ -105,8 +105,14 @@ func main() {
 		// Ciclo del universo completo -- D1 fase 1, H1 fase 2, M1 fase 3 --
 		// corre en background (no bloquea el arranque del servidor HTTP) y se
 		// repite en cada ventana de mantenimiento. Ver universe_cycle.go.
-		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache)
-		StartLiveReconcileLoop(ctx, ingest, gateway, symbols, candleRepo)
+		//
+		// liveRolloutDone: interruptor compartido entre el ciclo (que lo
+		// apaga al empezar cada rollout y lo prende al terminar) y el
+		// reconciler (que lo consulta antes de reintentar un simbolo nunca
+		// intentado) -- ver shouldSkipReconcileRetry.
+		var liveRolloutDone atomic.Bool
+		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, &liveRolloutDone)
+		StartLiveReconcileLoop(ctx, ingest, gateway, symbols, candleRepo, &liveRolloutDone)
 		StartSaveRetryLoop(ctx, ingest)
 		StartRecentCacheEvictLoop(ctx, recentCache)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)
