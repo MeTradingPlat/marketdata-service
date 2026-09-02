@@ -89,16 +89,25 @@ jobs:
           # already" tumbando el refresh de fundamentales externos. 200 deja
           # margen real sobre el pico observado.
           #
-          # Ambos requieren reinicio de postgres para tomar efecto
-          # (PGC_POSTMASTER) -- se aplican juntos para no reiniciar dos veces.
-          # Dos "-c" separados, no uno con ";" en el medio -- confirmado en
-          # vivo el 2026-09-01: psql -c con mas de un statement los manda
-          # como una sola query de multiples comandos, que Postgres corre
-          # dentro de un bloque de transaccion implicito, y ALTER SYSTEM
-          # explicitamente no puede correr adentro de una transaccion
-          # ("ALTER SYSTEM cannot run inside a transaction block").
+          # max_locks_per_transaction y max_connections requieren reinicio de
+          # postgres para tomar efecto (PGC_POSTMASTER) -- se aplican junto
+          # con maintenance_work_mem (no requiere reinicio, pero aprovecha el
+          # mismo restart de abajo) para no reiniciar dos veces. "-c"
+          # separados, no uno con ";" en el medio -- confirmado en vivo el
+          # 2026-09-01: psql -c con mas de un statement los manda como una
+          # sola query de multiples comandos, que Postgres corre dentro de un
+          # bloque de transaccion implicito, y ALTER SYSTEM explicitamente no
+          # puede correr adentro de una transaccion ("ALTER SYSTEM cannot run
+          # inside a transaction block").
+          #
+          # maintenance_work_mem 64MB->256MB el 2026-09-02: por debajo de lo
+          # recomendado para VACUUM/compresion en un server chico (256MB-1GB)
+          # -- alarga las pasadas de compresion nocturna sin necesidad, igual
+          # que el resto de los ajustes de esta seccion vivia solo en el
+          # servidor sin quedar versionado.
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_connections = 200;"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET maintenance_work_mem = '256MB';"
           docker restart postgres-marketdata
           for i in $(seq 1 15); do
             docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
