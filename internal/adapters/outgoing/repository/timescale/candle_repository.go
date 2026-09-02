@@ -539,6 +539,14 @@ func (r *CandleRepository) GetIntradaySessions(ctx context.Context, symbol strin
 // GetIntradaySessionsBatch es intradaySessionsSQL con GROUP BY s.symbol --
 // ver el comentario del puerto (GetIntradaySessionsBatch) sobre por que esto
 // reemplaza N queries secuenciales por una sola.
+// intradaySessionsBatchChunkSize: acota cuantos simbolos se agregan por
+// consulta (ver chunkSymbols) -- con los ~13k simbolos activos de una sola
+// pasada, esta misma consulta infla la conexion del snapshotPool a mas de
+// 1GB de RSS que Postgres no devuelve despues. 9-10 lotes secuenciales de
+// este tamaño acotan el pico de memoria por consulta sin perder ningun dato
+// (el resultado final es identico, solo mas repartido en el tiempo).
+const intradaySessionsBatchChunkSize = 1500
+
 func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols []string) (map[string]domain.IntradaySnapshot, error) {
 	result := make(map[string]domain.IntradaySnapshot, len(symbols))
 	if len(symbols) == 0 {
@@ -554,6 +562,15 @@ func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols
 	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
 	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
 
+	for _, batch := range chunkSymbols(symbols, intradaySessionsBatchChunkSize) {
+		if err := r.queryIntradaySessionsBatch(ctx, batch, dayStart, dayEnd, marketOpen, marketClose, result); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (r *CandleRepository) queryIntradaySessionsBatch(ctx context.Context, symbols []string, dayStart, dayEnd, marketOpen, marketClose time.Time, result map[string]domain.IntradaySnapshot) error {
 	query := `
 		SELECT
 			s.symbol,
@@ -571,7 +588,7 @@ func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols
 	`
 	rows, err := r.snapshotPool.Query(ctx, query, symbols, dayStart, dayEnd, marketOpen, marketClose)
 	if err != nil {
-		return nil, fmt.Errorf("querying intraday sessions batch for %d symbols: %w", len(symbols), err)
+		return fmt.Errorf("querying intraday sessions batch for %d symbols: %w", len(symbols), err)
 	}
 	defer rows.Close()
 
@@ -580,7 +597,7 @@ func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols
 		var open, high, low, preClose, postClose *float64
 		if err := rows.Scan(&snap.Symbol, &open, &high, &low, &snap.DayVolume,
 			&snap.PreMarketVolume, &preClose, &snap.PostMarketVolume, &postClose); err != nil {
-			return nil, fmt.Errorf("scanning intraday sessions batch row: %w", err)
+			return fmt.Errorf("scanning intraday sessions batch row: %w", err)
 		}
 		if open != nil {
 			snap.Open = *open
@@ -600,9 +617,9 @@ func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols
 		result[snap.Symbol] = snap
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating intraday sessions batch rows: %w", err)
+		return fmt.Errorf("iterating intraday sessions batch rows: %w", err)
 	}
-	return result, nil
+	return nil
 }
 
 // previousSessionCloseWindowSQL busca la subasta de UN dia especifico para
