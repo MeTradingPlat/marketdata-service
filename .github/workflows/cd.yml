@@ -176,10 +176,22 @@ jobs:
           # otra bajo un lote grande de /historical/batch con gzip (el
           # payload de ~9MB por lote se arma completo en memoria antes de
           # comprimir). 1g deja margen real por encima de lo ya observado.
+          # --stop-timeout 25: un docker stop (cada deploy, o manual) manda
+          # SIGTERM y despues de este plazo mata a la fuerza con SIGKILL. El
+          # shutdown handler (main.go) primero apaga el servidor HTTP (hasta
+          # 10s de gracia propios) y RECIEN DESPUES cierra las ~40 conexiones
+          # DxLink con FIN explicito para no dejar sesiones huerfanas -- con
+          # el default de Docker (10s) el SIGKILL podia llegar antes de que
+          # el cierre de DxLink ni empezara, dejando sesiones huerfanas en
+          # CADA deploy pese a que el codigo ya intentaba evitarlo
+          # (confirmado el 2026-09-02: storm de "sessions exceeded" en pleno
+          # mercado horas despues de un deploy). 25s da margen real para las
+          # dos etapas del shutdown, no solo la primera.
           docker run -d \
             --name "marketdata-service" \
             --network "metradingplat-network" \
             --restart "unless-stopped" \
+            --stop-timeout 25 \
             --cpus "1.0" \
             --memory "1g" \
             --memory-swap "1g" \
