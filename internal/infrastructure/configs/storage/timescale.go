@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -67,11 +68,35 @@ func connect(cfg *configs.Config) *pgxpool.Pool {
 	return connectWithSize(cfg, cfg.DBMaxConns)
 }
 
+// maxConnLifetime/maxConnLifetimeJitter: Postgres nunca le devuelve al SO la
+// memoria que un backend allocated para una consulta pesada -- se queda con
+// ese tamaño mientras la conexion siga viva, sin importar que despues quede
+// idle. GetIntradaySessionsBatch/GetPreviousSessionCloseBatch (snapshotPool,
+// solo 3 conexiones) agregan por symbol_id sobre los ~13k simbolos del
+// universo entero de una sola pasada -- confirmado en vivo el 2026-09-02:
+// 2 de esas 3 conexiones quedaron en ~1.2GB de RSS cada una tras
+// seedSnapshotTracker (corre en CADA arranque del proceso, no solo una vez
+// al dia) y nunca bajaron, contribuyendo a empujar al host entero a swap
+// thrashing. Sin un limite explicito de vida por conexion, no hay nada que
+// alguna vez le devuelva esa memoria a Postgres sin un reinicio manual. El
+// jitter evita que las 3 conexiones del mismo pool expiren todas juntas.
+const (
+	maxConnLifetime       = 30 * time.Minute
+	maxConnLifetimeJitter = 5 * time.Minute
+)
+
 func connectWithSize(cfg *configs.Config, maxConns int) *pgxpool.Pool {
 	dsn := fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=disable pool_max_conns=%d",
 		cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBUser, cfg.DBPassword, maxConns)
 
-	pool, err := pgxpool.New(context.Background(), dsn)
+	poolCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to parse TimescaleDB DSN")
+	}
+	poolCfg.MaxConnLifetime = maxConnLifetime
+	poolCfg.MaxConnLifetimeJitter = maxConnLifetimeJitter
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to TimescaleDB")
 	}
