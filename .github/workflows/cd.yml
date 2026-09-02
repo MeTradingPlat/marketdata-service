@@ -55,8 +55,8 @@ jobs:
               --network "metradingplat-network" \
               --restart "always" \
               --cpus "1.0" \
-              --memory "6g" \
-              --memory-swap "6g" \
+              --memory "4g" \
+              --memory-swap "4g" \
               --shm-size "1g" \
               -e POSTGRES_DB="marketdata_db" \
               -e POSTGRES_USER="user_marketdata" \
@@ -113,20 +113,25 @@ jobs:
           # durante minutos). memory.high (cgroup v2) fuerza reclaim temprano
           # del cache, bajo el tope duro, en vez de esperar al OOM killer.
           #
-          # Subido de 4GiB/3.2GiB a 6GiB/5GiB el 2026-09-02: memory.events
-          # del cgroup mostro ~4.9M hits de "high" en 41h (throttling casi
-          # constante) y un oom_kill real (mato un solo backend, no todo el
-          # postmaster -- por eso el contenedor nunca aparecia reiniciado).
-          # 6GiB/5GiB mantiene el mismo margen relativo (80%) entre soft y
-          # hard limit con mas headroom absoluto.
+          # Se subio a 6GiB/5GiB el 2026-09-02 y se REVIRTIO horas despues:
+          # el host (11GiB, 4 nucleos, compartido con ~26 contenedores de
+          # otros proyectos) no tenia margen real para darselo -- Postgres
+          # crecio hasta ~5.6GiB de verdad (no es leak: la base pesa ~10-11GB
+          # reales, mayormente TimescaleDB interno) y arrastro a TODO el host
+          # a swap thrashing (load average 52 en 4 nucleos, 155MB libres,
+          # Postgres sin loguear nada por 30min, comandos colgados en estado
+          # D) -- mucho peor que el OOM aislado de un solo backend que el
+          # tope de 4GiB/3.2GiB ya contenia. No subir esto de nuevo sin antes
+          # confirmar que el host tiene RAM de sobra real, no solo "cache
+          # reclamable" en el papel.
           #
           # NOTA: se re-aplica en cada deploy porque el scope de systemd se
           # recrea con cada `docker rm`/`docker run` de postgres.
           PG_ID=$(docker inspect -f '{{.Id}}' postgres-marketdata)
           if sudo -n true 2>/dev/null; then
-            echo 5368709120 | sudo tee "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high" >/dev/null
+            echo 3435973836 | sudo tee "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high" >/dev/null
           else
-            echo 5368709120 > "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
+            echo 3435973836 > "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
           fi
           cat "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
 
