@@ -7,16 +7,17 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 )
 
 type getSymbolDetailsService struct {
 	symbols      out.SymbolRepository
-	fundamentals out.FundamentalsRepository
+	fundamentals *fundamentalscache.FundamentalsCache
 	intraday     in.GetIntradaySnapshotService
 	openInterest out.OpenInterestGateway
 }
 
-func NewGetSymbolDetailsService(symbols out.SymbolRepository, fundamentals out.FundamentalsRepository, intraday in.GetIntradaySnapshotService, openInterest out.OpenInterestGateway) in.GetSymbolDetailsService {
+func NewGetSymbolDetailsService(symbols out.SymbolRepository, fundamentals *fundamentalscache.FundamentalsCache, intraday in.GetIntradaySnapshotService, openInterest out.OpenInterestGateway) in.GetSymbolDetailsService {
 	return &getSymbolDetailsService{symbols: symbols, fundamentals: fundamentals, intraday: intraday, openInterest: openInterest}
 }
 
@@ -26,10 +27,16 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 		return dto.SymbolDetails{}, err
 	}
 
-	fundamentals, err := s.fundamentals.Get(ctx, symbol)
-	if err != nil {
-		return dto.SymbolDetails{}, err
-	}
+	// Servido desde el cache en memoria (ya se recarga completo tras cada
+	// refresh nocturno/de trading status, ver FundamentalsCache) en vez de
+	// una consulta a Postgres por cada apertura del panel de detalle --
+	// confirmado en vivo el 2026-09-02: este endpoint era el unico camino de
+	// fundamentales que todavia pegaba directo a la BD por simbolo, y un
+	// simbolo sin fundamentales conocidos (recien trackeado) volvia error
+	// duro en vez de mostrar igual el resto del detalle (mismo criterio de
+	// "no tirar todo por una parte que falta" que ya se usa abajo con el
+	// snapshot intradia).
+	fundamentals := s.fundamentals.GetBatch([]string{symbol})[symbol]
 
 	// El snapshot intradia (OHLC/volumen del dia) es una fuente separada de
 	// los dividendos -- si falla (ej. sin velas D1 todavia para un simbolo
