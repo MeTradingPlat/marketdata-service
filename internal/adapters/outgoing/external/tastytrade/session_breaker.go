@@ -38,11 +38,29 @@ type SessionBreaker struct {
 	cooldownUntilUnixNano atomic.Int64
 }
 
-// MarkSaturated extiende la ventana compartida -- se llama tanto desde un
+// MarkSaturated abre la ventana compartida -- se llama tanto desde un
 // ERROR:UNAUTHORIZED de una conexion ya autenticada como desde un intento de
 // conexion nuevo que el servidor cierra de entrada durante el handshake.
+//
+// No la extiende si ya hay una ventana activa: durante un storm real, decenas
+// de conexiones detectan el mismo rechazo en los minutos siguientes a la
+// primera, no todas en el mismo instante -- si cada deteccion reiniciara el
+// reloj a "ahora + 15 min", la ventana se corre hacia adelante sin parar
+// mientras el storm sigue en curso, y la espera real termina siendo mucho
+// mas larga que los 15 min pensados (confirmado en vivo el 2026-09-02: un
+// storm que debia resolverse en 15 min tardo ~24). Solo la PRIMERA deteccion
+// de cada storm fija el reloj; el resto lo respeta.
 func (b *SessionBreaker) MarkSaturated() {
-	b.cooldownUntilUnixNano.Store(time.Now().Add(sessionSaturationCooldown).UnixNano())
+	newDeadline := time.Now().Add(sessionSaturationCooldown).UnixNano()
+	for {
+		current := b.cooldownUntilUnixNano.Load()
+		if current > time.Now().UnixNano() {
+			return
+		}
+		if b.cooldownUntilUnixNano.CompareAndSwap(current, newDeadline) {
+			return
+		}
+	}
 }
 
 // Wait bloquea hasta que la ventana compartida termine (si esta activa) mas
