@@ -3,8 +3,10 @@ package metadata
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 )
 
 func searchFixture(t *testing.T) *SymbolsCache {
@@ -48,6 +50,31 @@ func TestSymbolsCache_Search_Paginates(t *testing.T) {
 	page1, _, _ := c.Search(context.Background(), "", nil, 1, 2)
 	if len(page1) != 1 {
 		t.Fatalf("page 1 = %v, want 1 remaining result", page1)
+	}
+}
+
+func TestSymbolsCache_Search_RanksByTodayVolumeOverLastVolume(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := intraday.NewSnapshotTracker()
+	preMarket := time.Date(2026, 1, 15, 7, 0, 0, 0, loc)
+	tracker.RecordClosedCandle(domain.Candle{Symbol: "IBM", Timestamp: preMarket, Volume: 5000})
+
+	repo := &fakeSymbolRepo{symbols: []domain.Symbol{
+		{Symbol: "AAPL", Market: "XNAS", LastVolume: 900},
+		{Symbol: "IBM", Market: "XNYS", LastVolume: 100},
+	}}
+	c := NewSymbolsCache(repo, tracker)
+	c.ReloadAll(context.Background())
+
+	results, _, err := c.Search(context.Background(), "", nil, 0, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 || results[0].Symbol != "IBM" {
+		t.Fatalf("expected IBM (5000 today) ranked ahead of AAPL (900 last known, 0 today), got %v", results)
 	}
 }
 

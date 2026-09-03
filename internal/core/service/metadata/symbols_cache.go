@@ -7,6 +7,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/rs/zerolog/log"
 )
 
@@ -19,15 +20,16 @@ import (
 // al reconciliar el universo, al arranque de cada ciclo (ver
 // universe_cycle.go).
 type SymbolsCache struct {
-	repo out.SymbolRepository
+	repo    out.SymbolRepository
+	tracker *intraday.SnapshotTracker
 
 	mu       sync.RWMutex
 	sorted   []domain.Symbol
 	bySymbol map[string]domain.Symbol
 }
 
-func NewSymbolsCache(repo out.SymbolRepository) *SymbolsCache {
-	return &SymbolsCache{repo: repo, bySymbol: make(map[string]domain.Symbol)}
+func NewSymbolsCache(repo out.SymbolRepository, tracker *intraday.SnapshotTracker) *SymbolsCache {
+	return &SymbolsCache{repo: repo, tracker: tracker, bySymbol: make(map[string]domain.Symbol)}
 }
 
 // ReloadAll relee TODO el universo de una sola consulta y reemplaza el

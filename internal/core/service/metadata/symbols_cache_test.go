@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 )
 
 type fakeSymbolRepo struct {
@@ -31,9 +32,12 @@ func (f *fakeSymbolRepo) Search(context.Context, string, []string, int, int) ([]
 func (f *fakeSymbolRepo) Deactivate(context.Context, []string) error { return nil }
 func (f *fakeSymbolRepo) Markets(context.Context) ([]string, error)  { return nil, nil }
 
+// seedCache usa un SnapshotTracker vacio (nada operado hoy en ninguna
+// prueba) -- todo cae al last_volume ya sembrado, sin sorpresas para las
+// pruebas que solo les importa el orden/filtro estatico.
 func seedCache(t *testing.T, symbols []domain.Symbol) *SymbolsCache {
 	t.Helper()
-	c := NewSymbolsCache(&fakeSymbolRepo{symbols: symbols})
+	c := NewSymbolsCache(&fakeSymbolRepo{symbols: symbols}, intraday.NewSnapshotTracker())
 	c.ReloadAll(context.Background())
 	return c
 }

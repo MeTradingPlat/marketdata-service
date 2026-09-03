@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 )
 
 func TestSymbolsCache_ReloadAll_SortsByVolumeThenSymbol(t *testing.T) {
@@ -29,7 +30,7 @@ func TestSymbolsCache_ReloadAll_SortsByVolumeThenSymbol(t *testing.T) {
 
 func TestSymbolsCache_ReloadAll_KeepsPreviousDataOnError(t *testing.T) {
 	repo := &fakeSymbolRepo{symbols: []domain.Symbol{{Symbol: "AAPL"}}}
-	c := NewSymbolsCache(repo)
+	c := NewSymbolsCache(repo, intraday.NewSnapshotTracker())
 	c.ReloadAll(context.Background())
 
 	repo.err = errors.New("db down")
