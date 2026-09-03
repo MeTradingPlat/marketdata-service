@@ -296,14 +296,34 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		return
 	}
 
+	saveBatchSweep(ctx, candles, ingest, result, tf)
+}
+
+// saveBatchSweep junta las velas cerradas de TODOS los simbolos del lote en
+// un solo Save() -- antes era un Save por simbolo (hasta sweepBatchSize
+// round-trips a Postgres para un lote que ya llego en UNA sola respuesta de
+// DxLink). Save() ya arma un pgx.Batch heterogeneo por simbolo/timeframe
+// (ver candle_repository.go), asi que mezclar simbolos en el mismo llamado
+// es gratis. Si el guardado combinado falla, se cae al backfill individual
+// por simbolo (mismo camino de siempre) en vez de perder el lote entero.
+func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in.IngestCandlesService, result map[string][]domain.Candle, tf domain.Timeframe) {
+	merged := make([]domain.Candle, 0, len(result))
+	bySymbol := make(map[string]struct{}, len(result))
 	for symbol, candlesFetched := range result {
 		closed := domain.ClosedCandles(candlesFetched, time.Now())
 		if len(closed) == 0 {
 			continue
 		}
-		if err := candles.Save(ctx, closed, true); err != nil {
-			log.Warn().Err(err).Str("symbol", symbol).Str("timeframe", string(tf)).
-				Msg("universe sweep batch save failed, falling back to per-symbol backfill")
+		merged = append(merged, closed...)
+		bySymbol[symbol] = struct{}{}
+	}
+	if len(merged) == 0 {
+		return
+	}
+	if err := candles.Save(ctx, merged, true); err != nil {
+		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(bySymbol)).
+			Msg("universe sweep batch save failed, falling back to per-symbol backfill")
+		for symbol := range bySymbol {
 			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
 		}
 	}
