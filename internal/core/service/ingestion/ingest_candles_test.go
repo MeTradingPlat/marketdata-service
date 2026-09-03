@@ -73,8 +73,14 @@ func TestStreamLive(t *testing.T) {
 
 	gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: 1, High: 1, Low: 1, Close: 1})
 
+	if len(repo.saved) != 0 {
+		t.Fatalf("Save should not run until FlushLiveSaves, got %d calls", len(repo.saved))
+	}
+	if ok := svc.FlushLiveSaves(context.Background()); !ok {
+		t.Fatal("FlushLiveSaves returned false unexpectedly")
+	}
 	if len(repo.saved) != 1 {
-		t.Fatalf("Save called %d times, want 1", len(repo.saved))
+		t.Fatalf("Save called %d times after flush, want 1", len(repo.saved))
 	}
 }
 
@@ -88,6 +94,9 @@ func TestStreamLive_BuffersFailedSaveForRetry(t *testing.T) {
 	}
 
 	gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: 1, High: 1, Low: 1, Close: 1})
+	if ok := svc.FlushLiveSaves(context.Background()); ok {
+		t.Fatal("expected FlushLiveSaves to report failure")
+	}
 	if len(repo.saved) != 0 {
 		t.Fatalf("Save should have failed and not recorded a save, got %d", len(repo.saved))
 	}
@@ -106,5 +115,41 @@ func TestStreamLive_BuffersFailedSaveForRetry(t *testing.T) {
 	svc.RetryPendingSaves(context.Background())
 	if len(repo.saved) != 0 {
 		t.Fatalf("expected empty buffer to result in no further Save call, got %d", len(repo.saved))
+	}
+}
+
+func TestFlushLiveSaves_BatchesMultipleClosedCandles(t *testing.T) {
+	gw := &fakeGateway{}
+	repo := &fakeRepo{}
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster(), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+
+	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: 1, High: 1, Low: 1, Close: 1})
+	gw.onCandle(domain.Candle{Symbol: "MSFT", Timeframe: domain.M1, Open: 2, High: 2, Low: 2, Close: 2})
+
+	if len(repo.saved) != 0 {
+		t.Fatalf("Save should not run until FlushLiveSaves, got %d calls", len(repo.saved))
+	}
+	svc.FlushLiveSaves(context.Background())
+
+	if len(repo.saved) != 1 {
+		t.Fatalf("expected exactly one Save call batching both candles, got %d calls", len(repo.saved))
+	}
+	if len(repo.saved[0]) != 2 {
+		t.Fatalf("expected the single batch to contain 2 candles, got %d", len(repo.saved[0]))
+	}
+}
+
+func TestFlushLiveSaves_NothingPendingDoesNotCallSave(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := ingestion.NewIngestCandlesService(&fakeGateway{}, repo, livecandles.NewBroadcaster(), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+
+	if ok := svc.FlushLiveSaves(context.Background()); !ok {
+		t.Fatal("expected true when nothing is pending")
+	}
+	if len(repo.saved) != 0 {
+		t.Fatalf("expected no Save call, got %d", len(repo.saved))
 	}
 }

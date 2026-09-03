@@ -15,19 +15,20 @@ import (
 )
 
 type ingestCandlesService struct {
-	gateway     out.MarketDataGateway
-	repo        out.CandleRepository
-	broadcaster *livecandles.Broadcaster
-	tracker     *intraday.SnapshotTracker
-	recentCache *livecandles.RecentCache
-	retryBuffer *saveRetryBuffer
-	liveMu      sync.RWMutex
-	live        map[string]bool
-	attempted   map[string]bool
+	gateway        out.MarketDataGateway
+	repo           out.CandleRepository
+	broadcaster    *livecandles.Broadcaster
+	tracker        *intraday.SnapshotTracker
+	recentCache    *livecandles.RecentCache
+	liveSaveBuffer *liveSaveBuffer
+	retryBuffer    *saveRetryBuffer
+	liveMu         sync.RWMutex
+	live           map[string]bool
+	attempted      map[string]bool
 }
 
 func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster, tracker *intraday.SnapshotTracker, recentCache *livecandles.RecentCache) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, tracker: tracker, recentCache: recentCache, retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
+	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, tracker: tracker, recentCache: recentCache, liveSaveBuffer: newLiveSaveBuffer(), retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
 }
 
 // IncrementalMargin son barras de mas antes del watermark que se vuelven a
@@ -131,10 +132,11 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 		from = *newest
 	}
 	if err := s.gateway.SubscribeLiveCandles(ctx, symbol, from, func(c domain.Candle) {
-		if err := s.repo.Save(ctx, []domain.Candle{c}, false); err != nil {
-			log.Error().Err(err).Str("symbol", symbol).Msg("failed to save live candle, buffering for retry")
-			s.retryBuffer.add(c)
-		}
+		// El guardado en si no corre aca -- se junta en liveSaveBuffer y se
+		// vacia por lote cada pocos segundos (ver FlushLiveSaves), asi que
+		// esta closure nunca toca Postgres directamente en el camino
+		// caliente de cada vela cerrada.
+		s.liveSaveBuffer.add(c)
 		s.tracker.RecordClosedCandle(c)
 		// Ademas de Postgres: una lectura de candles del minuto que acaba de
 		// cerrar no debe depender de que la fila ya sea visible en la BD --
@@ -183,6 +185,26 @@ func (s *ingestCandlesService) IsAttempted(symbol string) bool {
 	s.liveMu.RLock()
 	defer s.liveMu.RUnlock()
 	return s.attempted[symbol]
+}
+
+// FlushLiveSaves vacia liveSaveBuffer y guarda todo lo acumulado en un solo
+// Save() por lote -- llamado cada pocos segundos desde cmd/api (ver
+// StartLiveSaveFlushLoop). Si el lote entero falla (Postgres caido un
+// momento), cada vela pasa a retryBuffer para que RetryPendingSaves la
+// reintente con su propio backoff en vez de perderla.
+func (s *ingestCandlesService) FlushLiveSaves(ctx context.Context) bool {
+	pending := s.liveSaveBuffer.drain()
+	if len(pending) == 0 {
+		return true
+	}
+	if err := s.repo.Save(ctx, pending, false); err != nil {
+		log.Error().Err(err).Int("candles", len(pending)).Msg("flushing live save batch failed, buffering for retry")
+		for _, c := range pending {
+			s.retryBuffer.add(c)
+		}
+		return false
+	}
+	return true
 }
 
 // RetryPendingSaves reintenta las velas en vivo que fallaron al guardarse --

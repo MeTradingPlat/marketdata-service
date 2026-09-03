@@ -115,6 +115,7 @@ func main() {
 		var liveRolloutDone atomic.Bool
 		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, symbolsCache, &liveRolloutDone)
 		StartLiveReconcileLoop(ctx, ingest, gateway, symbols, candleRepo, &liveRolloutDone)
+		StartLiveSaveFlushLoop(ctx, ingest)
 		StartSaveRetryLoop(ctx, ingest)
 		StartRecentCacheEvictLoop(ctx, recentCache)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)

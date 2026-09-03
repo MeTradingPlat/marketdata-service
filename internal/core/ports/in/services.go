@@ -11,6 +11,10 @@ import (
 type IngestCandlesService interface {
 	Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error
 	StreamLive(ctx context.Context, symbol string) error
+	// FlushLiveSaves guarda por lote todas las velas en vivo recien cerradas
+	// que se acumularon desde el ultimo flush -- devuelve false solo si
+	// habia algo pendiente y el intento fallo (ver RetryPendingSaves).
+	FlushLiveSaves(ctx context.Context) bool
 	// RetryPendingSaves intenta guardar lo que quedo bufferizado -- devuelve
 	// false solo si habia algo pendiente y el intento fallo (para que el
 	// caller sepa cuando hacer backoff), true si no habia nada pendiente o

@@ -4,9 +4,9 @@ import "testing"
 
 func TestShouldSkipReconcileRetry(t *testing.T) {
 	cases := []struct {
-		name                                   string
+		name                                     string
 		attempted, rolloutDone, live, subscribed bool
-		want                                   bool
+		want                                     bool
 	}{
 		{"never attempted, rollout still running: skip", false, false, false, false, true},
 		{"never attempted, rollout finished: retry", false, true, false, false, false},
