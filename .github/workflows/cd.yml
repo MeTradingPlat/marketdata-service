@@ -114,11 +114,32 @@ jobs:
           # (son reloadable), pero se aplican aca para no repetir el mismo
           # "vivia solo en el servidor, se perdia con un volumen nuevo" que
           # ya paso con el resto de esta seccion.
+          #
+          # max_wal_size/synchronous_commit/wal_compression el 2026-09-03:
+          # confirmado en vivo que los checkpoints tardaban 200-300s cada uno
+          # (el disco compartido del VAIO no da abasto) -- investigado contra
+          # guias actuales de tuning de Postgres (ver fuentes en la respuesta
+          # de esa fecha). synchronous_commit=off saca la espera de fsync por
+          # transaccion: seguro aca porque el sistema ya tolera perder los
+          # ultimos segundos sin confirmar (StreamLive retoma desde watermark
+          # en cualquier reinicio, ver ingest_candles.go). wal_compression=zstd
+          # comprime las imagenes de pagina completa que se escriben al WAL --
+          # menos bytes a disco a cambio de CPU, que sobra (el cuello de
+          # botella medido es I/O, no CPU). max_wal_size 1GB->4GB da margen
+          # para que un lote grande (el flush de velas en vivo paso de cada 2s
+          # a cada 60s el mismo dia, lotes mas grandes por vez) no fuerce un
+          # checkpoint antes de tiempo. checkpoint_timeout se dejo en 5min a
+          # proposito: alargarlo no bajaba el ritmo de escritura por segundo
+          # (mismo volumen total, solo mas repartido), y si alarga la
+          # recuperacion tras una caida sucia.
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_connections = 200;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET maintenance_work_mem = '256MB';"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET statement_timeout = '5min';"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET idle_in_transaction_session_timeout = '5min';"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_wal_size = '4GB';"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET synchronous_commit = off;"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET wal_compression = 'zstd';"
           docker restart postgres-marketdata
           for i in $(seq 1 15); do
             docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
