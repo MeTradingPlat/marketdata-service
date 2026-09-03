@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/finra"
@@ -89,6 +90,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(handler.NewDebugProbeHandler))
 
 	checkErr(container.Provide(server.NewServer))
+	checkErr(container.Provide(provideBackfillGate))
 	checkErr(container.Provide(router.NewRouter))
 
 	return container
@@ -144,6 +146,14 @@ func provideDiscoveryClient(cfg *configs.Config) (*discovery.Client, error) {
 	}
 	baseURL := fmt.Sprintf("http://%s:%s/eureka", cfg.EurekaHost, cfg.EurekaPort)
 	return discovery.NewClient(baseURL, eurekaAppName, eurekaVipAddress, port)
+}
+
+// provideBackfillGate es el interruptor compartido entre el ciclo (que lo
+// prende durante el backfill) y el middleware BackfillGate (que bloquea las
+// rutas de signal-processing-service mientras esta prendido, ver
+// router.go) -- un solo *atomic.Bool para todo el proceso.
+func provideBackfillGate() *atomic.Bool {
+	return &atomic.Bool{}
 }
 
 func provideOAuth(cfg *configs.Config) *tastytrade.OAuth {

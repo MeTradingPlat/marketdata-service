@@ -58,30 +58,37 @@ func refreshWithRetry(name string, fn func() error) {
 // /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
 // (ver topSymbolsPerMarket) despues del rollout M1 -- REST puro, no compite
 // por conexiones DxLink con las fases de velas.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
 	// Pipeline del backfill (diseno del usuario): D1 primero, se cierran
 	// las conexiones, se calcula TODO lo que se calcula con D1 (beta y
 	// prevClose, por-simbolo con fecha), luego H1 (se cierra, se calcula lo
-	// suyo), y por ultimo M1 que se queda suscrito. El servicio ya NO
-	// bloquea peticiones externas durante este pipeline (se saco el
-	// BackfillGate, decision expresa del usuario el 2026-09-03: las cargas
-	// en memoria de abajo -- symbolsCache y fundamentalsCache -- ya sirven
-	// lo ultimo bueno conocido en vez de dejar al caller esperando un 503).
+	// suyo), y por ultimo M1 que se queda suscrito. backfilling bloquea SOLO
+	// las rutas de signal-processing-service mientras dura (ver
+	// router.go/BackfillGate) -- restaurado el 2026-09-03 sin la excepcion
+	// de "mercado activo" que tenia la version vieja: confirmado en vivo que
+	// un firstRun (todo redeploy dispara uno) corriendo a la vez que
+	// signal-processing pedia mas de 1 req/s en pleno horario de mercado
+	// agotaba los mismos recursos compartidos que el barrido necesita. Las
+	// rutas del frontend NO se bloquean (symbolsCache/fundamentalsCache ya
+	// sirven la ultima foto buena conocida).
+	backfilling.Store(true)
+	defer backfilling.Store(false)
+
 	tracked := catchup.ReconcileAndTracked(ctx, gateway, symbols)
 	if len(tracked) == 0 {
 		log.Error().Msg("universe sweep returned no symbols, skipping live M1 rollout")

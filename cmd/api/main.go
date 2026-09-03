@@ -54,6 +54,7 @@ func main() {
 		discoveryClient *discovery.Client,
 		e *echo.Echo,
 		r *router.Router,
+		backfilling *atomic.Bool,
 		snapshotTracker *intraday.SnapshotTracker,
 		fundamentalsCache *fundamentals.FundamentalsCache,
 		symbolsCache *metadata.SymbolsCache,
@@ -112,7 +113,7 @@ func main() {
 		// reconciler (que lo consulta antes de reintentar un simbolo nunca
 		// intentado) -- ver shouldSkipReconcileRetry.
 		var liveRolloutDone atomic.Bool
-		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, snapshotTracker, fundamentalsCache, symbolsCache, &liveRolloutDone)
+		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, symbolsCache, &liveRolloutDone)
 		StartLiveReconcileLoop(ctx, ingest, gateway, symbols, candleRepo, &liveRolloutDone)
 		StartLiveSaveFlushLoop(ctx, ingest)
 		StartSaveRetryLoop(ctx, ingest)
