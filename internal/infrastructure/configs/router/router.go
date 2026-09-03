@@ -29,14 +29,12 @@ func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.He
 	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, snapshotWS: snapshotWS, fundamentalsWS: fundamentalsWS, prices: prices, debugProbe: debugProbe, backfilling: backfilling}
 }
 
-// Init bloquea SOLO las rutas de signal-processing-service durante el
-// fill/refill (ver middleware.BackfillGate) -- restaurado el 2026-09-03,
-// pero acotado, no global como estaba antes: confirmado en vivo que el
-// barrido D1+H1+M1 de un firstRun corriendo a la vez que signal-processing
-// pedia mas de 1 req/s (POST /quotes/rest) agotaba los mismos recursos
-// compartidos que el barrido necesita. Las rutas del frontend (graficos,
-// busqueda, detalle de simbolo) siguen sirviendo la ultima foto buena
-// conocida via SymbolsCache/FundamentalsCache, sin bloquear.
+// Init durante el fill/refill deja pasar siempre las lecturas livianas
+// (fundamentals, symbols, quotes) y limita en concurrencia solo las
+// pesadas (historical/intraday/candles) -- ver middleware.BackfillGate.
+// Diseño original del 2026-08-18, restaurado el 2026-09-03 en vez del
+// bloqueo total por ruta que se probo primero ese mismo dia (bloqueaba
+// quotes/fundamentals sin necesidad en un refill normal).
 func (r *Router) Init() {
 	r.echo.Use(middleware.RequestLogging)
 	r.echo.Use(middleware.GatewayHeaderCheck)
@@ -58,23 +56,19 @@ func (r *Router) Init() {
 	// nivel mas alto vale mucho menos que el CPU que cuesta -- JSON
 	// comprime casi igual de bien en nivel 1 que en 6.
 	r.echo.Use(echoMiddleware.GzipWithConfig(echoMiddleware.GzipConfig{Level: gzip.BestSpeed}))
-
-	backfillGate := middleware.BackfillGate(r.backfilling)
+	r.echo.Use(middleware.BackfillGate(r.backfilling))
 
 	r.echo.GET("/marketdata/health", r.health.Health)
 	r.echo.GET("/marketdata/historical/:symbol", r.candles.GetCandles)
 	r.echo.GET("/marketdata/candles/:symbol/current", r.candles.GetCurrentCandle)
-	// Bloqueadas durante el fill/refill: las 4 rutas que llama
-	// signal-processing-service (ver comentario de Init arriba), no las que
-	// usa el frontend.
-	r.echo.POST("/marketdata/historical/batch", r.candles.GetCandlesBatch, backfillGate)
+	r.echo.POST("/marketdata/historical/batch", r.candles.GetCandlesBatch)
 	r.echo.GET("/marketdata/intraday/:symbol", r.intraday.GetSnapshot)
 	r.echo.GET("/marketdata/fundamentals/:symbol", r.fundamentals.GetFundamentals)
-	r.echo.POST("/marketdata/fundamentals/realtime", r.fundamentals.GetFundamentalsRealtime, backfillGate)
+	r.echo.POST("/marketdata/fundamentals/realtime", r.fundamentals.GetFundamentalsRealtime)
 	// La ruta sigue llamandose /quotes/rest por compatibilidad con
 	// signal-processing-service ya desplegado -- ver current_prices_handler.go.
-	r.echo.POST("/marketdata/quotes/rest", r.prices.GetCurrentPrices, backfillGate)
-	r.echo.GET("/marketdata/symbols", r.metadata.GetSymbols, backfillGate)
+	r.echo.POST("/marketdata/quotes/rest", r.prices.GetCurrentPrices)
+	r.echo.GET("/marketdata/symbols", r.metadata.GetSymbols)
 	r.echo.GET("/marketdata/symbols/search", r.metadata.SearchSymbols)
 	r.echo.GET("/marketdata/symbols/:symbol/details", r.metadata.GetSymbolDetails)
 	r.echo.GET("/marketdata/markets", r.metadata.GetMarkets)
