@@ -11,6 +11,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/secedgar"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/repository/timescale"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
@@ -43,7 +44,9 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideFundamentalsRepository))
 
 	checkErr(container.Provide(provideDiscoveryClient))
-	checkErr(container.Provide(livecandles.NewBroadcaster))
+	checkErr(container.Provide(livecandles.NewBroadcaster[domain.Candle]))
+	checkErr(container.Provide(livecandles.NewBroadcaster[domain.IntradaySnapshot]))
+	checkErr(container.Provide(livecandles.NewBroadcaster[domain.Fundamentals]))
 	checkErr(container.Provide(livecandles.NewDefaultRecentCache))
 	checkErr(container.Provide(intraday.NewSnapshotTracker))
 
@@ -81,6 +84,8 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(handler.NewFundamentalsHandler))
 	checkErr(container.Provide(handler.NewMetadataHandler))
 	checkErr(container.Provide(handler.NewCandleWSHandler))
+	checkErr(container.Provide(handler.NewSnapshotWSHandler))
+	checkErr(container.Provide(handler.NewFundamentalsWSHandler))
 	checkErr(container.Provide(handler.NewCurrentPricesHandler))
 	checkErr(container.Provide(handler.NewDebugProbeHandler))
 

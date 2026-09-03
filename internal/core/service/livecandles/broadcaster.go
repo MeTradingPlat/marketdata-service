@@ -1,43 +1,39 @@
 package livecandles
 
-import (
-	"sync"
+import "sync"
 
-	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
-)
-
-// Broadcaster reenvia cada vela M1 recien cerrada a quien este suscripto a
-// ese simbolo -- el puente entre StreamLive (que ya recibe cada vela en vivo
-// para guardarla en BD) y el WS de /ws/candles (que necesita la misma vela
-// sin tocar la BD de nuevo). Un canal lleno descarta la vela en vez de
-// bloquear al publicador: un cliente WS lento nunca debe frenar el guardado
-// real en Postgres.
-type Broadcaster struct {
+// Broadcaster reenvia cada item nuevo a quien este suscripto a esa clave --
+// generico porque el mismo mecanismo sirve para velas M1 (/ws/candles),
+// sesiones intradia (/ws/snapshot) y fundamentales (/ws/fundamentals), sin
+// triplicar el pub/sub. Un canal lleno descarta el item en vez de bloquear
+// al publicador: un cliente WS lento nunca debe frenar al resto (guardado en
+// BD, otros suscriptores).
+type Broadcaster[T any] struct {
 	mu   sync.RWMutex
-	subs map[string]map[chan domain.Candle]struct{}
+	subs map[string]map[chan T]struct{}
 }
 
-func NewBroadcaster() *Broadcaster {
-	return &Broadcaster{subs: make(map[string]map[chan domain.Candle]struct{})}
+func NewBroadcaster[T any]() *Broadcaster[T] {
+	return &Broadcaster[T]{subs: make(map[string]map[chan T]struct{})}
 }
 
 const subscriberBuffer = 8
 
-func (b *Broadcaster) Subscribe(symbol string) (ch chan domain.Candle, cancel func()) {
-	ch = make(chan domain.Candle, subscriberBuffer)
+func (b *Broadcaster[T]) Subscribe(key string) (ch chan T, cancel func()) {
+	ch = make(chan T, subscriberBuffer)
 
 	b.mu.Lock()
-	if b.subs[symbol] == nil {
-		b.subs[symbol] = make(map[chan domain.Candle]struct{})
+	if b.subs[key] == nil {
+		b.subs[key] = make(map[chan T]struct{})
 	}
-	b.subs[symbol][ch] = struct{}{}
+	b.subs[key][ch] = struct{}{}
 	b.mu.Unlock()
 
 	cancel = func() {
 		b.mu.Lock()
-		delete(b.subs[symbol], ch)
-		if len(b.subs[symbol]) == 0 {
-			delete(b.subs, symbol)
+		delete(b.subs[key], ch)
+		if len(b.subs[key]) == 0 {
+			delete(b.subs, key)
 		}
 		b.mu.Unlock()
 		close(ch)
@@ -45,12 +41,12 @@ func (b *Broadcaster) Subscribe(symbol string) (ch chan domain.Candle, cancel fu
 	return ch, cancel
 }
 
-func (b *Broadcaster) Publish(c domain.Candle) {
+func (b *Broadcaster[T]) Publish(key string, item T) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	for ch := range b.subs[c.Symbol] {
+	for ch := range b.subs[key] {
 		select {
-		case ch <- c:
+		case ch <- item:
 		default:
 		}
 	}

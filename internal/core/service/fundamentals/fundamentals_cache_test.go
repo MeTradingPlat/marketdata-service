@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 )
 
 type fakeSymbolRepo struct {
@@ -31,7 +32,7 @@ func (f *fakeSymbolRepo) Search(ctx context.Context, query string, markets []str
 	return nil, 0, nil
 }
 func (f *fakeSymbolRepo) Deactivate(ctx context.Context, symbols []string) error { return nil }
-func (f *fakeSymbolRepo) Markets(ctx context.Context) ([]string, error)         { return nil, nil }
+func (f *fakeSymbolRepo) Markets(ctx context.Context) ([]string, error)          { return nil, nil }
 
 type fakeFundamentalsRepo struct {
 	batch map[string]domain.Fundamentals
@@ -90,7 +91,7 @@ func TestFundamentalsCache_ReloadAll_PopulatesFromRepo(t *testing.T) {
 		"AAPL": {Symbol: "AAPL", MarketCap: 100},
 		"MSFT": {Symbol: "MSFT", MarketCap: 200},
 	}}
-	cache := NewFundamentalsCache(repo, symbols)
+	cache := NewFundamentalsCache(repo, symbols, nil)
 
 	cache.ReloadAll(context.Background())
 
@@ -109,7 +110,7 @@ func TestFundamentalsCache_ReloadAll_PopulatesFromRepo(t *testing.T) {
 func TestFundamentalsCache_ReloadAll_KeepsPreviousDataOnError(t *testing.T) {
 	symbols := &fakeSymbolRepo{tracked: []domain.Symbol{{Symbol: "AAPL"}}}
 	repo := &fakeFundamentalsRepo{batch: map[string]domain.Fundamentals{"AAPL": {Symbol: "AAPL", MarketCap: 100}}}
-	cache := NewFundamentalsCache(repo, symbols)
+	cache := NewFundamentalsCache(repo, symbols, nil)
 	cache.ReloadAll(context.Background())
 
 	repo.err = errors.New("db down")
@@ -122,9 +123,29 @@ func TestFundamentalsCache_ReloadAll_KeepsPreviousDataOnError(t *testing.T) {
 }
 
 func TestFundamentalsCache_GetBatch_EmptyBeforeFirstReload(t *testing.T) {
-	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{})
+	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
 	got := cache.GetBatch([]string{"AAPL"})
 	if len(got) != 0 {
 		t.Fatalf("expected empty cache before any reload, got %+v", got)
+	}
+}
+
+func TestFundamentalsCache_ReloadAll_PublishesToSubscribers(t *testing.T) {
+	symbols := &fakeSymbolRepo{tracked: []domain.Symbol{{Symbol: "AAPL"}}}
+	repo := &fakeFundamentalsRepo{batch: map[string]domain.Fundamentals{"AAPL": {Symbol: "AAPL", MarketCap: 100}}}
+	broadcaster := livecandles.NewBroadcaster[domain.Fundamentals]()
+	ch, cancel := broadcaster.Subscribe("AAPL")
+	defer cancel()
+	cache := NewFundamentalsCache(repo, symbols, broadcaster)
+
+	cache.ReloadAll(context.Background())
+
+	select {
+	case got := <-ch:
+		if got.MarketCap != 100 {
+			t.Fatalf("published fundamentals = %+v, want MarketCap 100", got)
+		}
+	default:
+		t.Fatal("expected ReloadAll to publish the reloaded fundamentals to subscribers")
 	}
 }

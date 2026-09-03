@@ -45,13 +45,13 @@ type wsSession struct {
 	writeMu     sync.Mutex
 	getCandles  in.GetCandlesService
 	current     in.GetCurrentCandleService
-	broadcaster *livecandles.Broadcaster
+	broadcaster *livecandles.Broadcaster[domain.Candle]
 
 	mu   sync.Mutex
 	subs map[string]func()
 }
 
-func newWSSession(conn *websocket.Conn, getCandles in.GetCandlesService, current in.GetCurrentCandleService, broadcaster *livecandles.Broadcaster) *wsSession {
+func newWSSession(conn *websocket.Conn, getCandles in.GetCandlesService, current in.GetCurrentCandleService, broadcaster *livecandles.Broadcaster[domain.Candle]) *wsSession {
 	return &wsSession{conn: conn, getCandles: getCandles, current: current, broadcaster: broadcaster, subs: make(map[string]func())}
 }
 

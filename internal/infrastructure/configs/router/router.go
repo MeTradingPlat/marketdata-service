@@ -11,20 +11,22 @@ import (
 )
 
 type Router struct {
-	echo         *echo.Echo
-	candles      *handler.CandlesHandler
-	health       *handler.HealthHandler
-	intraday     *handler.IntradayHandler
-	fundamentals *handler.FundamentalsHandler
-	metadata     *handler.MetadataHandler
-	candleWS     *handler.CandleWSHandler
-	prices       *handler.CurrentPricesHandler
-	debugProbe   *handler.DebugProbeHandler
-	backfilling  *atomic.Bool
+	echo           *echo.Echo
+	candles        *handler.CandlesHandler
+	health         *handler.HealthHandler
+	intraday       *handler.IntradayHandler
+	fundamentals   *handler.FundamentalsHandler
+	metadata       *handler.MetadataHandler
+	candleWS       *handler.CandleWSHandler
+	snapshotWS     *handler.SnapshotWSHandler
+	fundamentalsWS *handler.FundamentalsWSHandler
+	prices         *handler.CurrentPricesHandler
+	debugProbe     *handler.DebugProbeHandler
+	backfilling    *atomic.Bool
 }
 
-func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, prices *handler.CurrentPricesHandler, debugProbe *handler.DebugProbeHandler, backfilling *atomic.Bool) *Router {
-	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, prices: prices, debugProbe: debugProbe, backfilling: backfilling}
+func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, snapshotWS *handler.SnapshotWSHandler, fundamentalsWS *handler.FundamentalsWSHandler, prices *handler.CurrentPricesHandler, debugProbe *handler.DebugProbeHandler, backfilling *atomic.Bool) *Router {
+	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, snapshotWS: snapshotWS, fundamentalsWS: fundamentalsWS, prices: prices, debugProbe: debugProbe, backfilling: backfilling}
 }
 
 func (r *Router) Init() {
@@ -66,6 +68,8 @@ func (r *Router) Init() {
 	r.echo.GET("/marketdata/markets", r.metadata.GetMarkets)
 	r.echo.GET("/marketdata/timeframes", r.metadata.GetTimeframes)
 	r.echo.GET("/ws/candles", r.candleWS.Handle)
+	r.echo.GET("/ws/snapshot", r.snapshotWS.Handle)
+	r.echo.GET("/ws/fundamentals", r.fundamentalsWS.Handle)
 	// Diagnostico puntual (ver debug_probe_handler.go) -- no pensado para
 	// llamarse seguido, un wait largo bloquea el request entero.
 	r.echo.GET("/marketdata/debug/probe-depth/:symbol", r.debugProbe.ProbeDepth)

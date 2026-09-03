@@ -15,20 +15,21 @@ import (
 )
 
 type ingestCandlesService struct {
-	gateway        out.MarketDataGateway
-	repo           out.CandleRepository
-	broadcaster    *livecandles.Broadcaster
-	tracker        *intraday.SnapshotTracker
-	recentCache    *livecandles.RecentCache
-	liveSaveBuffer *liveSaveBuffer
-	retryBuffer    *saveRetryBuffer
-	liveMu         sync.RWMutex
-	live           map[string]bool
-	attempted      map[string]bool
+	gateway             out.MarketDataGateway
+	repo                out.CandleRepository
+	broadcaster         *livecandles.Broadcaster[domain.Candle]
+	snapshotBroadcaster *livecandles.Broadcaster[domain.IntradaySnapshot]
+	tracker             *intraday.SnapshotTracker
+	recentCache         *livecandles.RecentCache
+	liveSaveBuffer      *liveSaveBuffer
+	retryBuffer         *saveRetryBuffer
+	liveMu              sync.RWMutex
+	live                map[string]bool
+	attempted           map[string]bool
 }
 
-func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster, tracker *intraday.SnapshotTracker, recentCache *livecandles.RecentCache) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, tracker: tracker, recentCache: recentCache, liveSaveBuffer: newLiveSaveBuffer(), retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
+func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster[domain.Candle], snapshotBroadcaster *livecandles.Broadcaster[domain.IntradaySnapshot], tracker *intraday.SnapshotTracker, recentCache *livecandles.RecentCache) in.IngestCandlesService {
+	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, snapshotBroadcaster: snapshotBroadcaster, tracker: tracker, recentCache: recentCache, liveSaveBuffer: newLiveSaveBuffer(), retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
 }
 
 // IncrementalMargin son barras de mas antes del watermark que se vuelven a
@@ -144,7 +145,8 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 		// volumen real de una vela recien cerrada tardo varios ciclos del
 		// escaner en reflejarse completo rio abajo.
 		s.recentCache.Put(c, true)
-		s.broadcaster.Publish(c)
+		s.broadcaster.Publish(c.Symbol, c)
+		s.publishSnapshot(c)
 	}, func(c domain.Candle) {
 		// La vela M1 en formacion tras cada tick -- el WS de /ws/candles la
 		// usa para dibujar la vela actual (M1 directo, H1/D1 por
@@ -152,7 +154,7 @@ func (s *ingestCandlesService) StreamLive(ctx context.Context, symbol string) er
 		// que una sesion WS vea la vela a medio formar: solo se publicaba
 		// al cerrar.
 		s.recentCache.Put(c, false)
-		s.broadcaster.Publish(c)
+		s.broadcaster.Publish(c.Symbol, c)
 	}); err != nil {
 		s.setLive(symbol, false)
 		return err

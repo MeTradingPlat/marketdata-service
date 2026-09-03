@@ -6,6 +6,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 	"github.com/rs/zerolog/log"
 )
 
@@ -19,15 +20,16 @@ import (
 // (nocturno y el de trading status cada 15 min) -- mismo patron
 // write-through que SnapshotTracker ya usa para precios en vivo.
 type FundamentalsCache struct {
-	repo    out.FundamentalsRepository
-	symbols out.SymbolRepository
+	repo        out.FundamentalsRepository
+	symbols     out.SymbolRepository
+	broadcaster *livecandles.Broadcaster[domain.Fundamentals]
 
 	mu   sync.RWMutex
 	data map[string]domain.Fundamentals
 }
 
-func NewFundamentalsCache(repo out.FundamentalsRepository, symbols out.SymbolRepository) *FundamentalsCache {
-	return &FundamentalsCache{repo: repo, symbols: symbols, data: make(map[string]domain.Fundamentals)}
+func NewFundamentalsCache(repo out.FundamentalsRepository, symbols out.SymbolRepository, broadcaster *livecandles.Broadcaster[domain.Fundamentals]) *FundamentalsCache {
+	return &FundamentalsCache{repo: repo, symbols: symbols, broadcaster: broadcaster, data: make(map[string]domain.Fundamentals)}
 }
 
 // ReloadAll relee TODO el universo tracked de una sola consulta y reemplaza
@@ -54,6 +56,23 @@ func (c *FundamentalsCache) ReloadAll(ctx context.Context) {
 	c.mu.Lock()
 	c.data = data
 	c.mu.Unlock()
+
+	c.publishAll(data)
+}
+
+// publishAll manda cada fundamental recien recargado a quien este
+// suscripto a /ws/fundamentals -- ReloadAll solo corre al terminar un
+// refresco real (nocturno o el de trading status cada 15 min, ver
+// cmd/api/trading_status_loop.go), asi que esto ya es la cadencia "solo
+// cuando cambia" que necesita este dato, sin tener que diffear campo por
+// campo contra la version anterior.
+func (c *FundamentalsCache) publishAll(data map[string]domain.Fundamentals) {
+	if c.broadcaster == nil {
+		return
+	}
+	for symbol, f := range data {
+		c.broadcaster.Publish(symbol, f)
+	}
 }
 
 // GetBatch sirve del cache en memoria -- un simbolo sin fundamentales
