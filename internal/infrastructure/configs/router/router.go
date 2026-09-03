@@ -2,7 +2,6 @@ package router
 
 import (
 	"compress/gzip"
-	"sync/atomic"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/middleware"
@@ -22,17 +21,21 @@ type Router struct {
 	fundamentalsWS *handler.FundamentalsWSHandler
 	prices         *handler.CurrentPricesHandler
 	debugProbe     *handler.DebugProbeHandler
-	backfilling    *atomic.Bool
 }
 
-func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, snapshotWS *handler.SnapshotWSHandler, fundamentalsWS *handler.FundamentalsWSHandler, prices *handler.CurrentPricesHandler, debugProbe *handler.DebugProbeHandler, backfilling *atomic.Bool) *Router {
-	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, snapshotWS: snapshotWS, fundamentalsWS: fundamentalsWS, prices: prices, debugProbe: debugProbe, backfilling: backfilling}
+func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, snapshotWS *handler.SnapshotWSHandler, fundamentalsWS *handler.FundamentalsWSHandler, prices *handler.CurrentPricesHandler, debugProbe *handler.DebugProbeHandler) *Router {
+	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, snapshotWS: snapshotWS, fundamentalsWS: fundamentalsWS, prices: prices, debugProbe: debugProbe}
 }
 
+// Init NO bloquea peticiones durante el fill/refill (se saco el
+// BackfillGate, decision expresa del usuario el 2026-09-03): SymbolsCache y
+// FundamentalsCache siguen sirviendo la ultima foto buena conocida mientras
+// el barrido corre, en vez de que el caller reciba 503. El costo aceptado:
+// durante el barrido, distintos simbolos pueden estar en distinto nivel de
+// frescura entre si (uno ya con D1 de hoy, otro todavia con el de ayer).
 func (r *Router) Init() {
 	r.echo.Use(middleware.RequestLogging)
 	r.echo.Use(middleware.GatewayHeaderCheck)
-	r.echo.Use(middleware.BackfillGate(r.backfilling))
 	// Gzip: /marketdata/historical/batch devuelve hasta ~9MB de JSON crudo
 	// para un lote de 700 simbolos x 150 barras (confirmado en vivo el
 	// 2026-08-19) -- JSON con nombres de campo repetidos miles de veces

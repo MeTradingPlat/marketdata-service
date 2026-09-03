@@ -58,29 +58,30 @@ func refreshWithRetry(name string, fn func() error) {
 // /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
 // (ver topSymbolsPerMarket) despues del rollout M1 -- REST puro, no compite
 // por conexiones DxLink con las fases de velas.
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
 	// Pipeline del backfill (diseno del usuario): D1 primero, se cierran
 	// las conexiones, se calcula TODO lo que se calcula con D1 (beta y
 	// prevClose, por-simbolo con fecha), luego H1 (se cierra, se calcula lo
-	// suyo), y por ultimo M1 que se queda suscrito; recien ahi el sistema
-	// abre a peticiones. Durante TODO el backfill el servicio responde 503
-	// a peticiones externas (BackfillGate) -- las estrategias nunca leen
-	// velas a medio rellenar.
+	// suyo), y por ultimo M1 que se queda suscrito. El servicio ya NO
+	// bloquea peticiones externas durante este pipeline (se saco el
+	// BackfillGate, decision expresa del usuario el 2026-09-03: las cargas
+	// en memoria de abajo -- symbolsCache y fundamentalsCache -- ya sirven
+	// lo ultimo bueno conocido en vez de dejar al caller esperando un 503).
 	tracked := catchup.ReconcileAndTracked(ctx, gateway, symbols)
 	if len(tracked) == 0 {
 		log.Error().Msg("universe sweep returned no symbols, skipping live M1 rollout")
@@ -88,27 +89,15 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	}
 	// Justo despues de reconciliar (unico punto que escribe Upsert/Deactivate
 	// en tracked_symbols) -- asi SymbolsCache siempre refleja el universo
-	// recien reconciliado antes de que el gate se abra a peticiones externas.
+	// recien reconciliado antes de que arranque el barrido.
 	symbolsCache.ReloadAll(ctx)
-
-	// El gate solo tiene sentido cuando el barrido corre en la ventana de
-	// mantenimiento real (mercado cerrado) -- ahi bloquear no cuesta nada,
-	// nadie esta escaneando. Pero firstRun corre en CADA arranque del
-	// proceso, sin importar la hora: un redeploy a mitad de la sesion
-	// (confirmado en vivo el 2026-08-20, varios seguidos) disparaba el
-	// mismo sweep completo D1+H1+M1+fundamentales CON el gate puesto,
-	// dejando a signal-processing-service reintentando "en mantenimiento"
-	// varios minutos en pleno horario de mercado -- exactamente la clase de
-	// atraso en senales que se estaba investigando. La mayoria de los datos
-	// ya existen de antes del reinicio (Backfill/StreamLive retoman desde
-	// watermark, no repiten todo), asi que el riesgo real de "vela a medio
-	// rellenar" en un firstRun en horario de mercado es bajo comparado con
-	// bloquear toda la plataforma.
-	gate := !firstRun || !isMarketActive(time.Now())
-	if gate {
-		backfilling.Store(true)
-		defer backfilling.Store(false)
-	}
+	// fundamentalsCache tambien se carga ACA, antes de que arranque el
+	// barrido -- sin este reload temprano, un arranque en frio (proceso
+	// recien iniciado, cache vacio) serviria fundamentales vacios/en cero
+	// durante TODO el ciclo (hasta 20+ min), en vez de los ultimos datos
+	// buenos que ya estan en Postgres de la ventana anterior. El reload de
+	// mas abajo (al terminar el ciclo) sigue refrescandolo con lo nuevo.
+	fundamentalsCache.ReloadAll(ctx)
 
 	if !firstRun {
 		gateway.ResetLiveConnections()
@@ -203,9 +192,9 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// Recien aca terminaron TODOS los pasos sincronos que escriben
 	// fundamentales (beta, market metrics, earnings, prevClose, trading
 	// status) -- refrescar el cache de una sola vez aca, en vez de parchear
-	// campo por campo en cada Upsert, deja listo en memoria exactamente lo
-	// mismo que ya se abre a peticiones externas (backfilling.Store(false)
-	// via el defer de mas arriba corre justo despues de este return).
+	// campo por campo en cada Upsert, deja listo en memoria lo nuevo de esta
+	// ventana (el reload de mas arriba, al principio del ciclo, ya evito que
+	// el cache estuviera vacio mientras tanto).
 	fundamentalsCache.ReloadAll(ctx)
 
 	// En background: descarga+parseo del companyfacts.zip de SEC EDGAR
@@ -369,24 +358,4 @@ func missingSymbols(symbols []string, snapshots map[string]domain.IntradaySnapsh
 		}
 	}
 	return missing
-}
-
-// isMarketActive: mismo rango que effective_start/effective_end en
-// signal-processing-service (04:00-20:00 ET, pre/post-market extendido
-// incluido) -- no chequea feriados/fin de semana a proposito, un firstRun
-// que cae en uno de esos dias simplemente vuelve a la conducta segura de
-// siempre (gate puesto) en vez de arriesgar bloquear trafico real por un
-// falso negativo.
-func isMarketActive(now time.Time) bool {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		return true
-	}
-	nowET := now.In(loc)
-	if nowET.Weekday() == time.Saturday || nowET.Weekday() == time.Sunday {
-		return false
-	}
-	open := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 4, 0, 0, 0, loc)
-	closeTime := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 20, 0, 0, 0, loc)
-	return !nowET.Before(open) && nowET.Before(closeTime)
 }

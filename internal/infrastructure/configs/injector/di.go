@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"sync/atomic"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/finra"
@@ -90,7 +89,6 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(handler.NewDebugProbeHandler))
 
 	checkErr(container.Provide(server.NewServer))
-	checkErr(container.Provide(provideBackfillGate))
 	checkErr(container.Provide(router.NewRouter))
 
 	return container
@@ -155,14 +153,6 @@ func provideOAuth(cfg *configs.Config) *tastytrade.OAuth {
 		ClientSecret: cfg.TastyTradeClientSecret,
 		RefreshToken: cfg.TastyTradeRefreshToken,
 	})
-}
-
-// provideBackfillGate es el interruptor compartido entre el ciclo (que lo
-// prende durante el backfill) y el middleware BackfillGate (que bloquea las
-// peticiones mientras esta prendido) -- un solo *atomic.Bool para todo el
-// proceso.
-func provideBackfillGate() *atomic.Bool {
-	return &atomic.Bool{}
 }
 
 func provideCandlePool(cfg *configs.Config, qt *tastytrade.QuoteToken, oauth *tastytrade.OAuth) *tastytrade.CandlePool {
