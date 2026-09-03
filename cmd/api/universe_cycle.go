@@ -98,6 +98,17 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// buenos que ya estan en Postgres de la ventana anterior. El reload de
 	// mas abajo (al terminar el ciclo) sigue refrescandolo con lo nuevo.
 	fundamentalsCache.ReloadAll(ctx)
+	// Mismo motivo para el SnapshotTracker: sin este seed temprano, el
+	// ranking de Search() por volumen de HOY (ver rankByTodayVolume) no
+	// tiene nada del tracker hasta que termine el sweep M1 (hasta 20+ min),
+	// y cae al last_volume de AYER para casi todo el universo -- confirmado
+	// en vivo el 2026-09-03: SNXX con 116k de volumen real de hoy en
+	// Postgres aparecia en el puesto #18 de la busqueda, detras de simbolos
+	// con mucho menos volumen real, solo porque el tracker todavia no tenia
+	// nada cargado. Se usa `tracked` (no `activeTracked`, que recien se
+	// calcula despues de D1) -- el seed de mas abajo, tras el sweep M1,
+	// reemplaza esto con el dato completo y ya filtrado.
+	seedSnapshotTracker(ctx, candles, tracker, tracked)
 
 	if !firstRun {
 		gateway.ResetLiveConnections()
