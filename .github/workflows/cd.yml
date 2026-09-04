@@ -128,10 +128,25 @@ jobs:
           # botella medido es I/O, no CPU). max_wal_size 1GB->4GB da margen
           # para que un lote grande (el flush de velas en vivo paso de cada 2s
           # a cada 60s el mismo dia, lotes mas grandes por vez) no fuerce un
-          # checkpoint antes de tiempo. checkpoint_timeout se dejo en 5min a
-          # proposito: alargarlo no bajaba el ritmo de escritura por segundo
-          # (mismo volumen total, solo mas repartido), y si alarga la
-          # recuperacion tras una caida sucia.
+          # checkpoint antes de tiempo.
+          #
+          # checkpoint_timeout 5min->15min y bgwriter mas agresivo el
+          # 2026-09-04: la decision anterior de dejarlo en 5min asumia que
+          # alargarlo "no bajaba el volumen total, solo lo repartia" -- eso
+          # vale si cada pagina se toca una vez por checkpoint, pero las velas
+          # M1 se actualizan varias veces por minuto via UPSERT, asi que cada
+          # checkpoint fuerza un full-page-write de nuevo en la proxima
+          # modificacion de esa pagina. Checkpoints mas frecuentes = mas
+          # full-page-writes repetidos = mas bytes reales a disco, no sabo
+          # "mas repartido". Confirmado en vivo: con 5min y
+          # completion_target=0.9, la fase de escritura ocupaba 270 de cada
+          # 300s (90% del tiempo, sin respiro) y colisionaba con queries de
+          # lectura (canceladas por timeout). 15min les da 3x mas margen entre
+          # checkpoints. El costo (recuperacion mas lenta tras una caida
+          # sucia) ya se acepto en parte con synchronous_commit=off.
+          # bgwriter_delay/lru_maxpages mas agresivos sacan paginas sucias de
+          # forma continua entre checkpoints, para que cada uno tenga menos
+          # por escribir de golpe.
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_connections = 200;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET maintenance_work_mem = '256MB';"
@@ -140,6 +155,9 @@ jobs:
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_wal_size = '4GB';"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET synchronous_commit = off;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET wal_compression = 'zstd';"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET checkpoint_timeout = '15min';"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET bgwriter_delay = '100ms';"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET bgwriter_lru_maxpages = 400;"
           docker restart postgres-marketdata
           for i in $(seq 1 15); do
             docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
