@@ -34,7 +34,8 @@ const fundamentalsSelectSQL = `
 	d.short_interest_shares, COALESCE(d.short_interest_settlement, ''),
 	d.external_updated_at, d.float_updated_at,
 	COALESCE(d.occurred_date, ''),
-	d.prev_close, d.prev_close_updated_at
+	d.prev_close, d.prev_close_updated_at,
+	d.prev_post_market_volume, d.prev_post_market_volume_updated_at
 `
 
 const getFundamentalsSQL = `
@@ -58,6 +59,7 @@ func scanFundamentals(row pgx.Row, f *domain.Fundamentals) error {
 		&f.ExternalUpdatedAt, &f.FloatUpdatedAt,
 		&f.OccurredDate,
 		&f.PrevClose, &f.PrevCloseUpdatedAt,
+		&f.PrevPostMarketVolume, &f.PrevPostMarketVolumeUpdatedAt,
 	)
 }
 
@@ -109,6 +111,7 @@ func (r *FundamentalsRepository) GetBatch(ctx context.Context, symbols []string)
 			&f.ExternalUpdatedAt, &f.FloatUpdatedAt,
 			&f.OccurredDate,
 			&f.PrevClose, &f.PrevCloseUpdatedAt,
+			&f.PrevPostMarketVolume, &f.PrevPostMarketVolumeUpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning fundamentals batch row: %w", err)
 		}
@@ -455,6 +458,60 @@ func (r *FundamentalsRepository) MarkPrevCloseAttempted(ctx context.Context, sym
 		symbol)
 	if err != nil {
 		return fmt.Errorf("marking prev close attempted for %s: %w", symbol, err)
+	}
+	return nil
+}
+
+// GetSymbolsWithStalePrevPostMarketVolume: mismo guard por-simbolo que
+// GetSymbolsWithStalePrevClose, columna prev_post_market_volume_updated_at.
+func (r *FundamentalsRepository) GetSymbolsWithStalePrevPostMarketVolume(ctx context.Context, windowStart time.Time) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.symbol
+		FROM tracked_symbols s
+		LEFT JOIN dividends d ON d.symbol_id = s.symbol_id
+		WHERE s.is_active = TRUE
+		  AND (d.prev_post_market_volume_updated_at IS NULL OR d.prev_post_market_volume_updated_at < $1)
+		ORDER BY s.symbol`, windowStart)
+	if err != nil {
+		return nil, fmt.Errorf("listing symbols with stale prev post market volume: %w", err)
+	}
+	defer rows.Close()
+	var symbols []string
+	for rows.Next() {
+		var symbol string
+		if err := rows.Scan(&symbol); err != nil {
+			return nil, fmt.Errorf("scanning stale prev post market volume symbol: %w", err)
+		}
+		symbols = append(symbols, symbol)
+	}
+	return symbols, rows.Err()
+}
+
+// UpsertPrevPostMarketVolume guarda el postmarket de la sesion anterior
+// calculado en el backfill -- ver domain.Fundamentals.PrevPostMarketVolume.
+func (r *FundamentalsRepository) UpsertPrevPostMarketVolume(ctx context.Context, symbol string, volume int64) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO dividends (symbol_id, prev_post_market_volume, prev_post_market_volume_updated_at)
+		SELECT symbol_id, $2, now() FROM tracked_symbols WHERE symbol = $1
+		ON CONFLICT (symbol_id) DO UPDATE SET prev_post_market_volume = EXCLUDED.prev_post_market_volume, prev_post_market_volume_updated_at = now()`,
+		symbol, volume)
+	if err != nil {
+		return fmt.Errorf("upserting prev post market volume for %s: %w", symbol, err)
+	}
+	return nil
+}
+
+// MarkPrevPostMarketVolumeAttempted: mismo criterio que
+// MarkPrevCloseAttempted -- "corrio y no encontro dato" distinto de "nunca
+// corrio", para no re-procesar el mismo simbolo sin dato en cada ciclo.
+func (r *FundamentalsRepository) MarkPrevPostMarketVolumeAttempted(ctx context.Context, symbol string) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO dividends (symbol_id, prev_post_market_volume_updated_at)
+		SELECT symbol_id, now() FROM tracked_symbols WHERE symbol = $1
+		ON CONFLICT (symbol_id) DO UPDATE SET prev_post_market_volume_updated_at = now()`,
+		symbol)
+	if err != nil {
+		return fmt.Errorf("marking prev post market volume attempted for %s: %w", symbol, err)
 	}
 	return nil
 }

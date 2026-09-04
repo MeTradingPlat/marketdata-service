@@ -44,6 +44,9 @@ func toRealtime(symbol string, equity domain.Symbol, f domain.Fundamentals, snap
 		}
 		out.ShortRatio = f.ShortRatio
 	}
+	if f.PrevPostMarketVolumeUpdatedAt != nil {
+		out.PrevPostMarketVolume = f.PrevPostMarketVolume
+	}
 
 	return out
 }

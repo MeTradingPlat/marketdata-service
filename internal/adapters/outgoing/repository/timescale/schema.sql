@@ -207,6 +207,11 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS beta_updated_at TIMESTAMPTZ;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close NUMERIC;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close_updated_at TIMESTAMPTZ;
 
+-- Volumen post-market de la sesion anterior -- ver domain.Fundamentals.
+-- PrevPostMarketVolume. Mismo guard por-simbolo que prev_close.
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_post_market_volume BIGINT;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_post_market_volume_updated_at TIMESTAMPTZ;
+
 -- verified: las velas guardadas por el refill/backfill (Save withWatermark
 -- = TRUE) son verificadas (vienen de TastyTrade pedidas expresamente) --
 -- las del live en vivo (sin watermark) son provisionales y un reinicio las

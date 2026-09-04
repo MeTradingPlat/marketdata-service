@@ -21,6 +21,11 @@ type FundamentalRealtime struct {
 	DaysUntilEarnings *int     `json:"daysUntilEarnings,omitempty"`
 	PreMarketVolume   *int64   `json:"preMarketVolume,omitempty"`
 	PostMarketVolume  *int64   `json:"postMarketVolume,omitempty"`
+	// PrevPostMarketVolume: postmarket de la sesion ANTERIOR -- ver
+	// domain.Fundamentals.PrevPostMarketVolume sobre por que un filtro
+	// TIPO_VOLUMEN=AMBOS corrido en premarket lo necesita (PostMarketVolume
+	// de HOY es genuinamente 0 hasta que esa sesion pase).
+	PrevPostMarketVolume *int64 `json:"prevPostMarketVolume,omitempty"`
 	PreMarketClose    *float64 `json:"preMarketClose,omitempty"`
 	PostMarketClose   *float64 `json:"postMarketClose,omitempty"`
 	Open              *float64 `json:"open,omitempty"`

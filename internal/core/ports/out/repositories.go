@@ -67,6 +67,12 @@ type CandleRepository interface {
 	// mismo motivo que GetIntradaySessionsBatch. Un simbolo sin cierre
 	// regular en la ventana simplemente no aparece en el mapa.
 	GetPreviousSessionCloseBatch(ctx context.Context, symbols []string, before time.Time) (map[string]float64, error)
+	// GetPreviousPostMarketVolumeBatch suma el volumen M1 de la sesion
+	// post-market [16:00 ET, medianoche ET) del ultimo dia habil con datos
+	// para cada simbolo -- ver domain.Fundamentals.PrevPostMarketVolume. Un
+	// simbolo sin ningun dato M1 en los ultimos prevSessionCloseDays dias
+	// simplemente no aparece en el mapa.
+	GetPreviousPostMarketVolumeBatch(ctx context.Context, symbols []string, before time.Time) (map[string]int64, error)
 }
 
 type SymbolRepository interface {
@@ -139,4 +145,13 @@ type FundamentalsRepository interface {
 	// re-procesarse en cada ciclo (3,587 simbolos x ~10 min por ciclo,
 	// confirmado en vivo el 2026-08-18).
 	MarkPrevCloseAttempted(ctx context.Context, symbol string) error
+	// GetSymbolsWithStalePrevPostMarketVolume: mismo guard por-simbolo que
+	// GetSymbolsWithStalePrevClose, para prev_post_market_volume.
+	GetSymbolsWithStalePrevPostMarketVolume(ctx context.Context, windowStart time.Time) ([]string, error)
+	// UpsertPrevPostMarketVolume guarda el postmarket de la sesion anterior
+	// calculado en el backfill.
+	UpsertPrevPostMarketVolume(ctx context.Context, symbol string, volume int64) error
+	// MarkPrevPostMarketVolumeAttempted: mismo criterio que
+	// MarkPrevCloseAttempted.
+	MarkPrevPostMarketVolumeAttempted(ctx context.Context, symbol string) error
 }

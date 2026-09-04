@@ -40,6 +40,20 @@ type Fundamentals struct {
 	PrevClose          *float64   `json:"-"`
 	PrevCloseUpdatedAt *time.Time `json:"-"`
 
+	// PrevPostMarketVolume es el volumen post-market de la sesion anterior
+	// (16:01-20:00 ET del ultimo dia habil), calculado por
+	// RefreshPrevPostMarketVolume con el mismo guard por-simbolo que
+	// PrevClose. Existe porque un escaner que corre en premarket (ej.
+	// 04:00-09:30 ET) nunca ve el postMarketVolume de HOY -- esa sesion
+	// todavia no paso, el campo esta genuina y correctamente en 0 (ver
+	// applyIntraday en fundamentals/realtime_mapper.go) -- asi que un filtro
+	// "premarket + postmarket combinado" corrido en esa ventana necesita el
+	// dato de AYER para significar algo (confirmado en vivo el 2026-09-03:
+	// el escaner "volumen test" con TIPO_VOLUMEN=AMBOS terminaba siendo,
+	// sin darse cuenta, un filtro de solo-premarket).
+	PrevPostMarketVolume          *int64     `json:"-"`
+	PrevPostMarketVolumeUpdatedAt *time.Time `json:"-"`
+
 	MarketCap                   float64    `json:"marketCap"`
 	Eps                         float64    `json:"eps"`
 	Beta                        float64    `json:"beta"`

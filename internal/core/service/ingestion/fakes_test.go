@@ -123,6 +123,9 @@ func (f *fakeRepo) GetPreviousSessionClose(ctx context.Context, symbol string, b
 func (f *fakeRepo) GetPreviousSessionCloseBatch(ctx context.Context, symbols []string, before time.Time) (map[string]float64, error) {
 	return map[string]float64{}, nil
 }
+func (f *fakeRepo) GetPreviousPostMarketVolumeBatch(ctx context.Context, symbols []string, before time.Time) (map[string]int64, error) {
+	return map[string]int64{}, nil
+}
 
 func (f *fakeGateway) GetCandlesBatch(ctx context.Context, timeframe domain.Timeframe, froms map[string]time.Time) (map[string][]domain.Candle, error) {
 	return nil, nil

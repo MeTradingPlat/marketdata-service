@@ -181,6 +181,9 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	refreshWithRetry("prev close", func() error {
 		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
 	})
+	refreshWithRetry("prev post market volume", func() error {
+		return catchup.RefreshPrevPostMarketVolume(ctx, candles, fundamentals, windowStart)
+	})
 
 	// El trading status lo refresca el loop cada 15 min mientras el mercado
 	// esta activo -- si corrio hace menos de 10 min, el ciclo salta el suyo

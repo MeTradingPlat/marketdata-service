@@ -44,6 +44,9 @@ func (f *fakeSweepCandleRepo) GetPreviousSessionClose(context.Context, string, t
 func (f *fakeSweepCandleRepo) GetPreviousSessionCloseBatch(context.Context, []string, time.Time) (map[string]float64, error) {
 	return nil, nil
 }
+func (f *fakeSweepCandleRepo) GetPreviousPostMarketVolumeBatch(context.Context, []string, time.Time) (map[string]int64, error) {
+	return nil, nil
+}
 func (f *fakeSweepCandleRepo) GetSeriesPriority(context.Context, []string, domain.Timeframe, int) (map[string][]domain.Candle, error) {
 	return nil, nil
 }

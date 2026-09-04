@@ -66,6 +66,9 @@ func (f *fakeSlowRepo) GetPreviousSessionClose(ctx context.Context, symbol strin
 func (f *fakeSlowRepo) GetPreviousSessionCloseBatch(ctx context.Context, symbols []string, before time.Time) (map[string]float64, error) {
 	return nil, nil
 }
+func (f *fakeSlowRepo) GetPreviousPostMarketVolumeBatch(ctx context.Context, symbols []string, before time.Time) (map[string]int64, error) {
+	return nil, nil
+}
 
 // noLiveGateway: siempre falla CurrentCandle -- fuerza que resolvePrice
 // caiga al fallback de BD para todos los simbolos.

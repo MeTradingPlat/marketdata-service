@@ -84,6 +84,15 @@ func (f *fakeFundamentalsRepo) UpsertPrevClose(ctx context.Context, symbol strin
 func (f *fakeFundamentalsRepo) MarkPrevCloseAttempted(ctx context.Context, symbol string) error {
 	return nil
 }
+func (f *fakeFundamentalsRepo) GetSymbolsWithStalePrevPostMarketVolume(ctx context.Context, windowStart time.Time) ([]string, error) {
+	return nil, nil
+}
+func (f *fakeFundamentalsRepo) UpsertPrevPostMarketVolume(ctx context.Context, symbol string, volume int64) error {
+	return nil
+}
+func (f *fakeFundamentalsRepo) MarkPrevPostMarketVolumeAttempted(ctx context.Context, symbol string) error {
+	return nil
+}
 
 func TestFundamentalsCache_ReloadAll_PopulatesFromRepo(t *testing.T) {
 	symbols := &fakeSymbolRepo{tracked: []domain.Symbol{{Symbol: "AAPL"}, {Symbol: "MSFT"}}}
