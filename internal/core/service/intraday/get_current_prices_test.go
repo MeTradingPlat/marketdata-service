@@ -10,27 +10,18 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 )
 
-// fakeSlowRepo simula el fallback a BD: cada GetCandles tarda un poco y
-// registra cuantas llamadas estan en vuelo al mismo tiempo -- para probar
-// que dbFallbackConcurrencyLimit de verdad topa el paralelismo GLOBAL, no
-// solo el de un request individual.
+// fakeSlowRepo simula el fallback a BD: registra cuantas veces se llamo
+// GetSeriesPriority y con cuantos simbolos -- el fallback debe ser SIEMPRE
+// un solo lote, nunca un GetCandles por simbolo (ver el comentario de
+// GetCurrentPrices sobre el incidente del 2026-09-04).
 type fakeSlowRepo struct {
-	inFlight  atomic.Int32
-	maxSeen   atomic.Int32
-	callDelay time.Duration
+	callCount    atomic.Int32
+	lastBatchLen atomic.Int32
+	callDelay    time.Duration
 }
 
 func (f *fakeSlowRepo) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
-	n := f.inFlight.Add(1)
-	defer f.inFlight.Add(-1)
-	for {
-		max := f.maxSeen.Load()
-		if n <= max || f.maxSeen.CompareAndSwap(max, n) {
-			break
-		}
-	}
-	time.Sleep(f.callDelay)
-	return []domain.Candle{{Close: 1.23}}, nil
+	return nil, nil
 }
 
 func (f *fakeSlowRepo) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
@@ -40,7 +31,14 @@ func (f *fakeSlowRepo) GetSeries(ctx context.Context, symbols []string, tf domai
 	return nil, nil
 }
 func (f *fakeSlowRepo) GetSeriesPriority(ctx context.Context, symbols []string, tf domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
-	return nil, nil
+	f.callCount.Add(1)
+	f.lastBatchLen.Store(int32(len(symbols)))
+	time.Sleep(f.callDelay)
+	result := make(map[string][]domain.Candle, len(symbols))
+	for _, sym := range symbols {
+		result[sym] = []domain.Candle{{Close: 1.23}}
+	}
+	return result, nil
 }
 func (f *fakeSlowRepo) GetSeriesAggregatedBatch(ctx context.Context, symbols []string, timeframe, source domain.Timeframe, bucket string, approxPeriod time.Duration, bars int) (map[string][]domain.Candle, error) {
 	return nil, nil
@@ -100,8 +98,8 @@ func (noLiveGateway) EarningsReports(ctx context.Context, symbol string) ([]doma
 }
 func (noLiveGateway) ResetLiveConnections() {}
 
-func TestGetCurrentPrices_DBFallbackNeverExceedsGlobalLimit(t *testing.T) {
-	repo := &fakeSlowRepo{callDelay: 20 * time.Millisecond}
+func TestGetCurrentPrices_DBFallbackIsOneBatchCallNotOnePerSymbol(t *testing.T) {
+	repo := &fakeSlowRepo{callDelay: time.Millisecond}
 	svc := NewGetCurrentPricesService(repo, noLiveGateway{}, NewSnapshotTracker())
 
 	symbols := make([]string, 60)
@@ -109,9 +107,25 @@ func TestGetCurrentPrices_DBFallbackNeverExceedsGlobalLimit(t *testing.T) {
 		symbols[i] = "SYM" + string(rune('A'+i%26)) + string(rune('0'+i/26))
 	}
 
-	// Simula 3 "escaneres" llamando GetCurrentPrices al mismo tiempo, cada
-	// uno con su propio lote -- el limite debe seguir siendo GLOBAL, no por
-	// llamada.
+	prices := svc.GetCurrentPrices(context.Background(), symbols)
+
+	if got := repo.callCount.Load(); got != 1 {
+		t.Fatalf("GetSeriesPriority calls = %d, want exactly 1 (one batch, not one per symbol)", got)
+	}
+	if got := repo.lastBatchLen.Load(); int(got) != len(symbols) {
+		t.Fatalf("batch size = %d, want %d (all symbols in one call)", got, len(symbols))
+	}
+	if len(prices) != len(symbols) {
+		t.Fatalf("resolved %d prices, want %d", len(prices), len(symbols))
+	}
+}
+
+func TestGetCurrentPrices_ConcurrentCallersEachBatchOnce(t *testing.T) {
+	repo := &fakeSlowRepo{callDelay: 5 * time.Millisecond}
+	svc := NewGetCurrentPricesService(repo, noLiveGateway{}, NewSnapshotTracker())
+
+	symbols := []string{"AAPL", "MSFT", "NVDA"}
+
 	var wg sync.WaitGroup
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
@@ -122,8 +136,8 @@ func TestGetCurrentPrices_DBFallbackNeverExceedsGlobalLimit(t *testing.T) {
 	}
 	wg.Wait()
 
-	if max := repo.maxSeen.Load(); max > dbFallbackConcurrencyLimit {
-		t.Fatalf("max concurrent DB calls = %d, want <= %d", max, dbFallbackConcurrencyLimit)
+	if got := repo.callCount.Load(); got != 3 {
+		t.Fatalf("GetSeriesPriority calls = %d, want exactly 3 (one batch per caller)", got)
 	}
 }
 
@@ -138,7 +152,7 @@ func TestGetCurrentPrices_LiveAndTrackerHitsSkipDBEntirely(t *testing.T) {
 	if prices["AAPL"] != 42 {
 		t.Fatalf("expected tracker price 42, got %+v", prices)
 	}
-	if repo.maxSeen.Load() != 0 {
+	if repo.callCount.Load() != 0 {
 		t.Fatal("expected the DB fallback to never be called when the tracker already has the price")
 	}
 }

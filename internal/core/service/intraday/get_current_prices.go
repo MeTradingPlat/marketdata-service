@@ -2,36 +2,20 @@ package intraday
 
 import (
 	"context"
-	"sync"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 )
 
-const currentPricesWorkers = 20
-
-// dbFallbackConcurrencyLimit acota, GLOBALMENTE (compartido entre TODAS las
-// llamadas a GetCurrentPrices, sin importar cuantos escaneres o requests HTTP
-// esten en vuelo a la vez), cuantas resolvePrice pueden tocar la BD al mismo
-// tiempo. currentPricesWorkers ya acota el paralelismo DENTRO de un request,
-// pero con varios escaneres pidiendo el universo completo a la vez eso no
-// alcanza: 10 requests concurrentes x 20 workers cada uno pueden sumar 200
-// intentos simultaneos contra un pool de 25 conexiones (confirmado en vivo:
-// 5% de las llamadas a /marketdata/quotes/rest tardando ~15s por esa cola).
-// Este semaforo es el limite real, independiente de cuantos escaneres existan
-// o como cada cliente configure su propia concurrencia.
-const dbFallbackConcurrencyLimit = 15
-
 type getCurrentPricesService struct {
 	repo    out.CandleRepository
 	gateway out.MarketDataGateway
 	tracker *SnapshotTracker
-	dbSem   chan struct{}
 }
 
 func NewGetCurrentPricesService(repo out.CandleRepository, gateway out.MarketDataGateway, tracker *SnapshotTracker) in.GetCurrentPricesService {
-	return &getCurrentPricesService{repo: repo, gateway: gateway, tracker: tracker, dbSem: make(chan struct{}, dbFallbackConcurrencyLimit)}
+	return &getCurrentPricesService{repo: repo, gateway: gateway, tracker: tracker}
 }
 
 // GetCurrentPrices es la version liviana de GetSnapshot -- solo el precio,
@@ -40,62 +24,42 @@ func NewGetCurrentPricesService(repo out.CandleRepository, gateway out.MarketDat
 // sin pagar de nuevo el costo de las sesiones del dia). Mismo criterio de
 // "vela en formacion primero, ultima M1 cerrada si no hay" que GetSnapshot.
 // Un simbolo sin ningun precio disponible queda afuera del mapa, no en 0.
+//
+// El fallback a BD es UN SOLO GetSeriesPriority para todo el lote que no
+// resolvio en memoria -- antes era un GetCandles por simbolo (hasta 15 en
+// paralelo via semaforo), y con varios escaneres pidiendo el universo
+// completo a la vez eso sumaba decenas de queries individuales contra
+// Postgres en la apertura del mercado (confirmado en vivo el 2026-09-04:
+// contribuyo a un load average de 160+ y checkpoints de 270s+ escribiendo
+// casi nada, mismo patron que GetSnapshotsBatch ya resolvio para su propio
+// fallback M1, ver needM1Fallback en get_intraday_snapshot.go).
 func (s *getCurrentPricesService) GetCurrentPrices(ctx context.Context, symbols []string) map[string]float64 {
 	result := make(map[string]float64, len(symbols))
-	var mu sync.Mutex
+	needDB := make([]string, 0, len(symbols))
 
-	jobs := make(chan string, len(symbols))
-	for _, sym := range symbols {
-		jobs <- sym
+	for _, symbol := range symbols {
+		if current, ok := s.gateway.CurrentCandle(symbol); ok && current.Close != 0 {
+			result[symbol] = current.Close
+			continue
+		}
+		if price, _, ok := s.tracker.LastClose(symbol); ok {
+			result[symbol] = price
+			continue
+		}
+		needDB = append(needDB, symbol)
 	}
-	close(jobs)
 
-	var wg sync.WaitGroup
-	for i := 0; i < currentPricesWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for symbol := range jobs {
-				price, ok := s.resolvePrice(ctx, symbol)
-				if !ok {
-					continue
-				}
-				mu.Lock()
-				result[symbol] = price
-				mu.Unlock()
-			}
-		}()
+	if len(needDB) == 0 {
+		return result
 	}
-	wg.Wait()
+	series, err := s.repo.GetSeriesPriority(ctx, needDB, domain.M1, 1)
+	if err != nil {
+		return result
+	}
+	for symbol, candles := range series {
+		if len(candles) > 0 {
+			result[symbol] = candles[0].Close
+		}
+	}
 	return result
-}
-
-// resolvePrice prueba el tracker en memoria (LastClose) antes de tocar BD --
-// mismo fallback que GetSnapshotsBatch, reusado aca: sin esto, un lote de
-// quotes con muchos simbolos todavia no suscritos en vivo (justo tras un
-// deploy/reconexion) pagaba una consulta por simbolo, el mismo problema ya
-// resuelto para fundamentals/realtime (ver snapshot_tracker.go).
-func (s *getCurrentPricesService) resolvePrice(ctx context.Context, symbol string) (float64, bool) {
-	if current, ok := s.gateway.CurrentCandle(symbol); ok && current.Close != 0 {
-		return current.Close, true
-	}
-	if price, _, ok := s.tracker.LastClose(symbol); ok {
-		return price, true
-	}
-
-	select {
-	case s.dbSem <- struct{}{}:
-		defer func() { <-s.dbSem }()
-	case <-ctx.Done():
-		// El caller ya se rindio (timeout del lado de signal-processing) --
-		// no vale la pena tomar un cupo del semaforo para un trabajo que
-		// nadie va a leer.
-		return 0, false
-	}
-
-	lastM1, err := s.repo.GetCandles(ctx, symbol, domain.M1, 1, nil)
-	if err != nil || len(lastM1) == 0 {
-		return 0, false
-	}
-	return lastM1[0].Close, true
 }
