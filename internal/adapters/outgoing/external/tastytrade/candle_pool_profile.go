@@ -7,8 +7,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// profileBatchSize: un solo mensaje FEED_SUBSCRIPTION con 2000 items pesa
+// ~70KB, por encima del limite duro de dxFeed de 65536 bytes (confirmado en
+// vivo el 2026-09-04: "bytes":70250 -> INVALID_MESSAGE -> reconnect forzado
+// -> ese mismo reconnect fue el que disparo un storm de "sessions exceeded"
+// dos minutos despues). subscribeProfile no trocea por tamaño, solo el
+// llamador via este batch size -- 1500 items da ~53KB, con margen bajo
+// dxLinkWarnMessageBytes incluso con simbolos mas largos que el promedio.
 const (
-	profileBatchSize   = 2000
+	profileBatchSize   = 1500
 	profileQuietPeriod = 3 * time.Second
 	profileMaxWait     = 60 * time.Second
 )
