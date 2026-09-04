@@ -78,19 +78,13 @@ func (f *fakeFundamentalsRepo) GetSymbolsWithStaleBeta(ctx context.Context, wind
 func (f *fakeFundamentalsRepo) GetSymbolsWithStalePrevClose(ctx context.Context, windowStart time.Time) ([]string, error) {
 	return nil, nil
 }
-func (f *fakeFundamentalsRepo) UpsertPrevClose(ctx context.Context, symbol string, close float64) error {
-	return nil
-}
-func (f *fakeFundamentalsRepo) MarkPrevCloseAttempted(ctx context.Context, symbol string) error {
+func (f *fakeFundamentalsRepo) UpsertPrevCloseBatch(ctx context.Context, closes map[string]float64, attemptedOnly []string) error {
 	return nil
 }
 func (f *fakeFundamentalsRepo) GetSymbolsWithStalePrevPostMarketVolume(ctx context.Context, windowStart time.Time) ([]string, error) {
 	return nil, nil
 }
-func (f *fakeFundamentalsRepo) UpsertPrevPostMarketVolume(ctx context.Context, symbol string, volume int64) error {
-	return nil
-}
-func (f *fakeFundamentalsRepo) MarkPrevPostMarketVolumeAttempted(ctx context.Context, symbol string) error {
+func (f *fakeFundamentalsRepo) UpsertPrevPostMarketVolumeBatch(ctx context.Context, volumes map[string]int64, attemptedOnly []string) error {
 	return nil
 }
 

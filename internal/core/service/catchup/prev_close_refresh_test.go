@@ -3,7 +3,6 @@ package catchup
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -25,34 +24,25 @@ type fakePrevCloseFundamentals struct {
 	stale    []string
 	staleErr error
 
-	mu        sync.Mutex
-	upserted  map[string]float64
-	attempted map[string]bool
+	upsertedCloses   map[string]float64
+	upsertedAttempts []string
 }
 
 func newFakePrevCloseFundamentals(stale []string) *fakePrevCloseFundamentals {
-	return &fakePrevCloseFundamentals{stale: stale, upserted: map[string]float64{}, attempted: map[string]bool{}}
+	return &fakePrevCloseFundamentals{stale: stale}
 }
 
 func (f *fakePrevCloseFundamentals) GetSymbolsWithStalePrevClose(ctx context.Context, windowStart time.Time) ([]string, error) {
 	return f.stale, f.staleErr
 }
 
-func (f *fakePrevCloseFundamentals) UpsertPrevClose(ctx context.Context, symbol string, close float64) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.upserted[symbol] = close
+func (f *fakePrevCloseFundamentals) UpsertPrevCloseBatch(ctx context.Context, closes map[string]float64, attemptedOnly []string) error {
+	f.upsertedCloses = closes
+	f.upsertedAttempts = attemptedOnly
 	return nil
 }
 
-func (f *fakePrevCloseFundamentals) MarkPrevCloseAttempted(ctx context.Context, symbol string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.attempted[symbol] = true
-	return nil
-}
-
-func TestRefreshPrevClose_UpsertsFoundAndMarksMissingAsAttempted(t *testing.T) {
+func TestRefreshPrevClose_UpsertsFoundAndMarksMissingAsAttemptedInOneBatch(t *testing.T) {
 	fundamentals := newFakePrevCloseFundamentals([]string{"AAPL", "ILLIQUID"})
 	candles := &fakePrevCloseCandles{closes: map[string]float64{"AAPL": 190.5}}
 
@@ -60,14 +50,14 @@ func TestRefreshPrevClose_UpsertsFoundAndMarksMissingAsAttempted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got := fundamentals.upserted["AAPL"]; got != 190.5 {
+	if got := fundamentals.upsertedCloses["AAPL"]; got != 190.5 {
 		t.Errorf("AAPL upserted = %v, want 190.5", got)
 	}
-	if !fundamentals.attempted["ILLIQUID"] {
-		t.Error("expected ILLIQUID (no close found) to be marked attempted")
+	if len(fundamentals.upsertedAttempts) != 1 || fundamentals.upsertedAttempts[0] != "ILLIQUID" {
+		t.Errorf("attemptedOnly = %v, want [ILLIQUID]", fundamentals.upsertedAttempts)
 	}
-	if _, ok := fundamentals.upserted["ILLIQUID"]; ok {
-		t.Error("ILLIQUID should not have been upserted -- it has no close")
+	if _, ok := fundamentals.upsertedCloses["ILLIQUID"]; ok {
+		t.Error("ILLIQUID should not be in the closes map -- it has no close")
 	}
 }
 

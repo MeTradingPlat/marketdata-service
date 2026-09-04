@@ -430,34 +430,45 @@ func (r *FundamentalsRepository) GetSymbolsWithStalePrevClose(ctx context.Contex
 	return symbols, nil
 }
 
-// UpsertPrevClose guarda el prevClose calculado en el backfill con su fecha
-// -- el endpoint de detalles lo prefiere al calculo en vivo (mismo dato,
-// sin repetir la query por cada request).
-func (r *FundamentalsRepository) UpsertPrevClose(ctx context.Context, symbol string, close float64) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO dividends (symbol_id, prev_close, prev_close_updated_at)
-		SELECT symbol_id, $2, now() FROM tracked_symbols WHERE symbol = $1
-		ON CONFLICT (symbol_id) DO UPDATE SET prev_close = EXCLUDED.prev_close, prev_close_updated_at = now()`,
-		symbol, close)
-	if err != nil {
-		return fmt.Errorf("upserting prev close for %s: %w", symbol, err)
-	}
-	return nil
-}
+const upsertPrevCloseSQL = `
+	INSERT INTO dividends (symbol_id, prev_close, prev_close_updated_at)
+	SELECT symbol_id, $2, now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET prev_close = EXCLUDED.prev_close, prev_close_updated_at = now()
+`
 
-// MarkPrevCloseAttempted estampa prev_close_updated_at sin tocar prev_close
-// (misma semantica que external_updated_at: "corrio y no encontro dato" es
-// distinto de "nunca corrio"). Sin esto, los simbolos sin datos M1 quedaban
-// en la lista stale para siempre y cada ciclo los re-procesaba (~10 min
-// perdidos por ciclo con 3,587 de ellos, confirmado en vivo el 2026-08-18).
-func (r *FundamentalsRepository) MarkPrevCloseAttempted(ctx context.Context, symbol string) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO dividends (symbol_id, prev_close_updated_at)
-		SELECT symbol_id, now() FROM tracked_symbols WHERE symbol = $1
-		ON CONFLICT (symbol_id) DO UPDATE SET prev_close_updated_at = now()`,
-		symbol)
-	if err != nil {
-		return fmt.Errorf("marking prev close attempted for %s: %w", symbol, err)
+const markPrevCloseAttemptedSQL = `
+	INSERT INTO dividends (symbol_id, prev_close_updated_at)
+	SELECT symbol_id, now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET prev_close_updated_at = now()
+`
+
+// UpsertPrevCloseBatch guarda el prevClose calculado en el backfill (para
+// los simbolos que tuvieron uno) y estampa prev_close_updated_at sin tocar
+// prev_close para los que no (mismo criterio "corrio y no encontro dato"
+// distinto de "nunca corrio" que ya tenia MarkPrevCloseAttempted -- sin
+// eso, los simbolos sin M1 quedaban en la lista stale para siempre).
+// UN SOLO pgx.Batch para todo el lote -- antes cada simbolo pagaba su
+// propio round trip via un pool de workers (confirmado en vivo el
+// 2026-09-04: contribuyo a saturar Postgres en la apertura de mercado
+// junto con el resto de consultas per-simbolo de ese incidente).
+func (r *FundamentalsRepository) UpsertPrevCloseBatch(ctx context.Context, closes map[string]float64, attemptedOnly []string) error {
+	total := len(closes) + len(attemptedOnly)
+	if total == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for symbol, close := range closes {
+		batch.Queue(upsertPrevCloseSQL, symbol, close)
+	}
+	for _, symbol := range attemptedOnly {
+		batch.Queue(markPrevCloseAttemptedSQL, symbol)
+	}
+	results := r.pool.SendBatch(ctx, batch)
+	defer results.Close()
+	for i := 0; i < total; i++ {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("upserting prev close batch: %w", err)
+		}
 	}
 	return nil
 }
@@ -487,31 +498,40 @@ func (r *FundamentalsRepository) GetSymbolsWithStalePrevPostMarketVolume(ctx con
 	return symbols, rows.Err()
 }
 
-// UpsertPrevPostMarketVolume guarda el postmarket de la sesion anterior
-// calculado en el backfill -- ver domain.Fundamentals.PrevPostMarketVolume.
-func (r *FundamentalsRepository) UpsertPrevPostMarketVolume(ctx context.Context, symbol string, volume int64) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO dividends (symbol_id, prev_post_market_volume, prev_post_market_volume_updated_at)
-		SELECT symbol_id, $2, now() FROM tracked_symbols WHERE symbol = $1
-		ON CONFLICT (symbol_id) DO UPDATE SET prev_post_market_volume = EXCLUDED.prev_post_market_volume, prev_post_market_volume_updated_at = now()`,
-		symbol, volume)
-	if err != nil {
-		return fmt.Errorf("upserting prev post market volume for %s: %w", symbol, err)
-	}
-	return nil
-}
+const upsertPrevPostMarketVolumeSQL = `
+	INSERT INTO dividends (symbol_id, prev_post_market_volume, prev_post_market_volume_updated_at)
+	SELECT symbol_id, $2, now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET prev_post_market_volume = EXCLUDED.prev_post_market_volume, prev_post_market_volume_updated_at = now()
+`
 
-// MarkPrevPostMarketVolumeAttempted: mismo criterio que
-// MarkPrevCloseAttempted -- "corrio y no encontro dato" distinto de "nunca
-// corrio", para no re-procesar el mismo simbolo sin dato en cada ciclo.
-func (r *FundamentalsRepository) MarkPrevPostMarketVolumeAttempted(ctx context.Context, symbol string) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO dividends (symbol_id, prev_post_market_volume_updated_at)
-		SELECT symbol_id, now() FROM tracked_symbols WHERE symbol = $1
-		ON CONFLICT (symbol_id) DO UPDATE SET prev_post_market_volume_updated_at = now()`,
-		symbol)
-	if err != nil {
-		return fmt.Errorf("marking prev post market volume attempted for %s: %w", symbol, err)
+const markPrevPostMarketVolumeAttemptedSQL = `
+	INSERT INTO dividends (symbol_id, prev_post_market_volume_updated_at)
+	SELECT symbol_id, now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET prev_post_market_volume_updated_at = now()
+`
+
+// UpsertPrevPostMarketVolumeBatch: mismo patron que UpsertPrevCloseBatch --
+// UN SOLO pgx.Batch para todo el lote de simbolos con dato y los que se
+// marcan como intentados sin dato, ver domain.Fundamentals.
+// PrevPostMarketVolume.
+func (r *FundamentalsRepository) UpsertPrevPostMarketVolumeBatch(ctx context.Context, volumes map[string]int64, attemptedOnly []string) error {
+	total := len(volumes) + len(attemptedOnly)
+	if total == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for symbol, volume := range volumes {
+		batch.Queue(upsertPrevPostMarketVolumeSQL, symbol, volume)
+	}
+	for _, symbol := range attemptedOnly {
+		batch.Queue(markPrevPostMarketVolumeAttemptedSQL, symbol)
+	}
+	results := r.pool.SendBatch(ctx, batch)
+	defer results.Close()
+	for i := 0; i < total; i++ {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("upserting prev post market volume batch: %w", err)
+		}
 	}
 	return nil
 }

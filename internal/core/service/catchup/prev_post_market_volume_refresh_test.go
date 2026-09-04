@@ -3,7 +3,6 @@ package catchup
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -25,34 +24,25 @@ type fakePrevPostMarketVolumeFundamentals struct {
 	stale    []string
 	staleErr error
 
-	mu        sync.Mutex
-	upserted  map[string]int64
-	attempted map[string]bool
+	upsertedVolumes  map[string]int64
+	upsertedAttempts []string
 }
 
 func newFakePrevPostMarketVolumeFundamentals(stale []string) *fakePrevPostMarketVolumeFundamentals {
-	return &fakePrevPostMarketVolumeFundamentals{stale: stale, upserted: map[string]int64{}, attempted: map[string]bool{}}
+	return &fakePrevPostMarketVolumeFundamentals{stale: stale}
 }
 
 func (f *fakePrevPostMarketVolumeFundamentals) GetSymbolsWithStalePrevPostMarketVolume(ctx context.Context, windowStart time.Time) ([]string, error) {
 	return f.stale, f.staleErr
 }
 
-func (f *fakePrevPostMarketVolumeFundamentals) UpsertPrevPostMarketVolume(ctx context.Context, symbol string, volume int64) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.upserted[symbol] = volume
+func (f *fakePrevPostMarketVolumeFundamentals) UpsertPrevPostMarketVolumeBatch(ctx context.Context, volumes map[string]int64, attemptedOnly []string) error {
+	f.upsertedVolumes = volumes
+	f.upsertedAttempts = attemptedOnly
 	return nil
 }
 
-func (f *fakePrevPostMarketVolumeFundamentals) MarkPrevPostMarketVolumeAttempted(ctx context.Context, symbol string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.attempted[symbol] = true
-	return nil
-}
-
-func TestRefreshPrevPostMarketVolume_UpsertsFoundAndMarksMissingAsAttempted(t *testing.T) {
+func TestRefreshPrevPostMarketVolume_UpsertsFoundAndMarksMissingAsAttemptedInOneBatch(t *testing.T) {
 	fundamentals := newFakePrevPostMarketVolumeFundamentals([]string{"AAPL", "NEWLISTING"})
 	candles := &fakePrevPostMarketVolumeCandles{volumes: map[string]int64{"AAPL": 6600000}}
 
@@ -60,14 +50,14 @@ func TestRefreshPrevPostMarketVolume_UpsertsFoundAndMarksMissingAsAttempted(t *t
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got := fundamentals.upserted["AAPL"]; got != 6600000 {
+	if got := fundamentals.upsertedVolumes["AAPL"]; got != 6600000 {
 		t.Errorf("AAPL upserted = %v, want 6600000", got)
 	}
-	if !fundamentals.attempted["NEWLISTING"] {
-		t.Error("expected NEWLISTING (no volume found) to be marked attempted")
+	if len(fundamentals.upsertedAttempts) != 1 || fundamentals.upsertedAttempts[0] != "NEWLISTING" {
+		t.Errorf("attemptedOnly = %v, want [NEWLISTING]", fundamentals.upsertedAttempts)
 	}
-	if _, ok := fundamentals.upserted["NEWLISTING"]; ok {
-		t.Error("NEWLISTING should not have been upserted -- it has no volume")
+	if _, ok := fundamentals.upsertedVolumes["NEWLISTING"]; ok {
+		t.Error("NEWLISTING should not be in the volumes map -- it has no volume")
 	}
 }
 

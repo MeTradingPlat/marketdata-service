@@ -138,20 +138,17 @@ type FundamentalsRepository interface {
 	// GetSymbolsWithStalePrevClose trae los simbolos cuyo prevClose no se
 	// calculo en la ventana actual (mismo guard por-simbolo).
 	GetSymbolsWithStalePrevClose(ctx context.Context, windowStart time.Time) ([]string, error)
-	// UpsertPrevClose guarda el prevClose del backfill con su fecha.
-	UpsertPrevClose(ctx context.Context, symbol string, close float64) error
-	// MarkPrevCloseAttempted estampa prev_close_updated_at sin tocar
-	// prev_close -- "se intento y no hay dato" (simbolo sin M1) no debe
-	// re-procesarse en cada ciclo (3,587 simbolos x ~10 min por ciclo,
-	// confirmado en vivo el 2026-08-18).
-	MarkPrevCloseAttempted(ctx context.Context, symbol string) error
+	// UpsertPrevCloseBatch guarda el prevClose del backfill (closes) y
+	// estampa "intentado sin dato" (attemptedOnly, ver el comentario del
+	// simbolo sin M1) para el resto -- UN SOLO round trip via pgx.Batch para
+	// todo el lote stale, nunca un Exec por simbolo (confirmado en vivo el
+	// 2026-09-04: un pool de workers haciendo un UPSERT cada uno contribuyo a
+	// saturar Postgres en la apertura de mercado).
+	UpsertPrevCloseBatch(ctx context.Context, closes map[string]float64, attemptedOnly []string) error
 	// GetSymbolsWithStalePrevPostMarketVolume: mismo guard por-simbolo que
 	// GetSymbolsWithStalePrevClose, para prev_post_market_volume.
 	GetSymbolsWithStalePrevPostMarketVolume(ctx context.Context, windowStart time.Time) ([]string, error)
-	// UpsertPrevPostMarketVolume guarda el postmarket de la sesion anterior
-	// calculado en el backfill.
-	UpsertPrevPostMarketVolume(ctx context.Context, symbol string, volume int64) error
-	// MarkPrevPostMarketVolumeAttempted: mismo criterio que
-	// MarkPrevCloseAttempted.
-	MarkPrevPostMarketVolumeAttempted(ctx context.Context, symbol string) error
+	// UpsertPrevPostMarketVolumeBatch: mismo patron de UN SOLO pgx.Batch que
+	// UpsertPrevCloseBatch, para prev_post_market_volume.
+	UpsertPrevPostMarketVolumeBatch(ctx context.Context, volumes map[string]int64, attemptedOnly []string) error
 }
