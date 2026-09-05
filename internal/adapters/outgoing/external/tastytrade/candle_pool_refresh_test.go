@@ -114,3 +114,57 @@ func TestRefreshLiveSubscriptions_ResendsAddWithoutOpeningNewChannelOrConnection
 		t.Fatalf("expected no new channel to be opened, channel count = %d", channelCount)
 	}
 }
+
+// TestRefreshLiveSubscriptions_StaggersBetweenChannels prueba que el envio
+// no sale todo en la misma fraccion de segundo -- TastyTrade publica un tope
+// de 10,000 cambios de suscripcion por minuto para dxLink sin aclarar si
+// cuenta por mensaje o por simbolo, asi que espaciar el envio entre canales
+// es la unica salvaguarda posible sin confirmarlo contra la cuenta real.
+func TestRefreshLiveSubscriptions_StaggersBetweenChannels(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	dialConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dialing test server: %v", err)
+	}
+
+	conn := NewDxLinkConn(func() string { return wsURL }, func() string { return "token" })
+	conn.conn = dialConn
+	conn.authenticated = true
+	conn.channels = make(map[int]*dxLinkChannel)
+
+	pc := newPooledConnection(conn)
+	for id, symbol := range map[int]string{1: "AAPL", 2: "MSFT", 3: "NVDA"} {
+		ch := newDxLinkChannel(id, conn)
+		conn.channels[id] = ch
+		pooled := newPooledChannel(ch)
+		pooled.occupy(candleKey(symbol, domain.M1))
+		pc.addChannel(pooled)
+	}
+
+	allocator := &channelAllocator{maxConnections: defaultMaxConnections, connections: []*pooledConnection{pc}}
+	pool := &CandlePool{allocator: allocator}
+
+	start := time.Now()
+	pool.RefreshLiveSubscriptions(context.Background())
+	elapsed := time.Since(start)
+
+	wantMin := 2 * refreshChannelStagger // 3 canales = 2 pausas entre ellos
+	if elapsed < wantMin {
+		t.Fatalf("expected refreshing 3 channels to take at least %v (staggered), took %v", wantMin, elapsed)
+	}
+}

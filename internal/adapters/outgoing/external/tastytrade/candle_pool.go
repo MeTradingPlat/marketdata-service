@@ -246,11 +246,30 @@ const refreshLiveSubscriptionsFrom = 2 * time.Minute
 // sepamos de antemano cual simbolo puntual esta mudo -- se manda a todos
 // por igual, un mensaje por canal (no por simbolo), asi que el costo es
 // proporcional a la cantidad de canales (~130-150), no al universo (~13k).
+// refreshChannelStagger espacia el envio entre canales -- TastyTrade publica
+// un tope de 10,000 "subscription changes"/minuto para dxLink, pero no
+// documenta si eso cuenta por mensaje o por simbolo dentro del Add, ni si
+// hay ademas un limite de rafaga por segundo aparte del limite por minuto.
+// Sin este espaciado, los ~130-150 mensajes salian todos en la misma
+// fraccion de segundo (un for secuencial sin pausas); con 50ms entre canales,
+// el barrido completo del universo tarda unos ~7s en el caso real (~150
+// canales) y ~16s en el techo teorico (320 canales, 40 conexiones x 8
+// canales), siempre con margen de sobra dentro del minuto entre una vuelta
+// del ticker y la siguiente.
+const refreshChannelStagger = 50 * time.Millisecond
+
 func (p *CandlePool) RefreshLiveSubscriptions(ctx context.Context) {
 	channels := p.allocator.allChannels()
 	from := time.Now().Add(-refreshLiveSubscriptionsFrom)
 	refreshed := 0
-	for _, ch := range channels {
+	for i, ch := range channels {
+		if i > 0 {
+			select {
+			case <-time.After(refreshChannelStagger):
+			case <-ctx.Done():
+				return
+			}
+		}
 		symbols := ch.liveSymbols()
 		if len(symbols) == 0 {
 			continue
