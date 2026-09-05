@@ -116,6 +116,39 @@ func TestFlushFormingCandles_SavesBeforeDiscard(t *testing.T) {
 	}
 }
 
+// TestHandleLiveEvent_RefreshReplayOfUnchangedClosedCandleDoesNotRedispatch
+// reproduce lo que manda RefreshLiveSubscriptions cada minuto: reenvia el
+// historial reciente de un simbolo aunque nada haya cambiado. Sin el chequeo
+// de candleValuesEqual, esto reencolaba en liveSaveBuffer la MISMA vela ya
+// guardada para cada uno de los ~13k simbolos en vivo, cada minuto.
+func TestHandleLiveEvent_RefreshReplayOfUnchangedClosedCandleDoesNotRedispatch(t *testing.T) {
+	p := newTestPool()
+	minute10 := time.Date(2026, 9, 4, 18, 10, 0, 0, time.UTC)
+	minute11 := time.Date(2026, 9, 4, 18, 11, 0, 0, time.UTC)
+
+	var closedEvents []domain.Candle
+	p.liveSubs["EMAT"] = func(c domain.Candle) { closedEvents = append(closedEvents, c) }
+	p.liveTicks["EMAT"] = func(domain.Candle) {}
+
+	p.handleLiveEvent("EMAT", rawCandleEvent{Symbol: "EMAT", Timestamp: minute10, Open: f(3.18), High: f(3.18), Low: f(3.18), Close: f(3.18), Volume: f(200)})
+	p.handleLiveEvent("EMAT", rawCandleEvent{Symbol: "EMAT", Timestamp: minute11, Open: f(3.19), High: f(3.19), Low: f(3.19), Close: f(3.19), Volume: f(50)})
+	if len(closedEvents) != 1 {
+		t.Fatalf("expected 18:10 to have closed once, got %+v", closedEvents)
+	}
+
+	// Replay identico del refresco periodico: mismos valores para 18:10.
+	p.handleLiveEvent("EMAT", rawCandleEvent{Symbol: "EMAT", Timestamp: minute10, Open: f(3.18), High: f(3.18), Low: f(3.18), Close: f(3.18), Volume: f(200)})
+	if len(closedEvents) != 1 {
+		t.Fatalf("expected the identical replay NOT to redispatch, got %d closed events", len(closedEvents))
+	}
+
+	// Una correccion real (volumen distinto) si debe seguir despachando.
+	p.handleLiveEvent("EMAT", rawCandleEvent{Symbol: "EMAT", Timestamp: minute10, Volume: f(20000)})
+	if len(closedEvents) != 2 || closedEvents[1].Volume != 20000 {
+		t.Fatalf("expected a genuine correction to still dispatch, got %+v", closedEvents)
+	}
+}
+
 // TestFlushFormingCandles_SkipsIncompleteCandle confirma que un candle sin
 // OHLC completo (dispatchClosed ya filtra esto) no se guarda a medias.
 func TestFlushFormingCandles_SkipsIncompleteCandle(t *testing.T) {

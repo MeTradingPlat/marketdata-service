@@ -301,9 +301,19 @@ func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 			base = last
 		}
 		corrected := mergeCandle(base, ev, symbol, domain.M1)
+		unchanged := candleValuesEqual(corrected, base)
 		p.lastClosed[symbol] = corrected
 		p.currentMu.Unlock()
-		p.dispatchClosed(symbol, corrected)
+		// unchanged descarta el replay del refresco periodico de suscripcion
+		// (RefreshLiveSubscriptions pide el historial de los ultimos 2 min por
+		// canal cada minuto para TODO simbolo en vivo, no solo los que de
+		// verdad tuvieron una correccion) -- sin este filtro, cada vuelta
+		// reencolaba en liveSaveBuffer las mismas velas ya guardadas de los
+		// ~13k simbolos en vivo, multiplicando el tamaño del lote de guardado
+		// sin ningun dato nuevo real.
+		if !unchanged {
+			p.dispatchClosed(symbol, corrected)
+		}
 		return
 	}
 

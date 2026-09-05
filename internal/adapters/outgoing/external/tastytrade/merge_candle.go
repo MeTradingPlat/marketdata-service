@@ -31,3 +31,16 @@ func mergeCandle(existing domain.Candle, ev rawCandleEvent, symbol string, tf do
 	}
 	return c
 }
+
+// candleValuesEqual compara solo los campos que mergeCandle puede cambiar --
+// usado para no re-despachar (y por lo tanto no re-guardar) una vela ya
+// cerrada cuando el refresco periodico de suscripcion (RefreshLiveSubscriptions)
+// reproduce el mismo historial reciente sin que nada haya cambiado de
+// verdad. time.Time se compara con Equal, no ==, porque dos timestamps del
+// mismo instante pueden venir de parseos distintos con Location/monotonic
+// distintos.
+func candleValuesEqual(a, b domain.Candle) bool {
+	return a.Timestamp.Equal(b.Timestamp) &&
+		a.Open == b.Open && a.High == b.High && a.Low == b.Low && a.Close == b.Close &&
+		a.Volume == b.Volume && a.VWAP == b.VWAP
+}
