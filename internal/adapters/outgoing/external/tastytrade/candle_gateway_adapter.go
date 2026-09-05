@@ -74,3 +74,7 @@ func (g *Gateway) LiveSubscribed(symbol string) bool {
 func (g *Gateway) ResetLiveConnections() {
 	g.pool.CloseAllConnections()
 }
+
+func (g *Gateway) RefreshLiveSubscriptions(ctx context.Context) {
+	g.pool.RefreshLiveSubscriptions(ctx)
+}

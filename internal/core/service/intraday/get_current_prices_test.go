@@ -85,8 +85,10 @@ func (noLiveGateway) SubscribeLiveCandles(ctx context.Context, symbol string, fr
 	return nil
 }
 func (noLiveGateway) ActiveSymbols(ctx context.Context) ([]domain.Symbol, error) { return nil, nil }
-func (noLiveGateway) CurrentCandle(symbol string) (domain.Candle, bool)          { return domain.Candle{}, false }
-func (noLiveGateway) LiveSubscribed(symbol string) bool                         { return false }
+func (noLiveGateway) CurrentCandle(symbol string) (domain.Candle, bool) {
+	return domain.Candle{}, false
+}
+func (noLiveGateway) LiveSubscribed(symbol string) bool { return false }
 func (noLiveGateway) DividendInfo(ctx context.Context, symbols []string) ([]domain.Fundamentals, error) {
 	return nil, nil
 }
@@ -96,7 +98,8 @@ func (noLiveGateway) MarketMetrics(ctx context.Context, symbols []string) ([]dom
 func (noLiveGateway) EarningsReports(ctx context.Context, symbol string) ([]domain.EarningsReportItem, error) {
 	return nil, nil
 }
-func (noLiveGateway) ResetLiveConnections() {}
+func (noLiveGateway) ResetLiveConnections()                        {}
+func (noLiveGateway) RefreshLiveSubscriptions(ctx context.Context) {}
 
 func TestGetCurrentPrices_DBFallbackIsOneBatchCallNotOnePerSymbol(t *testing.T) {
 	repo := &fakeSlowRepo{callDelay: time.Millisecond}

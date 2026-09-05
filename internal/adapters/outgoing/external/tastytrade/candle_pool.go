@@ -120,7 +120,7 @@ type CandlePool struct {
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
 	p := &CandlePool{
-		dispatch: make(map[string]dispatchEntry),
+		dispatch:   make(map[string]dispatchEntry),
 		liveSubs:   make(map[string]func(domain.Candle)),
 		liveTicks:  make(map[string]func(domain.Candle)),
 		current:    make(map[string]domain.Candle),
@@ -222,6 +222,50 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 		return fmt.Errorf("subscribing live M1 for %s: %w", symbol, err)
 	}
 	return nil
+}
+
+// refreshLiveSubscriptionsFrom es cuanto historial repetir en cada refresco
+// -- solo necesita cubrir el intervalo entre refrescos (1 min) con margen,
+// no reconstruir nada largo: si el stream seguia sano, dxLink ya mando esas
+// mismas velas hace un momento y el upsert por timestamp las pisa sin
+// duplicar nada.
+const refreshLiveSubscriptionsFrom = 2 * time.Minute
+
+// RefreshLiveSubscriptions reenvia el Add M1 de cada simbolo ya suscrito,
+// por su MISMO canal (nunca abre un canal o conexion nueva, ver
+// channelAllocator.allChannels) -- un remove+add de la misma clave deja el
+// streaming mudo para siempre (ver el comentario de subscribeLive), pero un
+// Add repetido sobre una suscripcion que sigue viva es inofensivo: dxLink
+// fusiona los "add" al mismo tema (ver el comentario de
+// unsubscribeHistoryBatch) y, con FromTime distinto de cero, repite el
+// historial desde ese punto antes de seguir en vivo por la misma
+// suscripcion. Para una suscripcion que dejo de empujar datos en silencio
+// (el caso que motivo esto, confirmado en vivo el 2026-09-04 con BSV/TW:
+// canal y conexion sanos, cero eventos nuevos igual), este re-Add es la
+// unica señal que le llega al servidor para reintentar sin que nosotros
+// sepamos de antemano cual simbolo puntual esta mudo -- se manda a todos
+// por igual, un mensaje por canal (no por simbolo), asi que el costo es
+// proporcional a la cantidad de canales (~130-150), no al universo (~13k).
+func (p *CandlePool) RefreshLiveSubscriptions(ctx context.Context) {
+	channels := p.allocator.allChannels()
+	from := time.Now().Add(-refreshLiveSubscriptionsFrom)
+	refreshed := 0
+	for _, ch := range channels {
+		symbols := ch.liveSymbols()
+		if len(symbols) == 0 {
+			continue
+		}
+		froms := make(map[string]time.Time, len(symbols))
+		for _, sym := range symbols {
+			froms[sym] = from
+		}
+		if err := ch.channel.subscribeHistoryBatch(symbols, domain.M1, froms); err != nil {
+			log.Warn().Err(err).Int("symbols", len(symbols)).Msg("live subscription refresh failed for a channel")
+			continue
+		}
+		refreshed += len(symbols)
+	}
+	log.Info().Int("channels", len(channels)).Int("symbols", refreshed).Msg("live subscriptions refreshed")
 }
 
 // handleLiveEvent detecta el cierre de una vela: mientras los eventos que

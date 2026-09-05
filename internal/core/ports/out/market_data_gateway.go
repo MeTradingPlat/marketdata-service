@@ -47,4 +47,11 @@ type MarketDataGateway interface {
 	// sesiones de la fase anterior justo cuando la siguiente abre varias
 	// de golpe (ver CandlePool.CloseAllConnections).
 	ResetLiveConnections()
+	// RefreshLiveSubscriptions reenvia el Add M1 de cada simbolo ya
+	// suscrito por su MISMO canal -- nunca abre canal o conexion nueva (ver
+	// CandlePool.RefreshLiveSubscriptions). Se llama cada minuto, solo
+	// fuera del fill/refill, como red de seguridad contra una suscripcion
+	// que dejo de empujar datos en silencio sin que el canal ni la conexion
+	// se enteraran.
+	RefreshLiveSubscriptions(ctx context.Context)
 }

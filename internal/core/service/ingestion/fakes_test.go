@@ -56,7 +56,8 @@ func (f *fakeGateway) EarningsReports(ctx context.Context, symbol string) ([]dom
 	return nil, nil
 }
 
-func (f *fakeGateway) ResetLiveConnections() {}
+func (f *fakeGateway) ResetLiveConnections()                        {}
+func (f *fakeGateway) RefreshLiveSubscriptions(ctx context.Context) {}
 
 type fakeRepo struct {
 	saved     [][]domain.Candle
