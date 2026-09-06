@@ -231,13 +231,14 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 }
 
 // refreshLiveSubscriptionsFrom es cuanto historial repetir en cada refresco
-// -- cubre el intervalo real entre dos refrescos DEL MISMO canal, que ya no
-// es 1 min sino 2: RefreshLiveSubscriptions alterna la mitad de canales que
-// toca en cada llamada (ver ese comentario), asi que cada canal puntual se
-// refresca una vez cada 2 min, no cada 1. Si el stream seguia sano, dxLink
-// ya mando esas mismas velas hace un momento y el upsert por timestamp las
-// pisa sin duplicar nada.
-const refreshLiveSubscriptionsFrom = 2 * time.Minute
+// -- el intervalo real entre dos refrescos DEL MISMO canal ya no es 1 min
+// sino 2: RefreshLiveSubscriptions alterna la mitad de canales que toca en
+// cada llamada (ver ese comentario). 3 min deja 1 min de margen sobre esos
+// 2 exactos -- sin margen, un ciclo del ticker atrasado un poco (GC, carga)
+// dejaria un hueco sin repetir. Si el stream seguia sano, dxLink ya mando
+// esas mismas velas hace un momento y el upsert por timestamp las pisa sin
+// duplicar nada.
+const refreshLiveSubscriptionsFrom = 3 * time.Minute
 
 // RefreshLiveSubscriptions reenvia el Add M1 de cada simbolo ya suscrito,
 // por su MISMO canal (nunca abre un canal o conexion nueva, ver
