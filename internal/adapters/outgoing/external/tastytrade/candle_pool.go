@@ -116,6 +116,12 @@ type CandlePool struct {
 	// acotada que no sigue creciendo es la condicion de carrera esperada
 	// del unsubscribe (ver unsubscribeDrainPeriod), no una fuga.
 	orphanEvents int64
+
+	// refreshCycle alterna que mitad de canales se refresca en cada llamada
+	// a RefreshLiveSubscriptions -- ver el comentario ahi mismo sobre por
+	// que partir el barrido en dos grupos que se turnan reduce a la mitad
+	// los mensajes de suscripcion por minuto.
+	refreshCycle atomic.Uint64
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
@@ -225,10 +231,12 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 }
 
 // refreshLiveSubscriptionsFrom es cuanto historial repetir en cada refresco
-// -- solo necesita cubrir el intervalo entre refrescos (1 min) con margen,
-// no reconstruir nada largo: si el stream seguia sano, dxLink ya mando esas
-// mismas velas hace un momento y el upsert por timestamp las pisa sin
-// duplicar nada.
+// -- cubre el intervalo real entre dos refrescos DEL MISMO canal, que ya no
+// es 1 min sino 2: RefreshLiveSubscriptions alterna la mitad de canales que
+// toca en cada llamada (ver ese comentario), asi que cada canal puntual se
+// refresca una vez cada 2 min, no cada 1. Si el stream seguia sano, dxLink
+// ya mando esas mismas velas hace un momento y el upsert por timestamp las
+// pisa sin duplicar nada.
 const refreshLiveSubscriptionsFrom = 2 * time.Minute
 
 // RefreshLiveSubscriptions reenvia el Add M1 de cada simbolo ya suscrito,
@@ -246,20 +254,38 @@ const refreshLiveSubscriptionsFrom = 2 * time.Minute
 // sepamos de antemano cual simbolo puntual esta mudo -- se manda a todos
 // por igual, un mensaje por canal (no por simbolo), asi que el costo es
 // proporcional a la cantidad de canales (~130-150), no al universo (~13k).
-// refreshChannelStagger espacia el envio entre canales -- TastyTrade publica
-// un tope de 10,000 "subscription changes"/minuto para dxLink, pero no
-// documenta si eso cuenta por mensaje o por simbolo dentro del Add, ni si
+//
+// refreshCycle alterna en dos mitades (canales pares/impares) cual grupo se
+// refresca en cada llamada del ticker de 1 min -- confirmado en vivo el
+// 2026-09-05: mandar los ~130-150 mensajes de TODOS los canales juntos, uno
+// tras otro con solo 50ms de por medio, disparo un reenganche masivo de
+// sesiones ("dispatch registration replaced" por miles en segundos) que
+// termino saturando el limite de sesiones de TastyTrade minutos despues.
+// Partiendo el barrido a la mitad, cada minuto manda la mitad de los
+// mensajes (~65-75) y cada canal puntual se refresca cada 2 min en vez de
+// cada 1 -- refreshLiveSubscriptionsFrom ya cubre exactamente esa ventana,
+// asi que no queda ningun hueco sin repetir.
+//
+// refreshChannelStagger espacia el envio DENTRO de cada mitad -- TastyTrade
+// publica un tope de 10,000 "subscription changes"/minuto para dxLink, pero
+// no documenta si eso cuenta por mensaje o por simbolo dentro del Add, ni si
 // hay ademas un limite de rafaga por segundo aparte del limite por minuto.
-// Sin este espaciado, los ~130-150 mensajes salian todos en la misma
-// fraccion de segundo (un for secuencial sin pausas); con 50ms entre canales,
-// el barrido completo del universo tarda unos ~7s en el caso real (~150
-// canales) y ~16s en el techo teorico (320 canales, 40 conexiones x 8
-// canales), siempre con margen de sobra dentro del minuto entre una vuelta
-// del ticker y la siguiente.
+// Con 50ms entre canales, cada mitad (~65-75 canales) tarda unos ~3.5s en
+// el caso real y ~8s en el techo teorico (320 canales, 40 conexiones x 8
+// canales / 2), con margen de sobra dentro del minuto entre una vuelta del
+// ticker y la siguiente.
 const refreshChannelStagger = 50 * time.Millisecond
 
 func (p *CandlePool) RefreshLiveSubscriptions(ctx context.Context) {
-	channels := p.allocator.allChannels()
+	all := p.allocator.allChannels()
+	half := p.refreshCycle.Add(1) % 2
+	channels := make([]*pooledChannel, 0, (len(all)+1)/2)
+	for i, ch := range all {
+		if uint64(i)%2 == half {
+			channels = append(channels, ch)
+		}
+	}
+
 	from := time.Now().Add(-refreshLiveSubscriptionsFrom)
 	refreshed := 0
 	for i, ch := range channels {

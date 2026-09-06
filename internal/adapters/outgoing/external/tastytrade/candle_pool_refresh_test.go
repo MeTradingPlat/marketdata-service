@@ -3,6 +3,7 @@ package tastytrade
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -68,6 +69,10 @@ func TestRefreshLiveSubscriptions_ResendsAddWithoutOpeningNewChannelOrConnection
 	allocator := &channelAllocator{maxConnections: defaultMaxConnections, connections: []*pooledConnection{pc}}
 	pool := &CandlePool{allocator: allocator}
 
+	// Con un solo canal, refreshCycle alterna cual mitad le toca -- dos
+	// llamadas consecutivas garantizan que ese canal caiga en una de ellas
+	// (ver el comentario de refreshCycle en candle_pool.go).
+	pool.RefreshLiveSubscriptions(context.Background())
 	pool.RefreshLiveSubscriptions(context.Background())
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -115,12 +120,18 @@ func TestRefreshLiveSubscriptions_ResendsAddWithoutOpeningNewChannelOrConnection
 	}
 }
 
-// TestRefreshLiveSubscriptions_StaggersBetweenChannels prueba que el envio
-// no sale todo en la misma fraccion de segundo -- TastyTrade publica un tope
-// de 10,000 cambios de suscripcion por minuto para dxLink sin aclarar si
-// cuenta por mensaje o por simbolo, asi que espaciar el envio entre canales
-// es la unica salvaguarda posible sin confirmarlo contra la cuenta real.
-func TestRefreshLiveSubscriptions_StaggersBetweenChannels(t *testing.T) {
+// TestRefreshLiveSubscriptions_AlternatesHalvesAndStaggersWithinEach prueba
+// las dos salvaguardas juntas: (1) cada llamada solo toca la mitad de los
+// canales, alternando cual mitad entre llamadas -- confirmado en vivo el
+// 2026-09-05 que mandar TODOS los canales juntos cada minuto disparaba un
+// reenganche masivo de sesiones que terminaba saturando el limite de
+// TastyTrade -- y (2) el envio dentro de esa mitad sigue espaciado
+// (refreshChannelStagger), salvaguarda previa contra el tope de 10,000
+// cambios de suscripcion/minuto de dxLink.
+func TestRefreshLiveSubscriptions_AlternatesHalvesAndStaggersWithinEach(t *testing.T) {
+	var mu sync.Mutex
+	var received []feedSubscriptionMessage
+
 	upgrader := websocket.Upgrader{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -129,8 +140,15 @@ func TestRefreshLiveSubscriptions_StaggersBetweenChannels(t *testing.T) {
 		}
 		defer conn.Close()
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
 				return
+			}
+			var msg feedSubscriptionMessage
+			if err := json.Unmarshal(raw, &msg); err == nil && msg.Type == "FEED_SUBSCRIPTION" {
+				mu.Lock()
+				received = append(received, msg)
+				mu.Unlock()
 			}
 		}
 	}))
@@ -148,23 +166,60 @@ func TestRefreshLiveSubscriptions_StaggersBetweenChannels(t *testing.T) {
 	conn.channels = make(map[int]*dxLinkChannel)
 
 	pc := newPooledConnection(conn)
-	for id, symbol := range map[int]string{1: "AAPL", 2: "MSFT", 3: "NVDA"} {
+	for id := 1; id <= 4; id++ {
 		ch := newDxLinkChannel(id, conn)
 		conn.channels[id] = ch
 		pooled := newPooledChannel(ch)
-		pooled.occupy(candleKey(symbol, domain.M1))
+		pooled.occupy(candleKey(fmt.Sprintf("SYM%d", id), domain.M1))
 		pc.addChannel(pooled)
 	}
 
 	allocator := &channelAllocator{maxConnections: defaultMaxConnections, connections: []*pooledConnection{pc}}
 	pool := &CandlePool{allocator: allocator}
 
+	waitFor := func(n int) {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			mu.Lock()
+			got := len(received)
+			mu.Unlock()
+			if got >= n || time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
 	start := time.Now()
 	pool.RefreshLiveSubscriptions(context.Background())
 	elapsed := time.Since(start)
+	waitFor(2)
 
-	wantMin := 2 * refreshChannelStagger // 3 canales = 2 pausas entre ellos
-	if elapsed < wantMin {
-		t.Fatalf("expected refreshing 3 channels to take at least %v (staggered), took %v", wantMin, elapsed)
+	mu.Lock()
+	afterFirst := len(received)
+	mu.Unlock()
+	if afterFirst != 2 {
+		t.Fatalf("expected the first call to refresh exactly half (2) of 4 channels, got %d messages", afterFirst)
+	}
+	if wantMin := 1 * refreshChannelStagger; elapsed < wantMin {
+		t.Fatalf("expected refreshing 2 channels to take at least %v (staggered), took %v", wantMin, elapsed)
+	}
+
+	pool.RefreshLiveSubscriptions(context.Background())
+	waitFor(4)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 4 {
+		t.Fatalf("expected the second call to refresh the OTHER half, covering all 4 channels total, got %d messages", len(received))
+	}
+	seen := map[int]bool{}
+	for _, msg := range received {
+		seen[msg.Channel] = true
+	}
+	for id := 1; id <= 4; id++ {
+		if !seen[id] {
+			t.Fatalf("expected channel %d refreshed across the two alternating calls, got %+v", id, received)
+		}
 	}
 }
