@@ -48,6 +48,29 @@ func (t *SnapshotTracker) Seed(day time.Time, snapshots map[string]domain.Intrad
 	t.data = snapshots
 }
 
+// MergeReconcile corrige entradas puntuales contra la BD (fuente de verdad)
+// SIN el reset completo de Seed -- pensado para llamarse repetidas veces
+// durante el dia (ver StartSnapshotReseedLoop), a diferencia de Seed que
+// solo es seguro una vez (al arrancar o en la ventana de mantenimiento).
+// La consulta de lote que alimenta esto puede volver INCOMPLETA bajo carga
+// de Postgres (mismo caso ya documentado en seedSnapshotTracker) -- un
+// Seed() con ese resultado parcial borraria de un tiron el tracker entero
+// menos esos pocos simbolos. Aca en cambio solo se pisan los simbolos que
+// SI vinieron en snapshots; el resto conserva lo que ya tenia acumulado via
+// RecordClosedCandle en vez de perderlo. Un dia distinto SI dispara el
+// mismo reset de Seed (nadie deberia arrancar el dia con datos de ayer).
+func (t *SnapshotTracker) MergeReconcile(day time.Time, snapshots map[string]domain.IntradaySnapshot) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.day.Equal(day) {
+		t.day = day
+		t.data = make(map[string]domain.IntradaySnapshot)
+	}
+	for symbol, snap := range snapshots {
+		t.data[symbol] = snap
+	}
+}
+
 // SeedLastClose carga el ultimo cierre M1 conocido por simbolo (desde BD,
 // una sola vez) -- mismo motivo que Seed: sin esto, LastClose no tiene nada
 // que devolver hasta que cada simbolo reciba su primer tick en vivo tras el

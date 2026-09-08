@@ -116,6 +116,7 @@ func main() {
 		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, symbolsCache, &liveRolloutDone)
 		StartLiveReconcileLoop(ctx, ingest, gateway, symbols, candleRepo, &liveRolloutDone)
 		StartLiveRefreshLoop(ctx, gateway, backfilling)
+		StartSnapshotReconcileLoop(ctx, candleRepo, snapshotTracker, symbolsCache, backfilling)
 		StartLiveSaveFlushLoop(ctx, ingest)
 		StartSaveRetryLoop(ctx, ingest)
 		StartRecentCacheEvictLoop(ctx, recentCache)
