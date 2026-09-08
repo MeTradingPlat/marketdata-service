@@ -54,10 +54,13 @@ func refreshWithRetry(name string, fn func() error) {
 // de sesiones concurrentes. Cada simbolo retoma desde su propio watermark
 // (con replay de lo perdido en M1), sin hueco real de datos.
 //
-// catchup.RefreshFundamentals (REST a /market-data/by-type y
-// /market-metrics) corre acotado a un piloto de 10 simbolos por mercado
-// (ver topSymbolsPerMarket) despues del rollout M1 -- REST puro, no compite
-// por conexiones DxLink con las fases de velas.
+// Los fundamentales que son REST puro (trading status, market metrics,
+// earnings history, y en background el externo de SEC/FINRA) van ANTES de
+// D1/H1/M1, no despues -- no compiten por conexiones DxLink con las fases
+// de velas y no hay motivo para que esperen 20-30 min a que el barrido
+// termine. Solo beta (D1) y prevClose/prevPostMarketVolume (M1) quedan
+// despues de su fase respectiva, porque esos si dependen de velas propias
+// recien sembradas (ver el cuerpo de runUniverseCycle).
 func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
 	go func() {
 		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
@@ -117,6 +120,51 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// reemplaza esto con el dato completo y ya filtrado.
 	seedSnapshotTracker(ctx, candles, tracker, tracked)
 
+	windowStart := catchup.LastMaintenanceWindowStart(time.Now())
+
+	// Fundamentales que NO dependen de velas propias (REST puro a
+	// TastyTrade/SEC/FINRA) van ANTES del barrido de velas, no despues --
+	// pedido explicito del usuario: un redeploy no deberia dejar
+	// market-cap/beta-del-proveedor/earnings/dividendos desactualizados
+	// durante los 20-30 min que tarda D1+H1+M1, cuando nada de esto necesita
+	// esperar a esas fases. Solo quedan DESPUES del barrido los que si
+	// dependen de velas propias: RefreshBeta (D1) y RefreshPrevClose/
+	// RefreshPrevPostMarketVolume (M1), ver mas abajo.
+	if last := lastTradingStatusAtUnix.Load(); time.Since(time.Unix(last, 0)) > 10*time.Minute {
+		catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
+		lastTradingStatusAtUnix.Store(time.Now().Unix())
+	}
+	refreshFundamentalsOnce(ctx, fundamentals, "market metrics", windowStart, func() error {
+		catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
+		return nil
+	})
+	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
+	// que pisa next_earnings_date con el dato vigente de TastyTrade, asi que
+	// el lote de "vencidos o nunca buscados" que queda despues es chico (solo
+	// emisores cuyo earnings ya paso o que TastyTrade no cubre) -- el
+	// COALESCE del upsert nunca pisa una fecha vigente con una prediccion.
+	refreshFundamentalsOnce(ctx, fundamentals, "earnings history", windowStart, func() error {
+		return catchup.RefreshEarningsHistory(ctx, gateway, fundamentals)
+	})
+	// Deja listo en memoria lo que se acaba de escribir arriba antes de que
+	// arranque el barrido -- sin este reload el cache seguiria mostrando la
+	// foto vieja del reload de mas arriba durante todo D1+H1+M1.
+	fundamentalsCache.ReloadAll(ctx)
+	// En background: descarga+parseo del companyfacts.zip de SEC EDGAR
+	// (~1.5GB, hasta 20 min la primera vez del dia) y de los ZIPs
+	// trimestrales de insiders no deben demorar el arranque del barrido de
+	// velas ni bloquear la siguiente vuelta del ciclo.
+	go func() {
+		refreshFundamentalsOnce(ctx, fundamentals, "external fundamentals", windowStart, func() error {
+			return catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals)
+		})
+		// sharesOutstanding/floatShares/shortInterest recien quedan
+		// disponibles cuando esto termina (hasta 20 min despues de abierto
+		// el gate) -- un segundo reload los recoge sin esperar a la
+		// proxima ventana de mantenimiento.
+		fundamentalsCache.ReloadAll(ctx)
+	}()
+
 	if !firstRun {
 		gateway.ResetLiveConnections()
 	}
@@ -129,7 +177,6 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 
 	// FASE 1: D1 + beta (guard por-simbolo, se calcula con D1 propio).
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.D1, cfg.SweepWorkers)
-	windowStart := catchup.LastMaintenanceWindowStart(time.Now())
 	// RefreshBeta usa el guard por-simbolo beta_updated_at: solo calcula
 	// los simbolos cuyo beta no se calculo en esta ventana de
 	// mantenimiento (ver beta_refresh.go).
@@ -185,54 +232,11 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		return catchup.RefreshPrevPostMarketVolume(ctx, candles, fundamentals, windowStart)
 	})
 
-	// El trading status lo refresca el loop cada 15 min mientras el mercado
-	// esta activo -- si corrio hace menos de 10 min, el ciclo salta el suyo
-	// (ahorra ~100s de REST por ciclo, ver trading_status_loop.go).
-	if last := lastTradingStatusAtUnix.Load(); time.Since(time.Unix(last, 0)) > 10*time.Minute {
-		catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
-		lastTradingStatusAtUnix.Store(time.Now().Unix())
-	}
-	// Los pasos de abajo son de cadencia diaria (se recalculan tras el
-	// cierre del mercado): la marca fundamental_refresh_log hace que un
-	// reinicio del contenedor dentro de la MISMA ventana de mantenimiento no
-	// los repita -- el done_at se graba en postgres solo al terminar OK, asi
-	// un refresh fallido queda stale y se reintenta en el siguiente arranque.
-	refreshFundamentalsOnce(ctx, fundamentals, "market metrics", windowStart, func() error {
-		catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
-		return nil
-	})
-	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
-	// que pisa next_earnings_date con el dato vigente de TastyTrade, asi que
-	// el lote de "vencidos o nunca buscados" que queda despues es chico (solo
-	// emisores cuyo earnings ya paso o que TastyTrade no cubre) -- el
-	// COALESCE del upsert nunca pisa una fecha vigente con una prediccion.
-	refreshFundamentalsOnce(ctx, fundamentals, "earnings history", windowStart, func() error {
-		return catchup.RefreshEarningsHistory(ctx, gateway, fundamentals)
-	})
-
-	// Recien aca terminaron TODOS los pasos sincronos que escriben
-	// fundamentales (beta, market metrics, earnings, prevClose, trading
-	// status) -- refrescar el cache de una sola vez aca, en vez de parchear
-	// campo por campo en cada Upsert, deja listo en memoria lo nuevo de esta
-	// ventana (el reload de mas arriba, al principio del ciclo, ya evito que
-	// el cache estuviera vacio mientras tanto).
+	// market metrics/earnings/trading status/external ya corrieron ANTES del
+	// barrido (ver el comentario de mas arriba) -- solo falta recoger en el
+	// cache lo que beta/prevClose/prevPostMarketVolume acaban de escribir,
+	// que si dependen de las velas propias recien sembradas.
 	fundamentalsCache.ReloadAll(ctx)
-
-	// En background: descarga+parseo del companyfacts.zip de SEC EDGAR
-	// (~1.5GB, hasta 20 min la primera vez del dia) y de los ZIPs
-	// trimestrales de insiders no deben demorar el arranque de la ventana
-	// de mantenimiento ni bloquear la siguiente vuelta del ciclo -- mismo
-	// patron que CompletableFuture.runAsync en la version Java.
-	go func() {
-		refreshFundamentalsOnce(ctx, fundamentals, "external fundamentals", windowStart, func() error {
-			return catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals)
-		})
-		// sharesOutstanding/floatShares/shortInterest recien quedan
-		// disponibles cuando esto termina (hasta 20 min despues de abierto
-		// el gate) -- un segundo reload los recoge sin esperar a la
-		// proxima ventana de mantenimiento.
-		fundamentalsCache.ReloadAll(ctx)
-	}()
 }
 
 // refreshFundamentalsOnce corre el refresh solo si no se completo ya en la
