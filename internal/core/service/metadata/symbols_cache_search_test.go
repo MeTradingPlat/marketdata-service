@@ -78,6 +78,40 @@ func TestSymbolsCache_Search_RanksByTodayVolumeOverLastVolume(t *testing.T) {
 	}
 }
 
+// TestSymbolsCache_Search_TodayActivityAlwaysBeatsLastVolume reproduce el
+// bug en vivo del 2026-09-08: un simbolo con MUCHISIMO menos volumen hoy que
+// el last_volume (total de TODO el dia anterior) de otro que todavia no
+// opero hoy, sigue debiendo rankear primero -- last_volume puede ser
+// enorme (un dia de pump real, ej. GPRO/DVLT con cientos de millones), asi
+// que compararlo directo contra un volumen de hoy recien empezando a
+// acumularse favorecia injustamente al que no opero.
+func TestSymbolsCache_Search_TodayActivityAlwaysBeatsLastVolume(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := intraday.NewSnapshotTracker()
+	preMarket := time.Date(2026, 1, 15, 7, 0, 0, 0, loc)
+	// IBM: apenas 50 acciones reales hoy. AAPL: nada hoy todavia, pero un
+	// last_volume de ayer mil veces mas grande.
+	tracker.RecordClosedCandle(domain.Candle{Symbol: "IBM", Timestamp: preMarket, Volume: 50})
+
+	repo := &fakeSymbolRepo{symbols: []domain.Symbol{
+		{Symbol: "AAPL", Market: "XNAS", LastVolume: 99_000_000},
+		{Symbol: "IBM", Market: "XNYS", LastVolume: 100},
+	}}
+	c := NewSymbolsCache(repo, tracker)
+	c.ReloadAll(context.Background())
+
+	results, _, err := c.Search(context.Background(), "", nil, 0, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 || results[0].Symbol != "IBM" {
+		t.Fatalf("expected IBM (50 real shares TODAY) ranked ahead of AAPL (99M last_volume, 0 today), got %v", results)
+	}
+}
+
 func TestSymbolsCache_Search_PageBeyondResultsIsEmptyNotNil(t *testing.T) {
 	c := searchFixture(t)
 
