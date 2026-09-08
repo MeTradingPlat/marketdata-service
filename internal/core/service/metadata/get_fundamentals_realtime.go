@@ -1,4 +1,4 @@
-package fundamentals
+package metadata
 
 import (
 	"context"
@@ -6,24 +6,31 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
-	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 )
 
 type getFundamentalsRealtimeService struct {
-	fundamentals *FundamentalsCache
-	symbols      out.SymbolRepository
+	fundamentals *fundamentalscache.FundamentalsCache
+	symbols      *SymbolsCache
 	intraday     in.GetIntradaySnapshotService
 }
 
-func NewGetFundamentalsRealtimeService(fundamentals *FundamentalsCache, symbols out.SymbolRepository, intraday in.GetIntradaySnapshotService) in.GetFundamentalsRealtimeService {
+// Vive en metadata, no en fundamentals, para poder depender de *SymbolsCache
+// directo (mismo paquete) sin crear un ciclo de imports -- fundamentals ya
+// no puede importar metadata porque metadata.get_symbol_details.go importa
+// fundamentals para *FundamentalsCache.
+func NewGetFundamentalsRealtimeService(fundamentals *fundamentalscache.FundamentalsCache, symbols *SymbolsCache, intraday in.GetIntradaySnapshotService) in.GetFundamentalsRealtimeService {
 	return &getFundamentalsRealtimeService{fundamentals: fundamentals, symbols: symbols, intraday: intraday}
 }
 
 // GetFundamentalsRealtime junta tres fuentes por lote, cada una en un
 // numero fijo de queries (ver GetSnapshotsBatch para por que
-// IntradaySnapshot dejo de pedirse simbolo por simbolo). Un simbolo sin
-// fundamentals Y sin symbol tracked no aparece en el resultado -- no hay
-// nada real que devolverle a signal-processing-service para el.
+// IntradaySnapshot dejo de pedirse simbolo por simbolo) -- las tres salen
+// de memoria (fundamentals cache, symbols cache, snapshot tracker con
+// fallback a BD solo para lo que el tracker no tiene todavia), nunca de
+// Postgres directo por el universo entero. Un simbolo sin fundamentals Y
+// sin symbol tracked no aparece en el resultado -- no hay nada real que
+// devolverle a signal-processing-service para el.
 func (s *getFundamentalsRealtimeService) GetFundamentalsRealtime(ctx context.Context, symbols []string) map[string]dto.FundamentalRealtime {
 	fundamentalsBySymbol := s.fundamentals.GetBatch(symbols)
 	equitiesBySymbol, err := s.symbols.GetBatch(ctx, symbols)

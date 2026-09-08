@@ -44,3 +44,21 @@ func (c *SymbolsCache) GetBySymbol(_ context.Context, symbol string) (domain.Sym
 	}
 	return domain.Symbol{}, fmt.Errorf("symbol %s not tracked", symbol)
 }
+
+// GetBatch -- mismo contrato que SymbolRepository.GetBatch, servido desde
+// memoria. Sin esto, GetFundamentalsRealtime (el batch que signal-processing
+// pide cada ~60-90s para el universo entero) pegaba directo a Postgres por
+// esta parte SOLA (symbol/market/description/isEtf) pese a que fundamentales
+// e intradia de esa misma llamada ya salian del cache -- confirmado en vivo
+// el 2026-09-08.
+func (c *SymbolsCache) GetBatch(_ context.Context, symbols []string) (map[string]domain.Symbol, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make(map[string]domain.Symbol, len(symbols))
+	for _, s := range symbols {
+		if sym, ok := c.bySymbol[s]; ok {
+			result[s] = sym
+		}
+	}
+	return result, nil
+}
