@@ -41,11 +41,39 @@ func NewSnapshotTracker() *SnapshotTracker {
 // M1 guarda velas via CandleRepository.Save directo, sin pasar por
 // RecordClosedCandle, asi que sin este seed las sesiones de hoy quedarian
 // vacias hasta que llegue el primer tick en vivo de cada simbolo.
-func (t *SnapshotTracker) Seed(day time.Time, snapshots map[string]domain.IntradaySnapshot) {
+//
+// requested es el universo completo que se le pidio a la BD: todo simbolo
+// de esa lista que NO vino en snapshots (cero velas M1 hoy, no un error)
+// se rellena con un IntradaySnapshot vacio para que quede PRESENTE en el
+// mapa -- sin esto, GetSnapshotsBatch trata "sin filas hoy" identico a
+// "todavia no se reconcilio" y le pega a Postgres con el mismo query caro
+// de este mismo Seed() en CADA request de signal-processing, para siempre,
+// mientras el simbolo no opere. Confirmado en vivo el 2026-09-08: fue lo
+// que mantenia /fundamentals/realtime en 50-90s mucho despues de que el
+// sweep de arranque ya habia terminado.
+func (t *SnapshotTracker) Seed(day time.Time, requested []string, snapshots map[string]domain.IntradaySnapshot) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.day = day
+	if snapshots == nil {
+		snapshots = make(map[string]domain.IntradaySnapshot, len(requested))
+	}
 	t.data = snapshots
+	fillMissingWithEmpty(t.data, requested)
+}
+
+// fillMissingWithEmpty agrega un IntradaySnapshot vacio para cada simbolo de
+// `requested` que todavia no tiene entrada en `data` -- comparte esta logica
+// Seed (reemplaza el mapa entero) y MergeReconcile (solo pisa lo que vino en
+// esta vuelta) porque ambos necesitan la misma garantia de cobertura sin
+// pisar jamas una entrada que ya existe (real o un vacio de una vuelta
+// anterior).
+func fillMissingWithEmpty(data map[string]domain.IntradaySnapshot, requested []string) {
+	for _, symbol := range requested {
+		if _, ok := data[symbol]; !ok {
+			data[symbol] = domain.IntradaySnapshot{Symbol: symbol}
+		}
+	}
 }
 
 // MergeReconcile corrige entradas puntuales contra la BD (fuente de verdad)
@@ -59,7 +87,15 @@ func (t *SnapshotTracker) Seed(day time.Time, snapshots map[string]domain.Intrad
 // SI vinieron en snapshots; el resto conserva lo que ya tenia acumulado via
 // RecordClosedCandle en vez de perderlo. Un dia distinto SI dispara el
 // mismo reset de Seed (nadie deberia arrancar el dia con datos de ayer).
-func (t *SnapshotTracker) MergeReconcile(day time.Time, snapshots map[string]domain.IntradaySnapshot) {
+//
+// requested cubre el mismo caso que en Seed (ver su comentario): un simbolo
+// pedido que sigue sin ninguna entrada tras esta vuelta (nunca opero hoy,
+// ni en esta consulta ni en ninguna anterior) se rellena con un
+// IntradaySnapshot vacio. Solo se rellena si NO habia entrada previa -- un
+// simbolo que ya tiene datos (reales o un vacio de una vuelta anterior) se
+// deja intacto, que es exactamente lo que evita que una vuelta incompleta
+// por presion de Postgres borre volumen real ya acumulado.
+func (t *SnapshotTracker) MergeReconcile(day time.Time, requested []string, snapshots map[string]domain.IntradaySnapshot) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.day.Equal(day) {
@@ -69,6 +105,7 @@ func (t *SnapshotTracker) MergeReconcile(day time.Time, snapshots map[string]dom
 	for symbol, snap := range snapshots {
 		t.data[symbol] = snap
 	}
+	fillMissingWithEmpty(t.data, requested)
 }
 
 // SeedLastClose carga el ultimo cierre M1 conocido por simbolo (desde BD,

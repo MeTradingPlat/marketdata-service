@@ -85,6 +85,6 @@ func reconcileSnapshotTracker(ctx context.Context, candles out.CandleRepository,
 		log.Error().Err(err).Msg("snapshot reconcile: batch query failed")
 		return
 	}
-	tracker.MergeReconcile(day, snapshots)
+	tracker.MergeReconcile(day, symbols, snapshots)
 	log.Info().Int("symbols", len(snapshots)).Dur("elapsed", time.Since(start)).Msg("snapshot tracker reconciled")
 }

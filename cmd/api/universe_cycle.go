@@ -334,7 +334,7 @@ func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, trac
 		select {
 		case <-time.After(seedRetryDelay):
 		case <-ctx.Done():
-			tracker.Seed(day, snapshots)
+			tracker.Seed(day, symbols, snapshots)
 			return
 		}
 		if retried, retryErr := candles.GetIntradaySessionsBatch(ctx, missing); retryErr == nil {
@@ -347,7 +347,7 @@ func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, trac
 		}
 	}
 
-	tracker.Seed(day, snapshots)
+	tracker.Seed(day, symbols, snapshots)
 	log.Info().Int("symbols", len(snapshots)).Dur("elapsed", time.Since(start)).Msg("snapshot tracker seeded")
 
 	// SeedLastClose por separado: sin esto, el fallback de precio actual
