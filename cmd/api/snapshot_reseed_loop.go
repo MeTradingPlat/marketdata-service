@@ -33,6 +33,17 @@ const snapshotReconcileInterval = 20 * time.Minute
 // la misma BD con su propio barrido.
 func StartSnapshotReconcileLoop(ctx context.Context, candles out.CandleRepository, tracker *intraday.SnapshotTracker, symbolsCache *metadata.SymbolsCache, backfilling *atomic.Bool) {
 	go func() {
+		// Sin esta corrida inmediata, un despliegue en horario de mercado
+		// arranca ciego durante los primeros snapshotReconcileInterval
+		// minutos -- exactamente el hueco que este mismo mecanismo existe
+		// para cerrar (confirmado en vivo el 2026-09-08, justo tras
+		// desplegar este archivo). No corre si el arranque cayo en medio
+		// del barrido nocturno (backfilling=true): ese barrido ya va a
+		// sembrar el tracker el solo al terminar (ver seedSnapshotTracker).
+		if !backfilling.Load() {
+			reconcileSnapshotTracker(ctx, candles, tracker, symbolsCache)
+		}
+
 		ticker := time.NewTicker(snapshotReconcileInterval)
 		defer ticker.Stop()
 		for {
