@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
 )
 
 type CandleRepository struct {
@@ -566,10 +567,19 @@ func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols
 	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
 	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
 
-	for _, batch := range chunkSymbols(symbols, universeBatchChunkSize) {
+	// Diagnostico temporal (ver el bug en vivo del 2026-09-08: DVLT/TSLL/NVDA/
+	// GPRO con volumen real confirmado por SQL directo, pero ausentes del
+	// resultado de este batch) -- cuenta filas por lote para encontrar en
+	// cual lote se pierden, ya que el error (si lo hay) aborta la funcion
+	// entera y no dice cual de los ~9 lotes fue.
+	for i, batch := range chunkSymbols(symbols, universeBatchChunkSize) {
+		before := len(result)
 		if err := r.queryIntradaySessionsBatch(ctx, batch, dayStart, dayEnd, marketOpen, marketClose, result); err != nil {
+			log.Error().Err(err).Int("chunk", i).Int("chunkSize", len(batch)).Msg("intraday sessions batch chunk failed")
 			return nil, err
 		}
+		log.Info().Int("chunk", i).Int("requested", len(batch)).Int("rows", len(result)-before).
+			Msg("intraday sessions batch chunk finished")
 	}
 	return result, nil
 }
