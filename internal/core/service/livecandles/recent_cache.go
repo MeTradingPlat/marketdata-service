@@ -124,6 +124,16 @@ func (c *RecentCache) Range(symbol string, from, to time.Time) []domain.Candle {
 // convencion que la agregacion SQL de Postgres (time_bucket) y que
 // FormingPeriodStart -- no hace falta un cache nuevo por timeframe, M1 ya
 // tiene todo lo necesario para armar cualquier derivado al vuelo.
+//
+// El ULTIMO bucket solo se entrega si ya cerro de verdad (bucketEnd no
+// posterior a `to`) -- antes se agregaba siempre, aunque su periodo todavia
+// no hubiera terminado (ej. pedir M5 a mitad de esos 5 minutos devolvia un
+// bucket a medio formar). Eso obligaba a signal-processing a descartarlo el
+// mismo del lado cliente comparando contra el reloj -- confirmado en vivo
+// el 2026-09-08. `to` ya trae el margen de ~1s que el caller (freshen) le
+// da para dejar aterrizar el ultimo tick M1 (mismo margen que ya usa
+// _BAR_CLOSE_BUFFER_SECONDS del lado de signal-processing), asi que
+// reusarlo aca evita inventar un segundo mecanismo de espera.
 func (c *RecentCache) RangeAggregated(symbol string, from, to time.Time, bucket time.Duration, timeframe domain.Timeframe) []domain.Candle {
 	m1 := c.Range(symbol, from, to)
 	if len(m1) == 0 {
@@ -157,7 +167,7 @@ func (c *RecentCache) RangeAggregated(symbol string, from, to time.Time, bucket 
 		current.Close = bar.Close
 		current.Volume += bar.Volume
 	}
-	if open {
+	if open && !bucketEnd.After(to) {
 		result = append(result, current)
 	}
 	return result

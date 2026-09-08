@@ -98,8 +98,11 @@ func TestBackfill_OldCandlesDoNotResetTracker(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// Suma las 3 sesiones en vez de solo DayVolume -- a que sesion cae
+	// time.Now() (pre/regular/post) depende de la hora real a la que corra
+	// el test, no es parte de lo que este test verifica.
 	snap := tracker.SnapshotBatch([]string{"MSFT"})["MSFT"]
-	if snap.DayVolume != 42 {
+	if got := snap.PreMarketVolume + snap.DayVolume + snap.PostMarketVolume; got != 42 {
 		t.Fatalf("expected MSFT's today volume to survive AAPL's old backfill, got %+v", snap)
 	}
 	if got := tracker.SnapshotBatch([]string{"AAPL"})["AAPL"]; got.DayVolume+got.PreMarketVolume+got.PostMarketVolume != 0 {

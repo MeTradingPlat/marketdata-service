@@ -74,6 +74,47 @@ func TestRecentCache_TrimsToMaxBarsRegardlessOfElapsedTime(t *testing.T) {
 	}
 }
 
+// TestRecentCache_RangeAggregated_ExcludesStillFormingTrailingBucket --
+// pedir M5 a mitad de esos 5 minutos no debe devolver ese bucket a medio
+// formar (confirmado en vivo el 2026-09-08: obligaba a signal-processing a
+// descartarlo el mismo del lado cliente comparando contra el reloj).
+func TestRecentCache_RangeAggregated_ExcludesStillFormingTrailingBucket(t *testing.T) {
+	c := NewRecentCache(20, 15*time.Minute)
+	bucketStart := time.Date(2026, 9, 8, 18, 10, 0, 0, time.UTC)
+
+	c.Put(domain.Candle{Symbol: "EMAT", Timestamp: bucketStart, Volume: 100}, true)
+	c.Put(domain.Candle{Symbol: "EMAT", Timestamp: bucketStart.Add(1 * time.Minute), Volume: 200}, true)
+
+	// El bucket de 5 min (18:10-18:15) todavia no cerro a las 18:12.
+	to := bucketStart.Add(2 * time.Minute)
+	got := c.RangeAggregated("EMAT", bucketStart.Add(-time.Hour), to, 5*time.Minute, domain.M5)
+
+	if len(got) != 0 {
+		t.Fatalf("expected the still-forming bucket to be excluded, got %+v", got)
+	}
+}
+
+// TestRecentCache_RangeAggregated_IncludesBucketOnceItReallyClosed -- el
+// mismo bucket, una vez que `to` ya paso su cierre real, si debe entregarse.
+func TestRecentCache_RangeAggregated_IncludesBucketOnceItReallyClosed(t *testing.T) {
+	c := NewRecentCache(20, 15*time.Minute)
+	bucketStart := time.Date(2026, 9, 8, 18, 10, 0, 0, time.UTC)
+
+	c.Put(domain.Candle{Symbol: "EMAT", Timestamp: bucketStart, Volume: 100}, true)
+	c.Put(domain.Candle{Symbol: "EMAT", Timestamp: bucketStart.Add(4 * time.Minute), Volume: 200}, true)
+
+	// El bucket de 5 min (18:10-18:15) ya cerro para las 18:15:01.
+	to := bucketStart.Add(5*time.Minute + time.Second)
+	got := c.RangeAggregated("EMAT", bucketStart.Add(-time.Hour), to, 5*time.Minute, domain.M5)
+
+	if len(got) != 1 {
+		t.Fatalf("expected the closed bucket to be included, got %+v", got)
+	}
+	if got[0].Volume != 300 {
+		t.Errorf("expected the folded volume from both M1 bars, got %d", got[0].Volume)
+	}
+}
+
 func TestRecentCache_OldestCovered(t *testing.T) {
 	c := NewRecentCache(20, 15*time.Minute)
 	base := time.Date(2026, 8, 27, 18, 10, 0, 0, time.UTC)
