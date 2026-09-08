@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
@@ -56,6 +57,53 @@ func TestBackfill(t *testing.T) {
 				t.Fatalf("Save called %d times, want %d", len(repo.saved), tt.wantSaves)
 			}
 		})
+	}
+}
+
+// TestBackfill_M1FeedsSnapshotTracker -- sin RecordTodaysClosedCandles, el
+// catch-up de arranque (que guarda M1 sin pasar por el stream en vivo) le
+// deja el volumen de ayer al tracker hasta el proximo reconcile contra la
+// BD (hasta 20 min, confirmado en vivo el 2026-09-08 con SMH rankeando por
+// encima de NVDA/TSLL/GPRO por este mismo hueco).
+func TestBackfill_M1FeedsSnapshotTracker(t *testing.T) {
+	today := time.Now().Add(-2 * time.Minute)
+	gw := &fakeGateway{probeResult: []domain.Candle{{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: today, Close: 5, Volume: 1234}}}
+	repo := &fakeRepo{}
+	tracker := intraday.NewSnapshotTracker()
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), tracker, livecandles.NewDefaultRecentCache())
+
+	if err := svc.Backfill(context.Background(), "AAPL", domain.M1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	snap := tracker.SnapshotBatch([]string{"AAPL"})["AAPL"]
+	if snap.PreMarketVolume+snap.DayVolume+snap.PostMarketVolume != 1234 {
+		t.Fatalf("expected the backfilled M1 candle to reach the tracker, got %+v", snap)
+	}
+}
+
+// TestBackfill_OldCandlesDoNotResetTracker -- una vela vieja (backfill de un
+// simbolo que nunca se corrio, meses de historia) no debe pisar el dia del
+// tracker: ver el comentario de domain.TodaysM1Candles sobre por que
+// RecordClosedCandle resetearia el tracker ENTERO si se lo dejara pasar.
+func TestBackfill_OldCandlesDoNotResetTracker(t *testing.T) {
+	old := time.Now().AddDate(0, 0, -30)
+	gw := &fakeGateway{probeResult: []domain.Candle{{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: old, Close: 5, Volume: 999}}}
+	repo := &fakeRepo{}
+	tracker := intraday.NewSnapshotTracker()
+	tracker.RecordClosedCandle(domain.Candle{Symbol: "MSFT", Timeframe: domain.M1, Timestamp: time.Now(), Close: 1, Volume: 42})
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), tracker, livecandles.NewDefaultRecentCache())
+
+	if err := svc.Backfill(context.Background(), "AAPL", domain.M1); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	snap := tracker.SnapshotBatch([]string{"MSFT"})["MSFT"]
+	if snap.DayVolume != 42 {
+		t.Fatalf("expected MSFT's today volume to survive AAPL's old backfill, got %+v", snap)
+	}
+	if got := tracker.SnapshotBatch([]string{"AAPL"})["AAPL"]; got.DayVolume+got.PreMarketVolume+got.PostMarketVolume != 0 {
+		t.Fatalf("expected the old AAPL candle to be filtered out, got %+v", got)
 	}
 }
 

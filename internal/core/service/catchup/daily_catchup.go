@@ -326,7 +326,17 @@ func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in
 		for symbol := range bySymbol {
 			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
 		}
+		return
 	}
+	// Este es el camino PRINCIPAL del sweep M1 (el per-symbol de arriba solo
+	// corre si el Save() en lote falla) -- sin este llamado, todo el catch-up
+	// de arranque le seguia dejando al SnapshotTracker el volumen de ayer de
+	// cada simbolo hasta el proximo reconcile contra la BD. Confirmado en
+	// vivo el 2026-09-08: SMH (con su primera vela via stream en vivo)
+	// rankeaba por encima de NVDA/TSLL/GPRO (con miles de acciones reales de
+	// HOY ya en Postgres via este mismo sweep) simplemente porque el tracker
+	// todavia no los habia visto.
+	ingest.RecordTodaysClosedCandles(merged)
 }
 
 // backfillWithRetry reintenta un trabajo de backfill fallido -- confirmado en

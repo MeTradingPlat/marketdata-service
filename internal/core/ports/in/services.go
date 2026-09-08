@@ -22,6 +22,14 @@ type IngestCandlesService interface {
 	RetryPendingSaves(ctx context.Context) bool
 	IsLive(symbol string) bool
 	IsAttempted(symbol string) bool
+	// RecordTodaysClosedCandles alimenta el SnapshotTracker con velas M1 de
+	// HOY que se acaban de guardar por un camino que no paso por el stream
+	// en vivo (backfill/catchup, ver Backfill y catchup.saveBatchSweep) --
+	// sin esto esos simbolos se quedan mostrando volumen de ayer en el
+	// ranking de Activos hasta el proximo reconcile contra la BD (hasta 20
+	// min, ver StartSnapshotReconcileLoop). Filtra internamente a M1 + hoy,
+	// asi que es seguro pasarle cualquier lote tal cual viene del backfill.
+	RecordTodaysClosedCandles(candles []domain.Candle)
 }
 
 type GetCandlesService interface {

@@ -58,7 +58,8 @@ func (f *fakeSweepCandleRepo) GetSeriesAggregatedBatch(context.Context, []string
 }
 
 type fakeSweepIngest struct {
-	backfillCalls []string
+	backfillCalls  []string
+	recordedTodays []domain.Candle
 }
 
 func (f *fakeSweepIngest) Backfill(ctx context.Context, symbol string, tf domain.Timeframe) error {
@@ -70,6 +71,9 @@ func (f *fakeSweepIngest) IsLive(string) bool                       { return fal
 func (f *fakeSweepIngest) IsAttempted(string) bool                  { return false }
 func (f *fakeSweepIngest) FlushLiveSaves(context.Context) bool      { return true }
 func (f *fakeSweepIngest) RetryPendingSaves(context.Context) bool   { return true }
+func (f *fakeSweepIngest) RecordTodaysClosedCandles(candles []domain.Candle) {
+	f.recordedTodays = append(f.recordedTodays, candles...)
+}
 
 func TestSaveBatchSweep_MergesAllSymbolsIntoOneSaveCall(t *testing.T) {
 	repo := &fakeSweepCandleRepo{}
@@ -100,6 +104,20 @@ func TestSaveBatchSweep_FallsBackPerSymbolOnSaveError(t *testing.T) {
 
 	if len(ingest.backfillCalls) != 1 || ingest.backfillCalls[0] != "AAPL" {
 		t.Fatalf("expected fallback Backfill(AAPL), got %v", ingest.backfillCalls)
+	}
+}
+
+func TestSaveBatchSweep_M1FeedsSnapshotTracker(t *testing.T) {
+	repo := &fakeSweepCandleRepo{}
+	ingest := &fakeSweepIngest{}
+	result := map[string][]domain.Candle{
+		"AAPL": {{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: time.Now().Add(-2 * time.Minute), Volume: 1234}},
+	}
+
+	saveBatchSweep(context.Background(), repo, ingest, result, domain.M1)
+
+	if len(ingest.recordedTodays) != 1 || ingest.recordedTodays[0].Symbol != "AAPL" {
+		t.Fatalf("expected the saved M1 candle to be handed to RecordTodaysClosedCandles, got %+v", ingest.recordedTodays)
 	}
 }
 

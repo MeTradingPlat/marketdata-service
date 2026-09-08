@@ -56,7 +56,18 @@ func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, time
 	if err := s.repo.Save(ctx, closed, true); err != nil {
 		return fmt.Errorf("saving backfilled candles for %s %s: %w", symbol, timeframe, err)
 	}
+	s.RecordTodaysClosedCandles(closed)
 	return nil
+}
+
+// RecordTodaysClosedCandles ver el comentario del puerto (in.IngestCandlesService)
+// sobre por que existe. TodaysM1Candles hace el filtro que lo vuelve seguro
+// reusar RecordClosedCandle (que resetea el tracker entero ante una vela de
+// otro dia) para lotes de backfill que pueden traer meses de historia.
+func (s *ingestCandlesService) RecordTodaysClosedCandles(candles []domain.Candle) {
+	for _, c := range domain.TodaysM1Candles(candles, time.Now()) {
+		s.tracker.RecordClosedCandle(c)
+	}
 }
 
 // fetchForBackfill pide profundidad completa solo la primera vez (sin
