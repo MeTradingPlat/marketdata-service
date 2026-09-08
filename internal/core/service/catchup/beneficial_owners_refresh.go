@@ -6,6 +6,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/rs/zerolog/log"
 )
 
@@ -24,7 +25,7 @@ const beneficialOwnersPacing = 400 * time.Millisecond
 // un simbolo que ya tenga sharesOutstanding+insiderShares conocidos (ver
 // GetSymbolsDueForFloatRefresh), para no restar solo la mitad de las
 // tenencias bloqueadas.
-func RefreshBeneficialOwners(ctx context.Context, client out.BeneficialOwnersGateway, fundamentalsRepo out.FundamentalsRepository) {
+func RefreshBeneficialOwners(ctx context.Context, client out.BeneficialOwnersGateway, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache) {
 	candidates, err := fundamentalsRepo.GetSymbolsDueForFloatRefresh(ctx, beneficialOwnersBatchSize)
 	if err != nil {
 		log.Error().Err(err).Msg("beneficial owners refresh: failed to select candidates")
@@ -60,5 +61,6 @@ func RefreshBeneficialOwners(ctx context.Context, client out.BeneficialOwnersGat
 		log.Error().Err(err).Msg("upserting beneficial owners refresh failed")
 		return
 	}
+	fundamentalsCache.MergeExternalFundamentals(updates)
 	log.Info().Int("symbols", len(updates)).Msg("beneficial owners refresh finished")
 }

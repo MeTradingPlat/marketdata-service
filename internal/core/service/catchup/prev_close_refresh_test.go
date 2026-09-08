@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 )
 
 type fakePrevCloseCandles struct {
@@ -46,7 +47,8 @@ func TestRefreshPrevClose_UpsertsFoundAndMarksMissingAsAttemptedInOneBatch(t *te
 	fundamentals := newFakePrevCloseFundamentals([]string{"AAPL", "ILLIQUID"})
 	candles := &fakePrevCloseCandles{closes: map[string]float64{"AAPL": 190.5}}
 
-	if err := RefreshPrevClose(context.Background(), candles, fundamentals, time.Now()); err != nil {
+	cache := fundamentalscache.NewFundamentalsCache(nil, nil, nil)
+	if err := RefreshPrevClose(context.Background(), candles, fundamentals, cache, time.Now()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -65,7 +67,8 @@ func TestRefreshPrevClose_NoStaleSymbolsSkipsBatchRead(t *testing.T) {
 	fundamentals := newFakePrevCloseFundamentals(nil)
 	candles := &fakePrevCloseCandles{err: errors.New("GetPreviousSessionCloseBatch should not be called")}
 
-	if err := RefreshPrevClose(context.Background(), candles, fundamentals, time.Now()); err != nil {
+	cache := fundamentalscache.NewFundamentalsCache(nil, nil, nil)
+	if err := RefreshPrevClose(context.Background(), candles, fundamentals, cache, time.Now()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -74,7 +77,8 @@ func TestRefreshPrevClose_BatchReadErrorPropagates(t *testing.T) {
 	fundamentals := newFakePrevCloseFundamentals([]string{"AAPL"})
 	candles := &fakePrevCloseCandles{err: errors.New("db down")}
 
-	if err := RefreshPrevClose(context.Background(), candles, fundamentals, time.Now()); err == nil {
+	cache := fundamentalscache.NewFundamentalsCache(nil, nil, nil)
+	if err := RefreshPrevClose(context.Background(), candles, fundamentals, cache, time.Now()); err == nil {
 		t.Fatal("expected an error when the batch read fails")
 	}
 }

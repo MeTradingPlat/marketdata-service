@@ -131,11 +131,11 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// dependen de velas propias: RefreshBeta (D1) y RefreshPrevClose/
 	// RefreshPrevPostMarketVolume (M1), ver mas abajo.
 	if last := lastTradingStatusAtUnix.Load(); time.Since(time.Unix(last, 0)) > 10*time.Minute {
-		catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals)
+		catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals, fundamentalsCache)
 		lastTradingStatusAtUnix.Store(time.Now().Unix())
 	}
 	refreshFundamentalsOnce(ctx, fundamentals, "market metrics", windowStart, func() error {
-		catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals)
+		catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals, fundamentalsCache)
 		return nil
 	})
 	// RefreshEarningsHistory va DESPUES de RefreshMarketMetrics: este es el
@@ -144,25 +144,22 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// emisores cuyo earnings ya paso o que TastyTrade no cubre) -- el
 	// COALESCE del upsert nunca pisa una fecha vigente con una prediccion.
 	refreshFundamentalsOnce(ctx, fundamentals, "earnings history", windowStart, func() error {
-		return catchup.RefreshEarningsHistory(ctx, gateway, fundamentals)
+		return catchup.RefreshEarningsHistory(ctx, gateway, fundamentals, fundamentalsCache)
 	})
-	// Deja listo en memoria lo que se acaba de escribir arriba antes de que
-	// arranque el barrido -- sin este reload el cache seguiria mostrando la
-	// foto vieja del reload de mas arriba durante todo D1+H1+M1.
-	fundamentalsCache.ReloadAll(ctx)
+	// El cache ya quedo al dia con lo de arriba (MergeMarketMetrics/
+	// MergeEarningsHistory corren DENTRO de cada Refresh*, ver
+	// fundamentals_cache.go) -- no hace falta un ReloadAll aca.
+
 	// En background: descarga+parseo del companyfacts.zip de SEC EDGAR
 	// (~1.5GB, hasta 20 min la primera vez del dia) y de los ZIPs
 	// trimestrales de insiders no deben demorar el arranque del barrido de
-	// velas ni bloquear la siguiente vuelta del ciclo.
+	// velas ni bloquear la siguiente vuelta del ciclo. Mismo motivo que
+	// arriba: MergeExternalFundamentals ya deja el cache al dia, sin
+	// esperar a este goroutine para releer todo de Postgres.
 	go func() {
 		refreshFundamentalsOnce(ctx, fundamentals, "external fundamentals", windowStart, func() error {
-			return catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals)
+			return catchup.RefreshExternalFundamentals(ctx, edgar, insiders, finra, profile, symbols, fundamentals, fundamentalsCache)
 		})
-		// sharesOutstanding/floatShares/shortInterest recien quedan
-		// disponibles cuando esto termina (hasta 20 min despues de abierto
-		// el gate) -- un segundo reload los recoge sin esperar a la
-		// proxima ventana de mantenimiento.
-		fundamentalsCache.ReloadAll(ctx)
 	}()
 
 	if !firstRun {
@@ -181,7 +178,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// los simbolos cuyo beta no se calculo en esta ventana de
 	// mantenimiento (ver beta_refresh.go).
 	refreshWithRetry("beta", func() error {
-		return catchup.RefreshBeta(ctx, candles, fundamentals, windowStart)
+		return catchup.RefreshBeta(ctx, candles, fundamentals, fundamentalsCache, windowStart)
 	})
 
 	// Simbolos sin D1 nuevo hace demasiado (fusion de SPAC, deslistado, nota
@@ -226,17 +223,16 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// cualquier otro caido.
 	liveRolloutDone.Store(true)
 	refreshWithRetry("prev close", func() error {
-		return catchup.RefreshPrevClose(ctx, candles, fundamentals, windowStart)
+		return catchup.RefreshPrevClose(ctx, candles, fundamentals, fundamentalsCache, windowStart)
 	})
 	refreshWithRetry("prev post market volume", func() error {
-		return catchup.RefreshPrevPostMarketVolume(ctx, candles, fundamentals, windowStart)
+		return catchup.RefreshPrevPostMarketVolume(ctx, candles, fundamentals, fundamentalsCache, windowStart)
 	})
-
-	// market metrics/earnings/trading status/external ya corrieron ANTES del
-	// barrido (ver el comentario de mas arriba) -- solo falta recoger en el
-	// cache lo que beta/prevClose/prevPostMarketVolume acaban de escribir,
-	// que si dependen de las velas propias recien sembradas.
-	fundamentalsCache.ReloadAll(ctx)
+	// Todo lo que este ciclo escribio (market metrics/earnings/trading
+	// status/external ANTES del barrido; beta/prevClose/
+	// prevPostMarketVolume aca arriba) ya quedo reflejado en el cache al
+	// momento de escribirse -- ver el Merge* dentro de cada Refresh* en
+	// fundamentals_cache.go. Ya no hace falta un ReloadAll de cierre.
 }
 
 // refreshFundamentalsOnce corre el refresh solo si no se completo ya en la

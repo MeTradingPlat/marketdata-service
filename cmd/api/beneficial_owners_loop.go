@@ -6,6 +6,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 )
 
 const beneficialOwnersInterval = 5 * time.Minute
@@ -18,7 +19,7 @@ const beneficialOwnersInterval = 5 * time.Minute
 // mantenimiento. Un tick de 60 simbolos cada 5 min cubre el universo
 // completo cada ~18h, de dia o de noche por igual -- SEC EDGAR no tiene
 // nada que ver con el horario de mercado.
-func StartBeneficialOwnersLoop(ctx context.Context, client out.BeneficialOwnersGateway, fundamentals out.FundamentalsRepository) {
+func StartBeneficialOwnersLoop(ctx context.Context, client out.BeneficialOwnersGateway, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentals.FundamentalsCache) {
 	go func() {
 		ticker := time.NewTicker(beneficialOwnersInterval)
 		defer ticker.Stop()
@@ -27,7 +28,7 @@ func StartBeneficialOwnersLoop(ctx context.Context, client out.BeneficialOwnersG
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				catchup.RefreshBeneficialOwners(ctx, client, fundamentals)
+				catchup.RefreshBeneficialOwners(ctx, client, fundamentalsRepo, fundamentalsCache)
 			}
 		}
 	}()

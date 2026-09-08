@@ -133,6 +133,68 @@ func TestFundamentalsCache_GetBatch_EmptyBeforeFirstReload(t *testing.T) {
 	}
 }
 
+// TestFundamentalsCache_MergeMarketMetrics_DoesNotWipeOtherRefreshesFields
+// reproduce el motivo real de tener Merge* separados en vez de un solo
+// reemplazo del registro: dividendos y market metrics conviven en el mismo
+// Fundamentals pero los escribe cada uno en un momento distinto del ciclo
+// -- pisar el registro entero con lo que trae SOLO market metrics borraria
+// el dividendo que MergeDividends ya habia guardado antes. (Beta es
+// intencionalmente la excepcion: tanto market metrics como el refresh de
+// beta propio escriben esa MISMA columna sin COALESCE -- ver
+// upsertMarketMetricsSQL/upsertBetaSQL -- el que corre despues gana, por
+// eso RefreshBeta corre DESPUES de RefreshMarketMetrics en el ciclo real.)
+func TestFundamentalsCache_MergeMarketMetrics_DoesNotWipeOtherRefreshesFields(t *testing.T) {
+	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
+	cache.MergeDividends([]domain.Fundamentals{{Symbol: "AAPL", DividendAmount: 0.25}})
+
+	cache.MergeMarketMetrics([]domain.Fundamentals{{Symbol: "AAPL", MarketCap: 3_000_000_000}})
+
+	got := cache.GetBatch([]string{"AAPL"})["AAPL"]
+	if got.DividendAmount != 0.25 {
+		t.Errorf("expected dividend from the earlier MergeDividends to survive, got %v", got.DividendAmount)
+	}
+	if got.MarketCap != 3_000_000_000 {
+		t.Errorf("expected the new market cap to apply, got %v", got.MarketCap)
+	}
+}
+
+// TestFundamentalsCache_MergeExternalFundamentals_KeepsExistingWhenNil
+// reproduce el COALESCE de UpsertExternalFundamentals en memoria: un update
+// sin sharesOutstanding (nil, ej. DxLink no lo trajo esta vuelta) no debe
+// pisar el que SEC EDGAR ya habia completado antes.
+func TestFundamentalsCache_MergeExternalFundamentals_KeepsExistingWhenNil(t *testing.T) {
+	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
+	shares := int64(1000)
+	cache.MergeExternalFundamentals([]domain.Fundamentals{{Symbol: "AAPL", SharesOutstanding: &shares}})
+
+	floatShares := int64(800)
+	cache.MergeExternalFundamentals([]domain.Fundamentals{{Symbol: "AAPL", FloatShares: &floatShares}})
+
+	got := cache.GetBatch([]string{"AAPL"})["AAPL"]
+	if got.SharesOutstanding == nil || *got.SharesOutstanding != 1000 {
+		t.Errorf("expected sharesOutstanding to survive a later update that left it nil, got %+v", got.SharesOutstanding)
+	}
+	if got.FloatShares == nil || *got.FloatShares != 800 {
+		t.Errorf("expected floatShares to apply, got %+v", got.FloatShares)
+	}
+}
+
+// TestFundamentalsCache_MergeEarningsHistory_EmptyDateDoesNotOverwrite
+// reproduce el NULLIF+COALESCE de UpsertEarningsHistory: una prediccion
+// vacia (sin earnings futuro que predecir esta vuelta) no debe borrar la
+// fecha vigente que ya estaba.
+func TestFundamentalsCache_MergeEarningsHistory_EmptyDateDoesNotOverwrite(t *testing.T) {
+	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
+	cache.MergeEarningsHistory([]domain.Fundamentals{{Symbol: "AAPL", NextEarningsDate: "2026-10-30"}})
+
+	cache.MergeEarningsHistory([]domain.Fundamentals{{Symbol: "AAPL", NextEarningsDate: ""}})
+
+	got := cache.GetBatch([]string{"AAPL"})["AAPL"]
+	if got.NextEarningsDate != "2026-10-30" {
+		t.Errorf("expected the existing earnings date to survive an empty update, got %q", got.NextEarningsDate)
+	}
+}
+
 func TestFundamentalsCache_ReloadAll_PublishesToSubscribers(t *testing.T) {
 	symbols := &fakeSymbolRepo{tracked: []domain.Symbol{{Symbol: "AAPL"}}}
 	repo := &fakeFundamentalsRepo{batch: map[string]domain.Fundamentals{"AAPL": {Symbol: "AAPL", MarketCap: 100}}}

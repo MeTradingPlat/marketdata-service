@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 )
 
 type fakePrevPostMarketVolumeCandles struct {
@@ -46,7 +47,8 @@ func TestRefreshPrevPostMarketVolume_UpsertsFoundAndMarksMissingAsAttemptedInOne
 	fundamentals := newFakePrevPostMarketVolumeFundamentals([]string{"AAPL", "NEWLISTING"})
 	candles := &fakePrevPostMarketVolumeCandles{volumes: map[string]int64{"AAPL": 6600000}}
 
-	if err := RefreshPrevPostMarketVolume(context.Background(), candles, fundamentals, time.Now()); err != nil {
+	cache := fundamentalscache.NewFundamentalsCache(nil, nil, nil)
+	if err := RefreshPrevPostMarketVolume(context.Background(), candles, fundamentals, cache, time.Now()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -65,7 +67,8 @@ func TestRefreshPrevPostMarketVolume_NoStaleSymbolsSkipsBatchRead(t *testing.T) 
 	fundamentals := newFakePrevPostMarketVolumeFundamentals(nil)
 	candles := &fakePrevPostMarketVolumeCandles{err: errors.New("GetPreviousPostMarketVolumeBatch should not be called")}
 
-	if err := RefreshPrevPostMarketVolume(context.Background(), candles, fundamentals, time.Now()); err != nil {
+	cache := fundamentalscache.NewFundamentalsCache(nil, nil, nil)
+	if err := RefreshPrevPostMarketVolume(context.Background(), candles, fundamentals, cache, time.Now()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -74,7 +77,8 @@ func TestRefreshPrevPostMarketVolume_BatchReadErrorPropagates(t *testing.T) {
 	fundamentals := newFakePrevPostMarketVolumeFundamentals([]string{"AAPL"})
 	candles := &fakePrevPostMarketVolumeCandles{err: errors.New("db down")}
 
-	if err := RefreshPrevPostMarketVolume(context.Background(), candles, fundamentals, time.Now()); err == nil {
+	cache := fundamentalscache.NewFundamentalsCache(nil, nil, nil)
+	if err := RefreshPrevPostMarketVolume(context.Background(), candles, fundamentals, cache, time.Now()); err == nil {
 		t.Fatal("expected an error when the batch read fails")
 	}
 }

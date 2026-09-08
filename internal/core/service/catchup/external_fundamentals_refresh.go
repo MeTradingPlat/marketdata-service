@@ -7,6 +7,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/rs/zerolog/log"
 )
 
@@ -20,7 +21,7 @@ import (
 // holders institucionales 5%+) lo completa RefreshBeneficialOwners por
 // separado en un loop continuo, ya que ese si es por-simbolo y no cabe en
 // una sola pasada nocturna para 13k+ simbolos.
-func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) error {
+func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache) error {
 	tracked, err := symbolsRepo.Tracked(ctx)
 	if err != nil {
 		return fmt.Errorf("listing tracked symbols: %w", err)
@@ -51,9 +52,10 @@ func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandin
 	if err := fundamentalsRepo.UpsertExternalFundamentals(ctx, updates); err != nil {
 		return fmt.Errorf("upserting external fundamentals batch: %w", err)
 	}
+	fundamentalsCache.MergeExternalFundamentals(updates)
 	log.Info().Int("symbols", len(updates)).Dur("elapsed", time.Since(start)).Msg("external fundamentals refresh finished")
 
-	if err := fillEarningsFromSecFilings(ctx, fundamentalsRepo, filingDates); err != nil {
+	if err := fillEarningsFromSecFilings(ctx, fundamentalsRepo, fundamentalsCache, filingDates); err != nil {
 		log.Error().Err(err).Msg("sec edgar earnings fallback failed")
 	}
 	return nil
@@ -68,7 +70,7 @@ func RefreshExternalFundamentals(ctx context.Context, edgar out.SharesOutstandin
 // debil (TastyTrade tiene prioridad). No fabrica una prediccion de proxima
 // fecha desde esto -- ver el comentario de RefreshEarningsHistory sobre por
 // que preferimos no predecir antes que predecir mal.
-func fillEarningsFromSecFilings(ctx context.Context, fundamentalsRepo out.FundamentalsRepository, filingDates map[string]string) error {
+func fillEarningsFromSecFilings(ctx context.Context, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache, filingDates map[string]string) error {
 	stale, err := fundamentalsRepo.GetSymbolsWithStaleEarnings(ctx)
 	if err != nil {
 		return fmt.Errorf("selecting still-stale symbols: %w", err)
@@ -89,6 +91,7 @@ func fillEarningsFromSecFilings(ctx context.Context, fundamentalsRepo out.Fundam
 	if err := fundamentalsRepo.UpsertEarningsHistory(ctx, updates); err != nil {
 		return fmt.Errorf("upserting sec edgar earnings fallback: %w", err)
 	}
+	fundamentalsCache.MergeEarningsHistory(updates)
 	log.Info().Int("symbols", len(updates)).Msg("sec edgar earnings fallback finished")
 	return nil
 }

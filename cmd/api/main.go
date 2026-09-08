@@ -121,7 +121,7 @@ func main() {
 		StartSaveRetryLoop(ctx, ingest)
 		StartRecentCacheEvictLoop(ctx, recentCache)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)
-		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo)
+		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo, fundamentalsCache)
 		StartSessionResetLoop(ctx, cfg, oauth, gateway)
 
 		r.Init()

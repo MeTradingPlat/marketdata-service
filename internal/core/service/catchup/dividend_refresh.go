@@ -6,6 +6,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/rs/zerolog/log"
 )
 
@@ -15,8 +16,10 @@ import (
 // una noche para otra (un halt es un evento acotado en el tiempo, si se
 // entera reciendo la manana siguiente ya no sirve de nada). Se llama tanto
 // desde el barrido nocturno como desde un loop propio mas frecuente (ver
-// cmd/api/trading_status_loop.go).
-func RefreshTradingStatus(ctx context.Context, gateway out.MarketDataGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) {
+// cmd/api/trading_status_loop.go). fundamentalsCache se actualiza al toque
+// (MergeDividends) apenas Postgres confirma -- no hace falta esperar al
+// proximo ReloadAll para que un halt recien detectado se vea reflejado.
+func RefreshTradingStatus(ctx context.Context, gateway out.MarketDataGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache) {
 	tracked, err := symbolsRepo.Tracked(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("trading status refresh: failed to list tracked symbols")
@@ -34,6 +37,7 @@ func RefreshTradingStatus(ctx context.Context, gateway out.MarketDataGateway, sy
 		log.Error().Err(err).Msg("upserting dividend/halt refresh failed")
 		return
 	}
+	fundamentalsCache.MergeDividends(dividends)
 	log.Info().Int("symbols", len(symbols)).Dur("elapsed", time.Since(start)).Msg("trading status refresh finished")
 }
 
@@ -43,7 +47,7 @@ func RefreshTradingStatus(ctx context.Context, gateway out.MarketDataGateway, sy
 // (ver updated-at en las respuestas reales), un refresco nocturno ya
 // alcanza y sobra. Corre despues de D1/H1 en el barrido nocturno porque es
 // puro REST/BD, no compite por conexiones DxLink con las fases de velas.
-func RefreshMarketMetrics(ctx context.Context, gateway out.MarketDataGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository) {
+func RefreshMarketMetrics(ctx context.Context, gateway out.MarketDataGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache) {
 	tracked, err := symbolsRepo.Tracked(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("market metrics refresh: failed to list tracked symbols")
@@ -61,6 +65,7 @@ func RefreshMarketMetrics(ctx context.Context, gateway out.MarketDataGateway, sy
 		log.Error().Err(err).Msg("upserting market metrics refresh failed")
 		return
 	}
+	fundamentalsCache.MergeMarketMetrics(metrics)
 	log.Info().Int("symbols", len(symbols)).Dur("elapsed", time.Since(start)).Msg("market metrics refresh finished")
 }
 

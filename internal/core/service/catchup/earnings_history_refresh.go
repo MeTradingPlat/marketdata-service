@@ -9,6 +9,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,7 +45,7 @@ func isQuarterEndPlaceholder(date string) bool {
 // quien pisa next_earnings_date con el dato fresco de TastyTrade cuando
 // existe) -- el COALESCE del upsert nunca pisa una fecha vigente con una
 // prediccion, y los ya al dia ni siquiera entran en el lote de este job.
-func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, fundamentalsRepo out.FundamentalsRepository) error {
+func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache) error {
 	stale, err := fundamentalsRepo.GetSymbolsWithStaleEarnings(ctx)
 	if err != nil {
 		return fmt.Errorf("selecting stale symbols: %w", err)
@@ -114,6 +115,7 @@ func RefreshEarningsHistory(ctx context.Context, gateway out.MarketDataGateway, 
 	if err := fundamentalsRepo.UpsertEarningsHistory(ctx, updates); err != nil {
 		return fmt.Errorf("upserting earnings history batch: %w", err)
 	}
+	fundamentalsCache.MergeEarningsHistory(updates)
 	log.Info().Int("symbols", len(updates)).Dur("elapsed", time.Since(start)).Msg("earnings history refresh finished")
 	return nil
 }

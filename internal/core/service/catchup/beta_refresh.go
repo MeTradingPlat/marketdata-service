@@ -7,6 +7,7 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/rs/zerolog/log"
 )
 
@@ -43,7 +44,7 @@ const betaMarketProxy = "SPY"
 // este no traiga beta (0): ahi entra el fallback de 12 meses (beta 1Y).
 // Corre en el backfill despues del barrido D1 y antes de H1 (ver
 // universe_cycle.go), que es cuando el D1 propio esta fresco.
-func RefreshBeta(ctx context.Context, candles out.CandleRepository, fundamentalsRepo out.FundamentalsRepository, windowStart time.Time) error {
+func RefreshBeta(ctx context.Context, candles out.CandleRepository, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache, windowStart time.Time) error {
 	stale, err := fundamentalsRepo.GetSymbolsWithStaleBeta(ctx, windowStart)
 	if err != nil {
 		return fmt.Errorf("listing symbols with stale beta: %w", err)
@@ -117,6 +118,7 @@ func RefreshBeta(ctx context.Context, candles out.CandleRepository, fundamentals
 	if err := fundamentalsRepo.UpsertBeta(ctx, updates); err != nil {
 		return fmt.Errorf("upserting beta batch: %w", err)
 	}
+	fundamentalsCache.MergeBeta(updates)
 	log.Info().Int("symbols", len(updates)).Dur("elapsed", time.Since(start)).Msg("beta refresh finished")
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/repository/timescale"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/storage"
 	"github.com/rs/zerolog"
@@ -34,7 +35,8 @@ func main() {
 	dbPool := storage.ConnInstanceTimescale(cfg)
 	symbolsRepo := timescale.NewSymbolRepository(dbPool)
 	fundamentalsRepo := timescale.NewFundamentalsRepository(dbPool)
+	fundamentalsCache := fundamentals.NewFundamentalsCache(fundamentalsRepo, symbolsRepo, nil)
 
-	catchup.RefreshTradingStatus(ctx, gateway, symbolsRepo, fundamentalsRepo)
-	catchup.RefreshMarketMetrics(ctx, gateway, symbolsRepo, fundamentalsRepo)
+	catchup.RefreshTradingStatus(ctx, gateway, symbolsRepo, fundamentalsRepo, fundamentalsCache)
+	catchup.RefreshMarketMetrics(ctx, gateway, symbolsRepo, fundamentalsRepo, fundamentalsCache)
 }

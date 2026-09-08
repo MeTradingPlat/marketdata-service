@@ -36,14 +36,12 @@ func StartTradingStatusLoop(ctx context.Context, gateway out.MarketDataGateway, 
 				if !isMarketActiveWindow(time.Now()) {
 					continue
 				}
-				catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentalsRepo)
+				// El cache se actualiza DENTRO de RefreshTradingStatus (ver
+				// MergeDividends) apenas Postgres confirma -- un HALT nuevo se
+				// ve en /marketdata/fundamentals/realtime al instante, no hay
+				// que esperar ni un ReloadAll aparte.
+				catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)
 				lastTradingStatusAtUnix.Store(time.Now().Unix())
-				// El halt es el unico fundamental que pierde sentido si se
-				// entera al dia siguiente -- refrescar el cache aca, no solo
-				// en el ciclo nocturno, para que un HALT nuevo se vea en
-				// /marketdata/fundamentals/realtime dentro de los mismos 15
-				// min en que ya lo ve la BD.
-				fundamentalsCache.ReloadAll(ctx)
 			}
 		}
 	}()

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/rs/zerolog/log"
 )
 
@@ -17,7 +18,7 @@ import (
 // postMarketVolume real para TIPO_VOLUMEN=AMBOS (ver domain.Fundamentals.
 // PrevPostMarketVolume). Lectura y escritura son cada una UN SOLO round
 // trip para todo el lote stale.
-func RefreshPrevPostMarketVolume(ctx context.Context, candles out.CandleRepository, fundamentals out.FundamentalsRepository, windowStart time.Time) error {
+func RefreshPrevPostMarketVolume(ctx context.Context, candles out.CandleRepository, fundamentals out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache, windowStart time.Time) error {
 	stale, err := fundamentals.GetSymbolsWithStalePrevPostMarketVolume(ctx, windowStart)
 	if err != nil {
 		return fmt.Errorf("listing symbols with stale prev post market volume: %w", err)
@@ -43,6 +44,7 @@ func RefreshPrevPostMarketVolume(ctx context.Context, candles out.CandleReposito
 	if err := fundamentals.UpsertPrevPostMarketVolumeBatch(ctx, volumes, attemptedOnly); err != nil {
 		return fmt.Errorf("upserting prev post market volume batch: %w", err)
 	}
+	fundamentalsCache.MergePrevPostMarketVolume(volumes, attemptedOnly)
 
 	log.Info().Int("found", len(volumes)).Int("attempted_only", len(attemptedOnly)).Dur("elapsed", time.Since(start)).Msg("prev post market volume refresh finished")
 	return nil

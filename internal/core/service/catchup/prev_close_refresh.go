@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/rs/zerolog/log"
 )
 
@@ -17,7 +18,7 @@ import (
 // (GetPreviousSessionCloseBatch) y la escritura (UpsertPrevCloseBatch) son
 // cada una UN SOLO round trip para todo el lote stale -- nunca un query o
 // upsert por simbolo.
-func RefreshPrevClose(ctx context.Context, candles out.CandleRepository, fundamentals out.FundamentalsRepository, windowStart time.Time) error {
+func RefreshPrevClose(ctx context.Context, candles out.CandleRepository, fundamentals out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache, windowStart time.Time) error {
 	stale, err := fundamentals.GetSymbolsWithStalePrevClose(ctx, windowStart)
 	if err != nil {
 		return fmt.Errorf("listing symbols with stale prev close: %w", err)
@@ -43,6 +44,7 @@ func RefreshPrevClose(ctx context.Context, candles out.CandleRepository, fundame
 	if err := fundamentals.UpsertPrevCloseBatch(ctx, closes, attemptedOnly); err != nil {
 		return fmt.Errorf("upserting prev close batch: %w", err)
 	}
+	fundamentalsCache.MergePrevClose(closes, attemptedOnly)
 
 	log.Info().Int("found", len(closes)).Int("attempted_only", len(attemptedOnly)).Dur("elapsed", time.Since(start)).Msg("prev close refresh finished")
 	return nil
