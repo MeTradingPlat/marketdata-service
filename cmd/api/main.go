@@ -129,6 +129,7 @@ func main() {
 		// ese costo cada 20 min. tracker.MergeReconcile queda intacto (con
 		// tests) por si hay que revertir esto.
 		StartLiveRefreshLoop(ctx, gateway, backfilling)
+		StartCandleForceCloseLoop(ctx, pool)
 		StartLiveSaveFlushLoop(ctx, ingest)
 		StartSaveRetryLoop(ctx, ingest)
 		StartRecentCacheEvictLoop(ctx, recentCache)

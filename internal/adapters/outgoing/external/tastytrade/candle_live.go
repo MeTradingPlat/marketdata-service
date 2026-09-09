@@ -124,30 +124,41 @@ func (p *CandlePool) RefreshLiveSubscriptions(ctx context.Context) {
 // los dos casos se reenvia la vela en formacion actualizada (dispatchTick)
 // -- los graficos la necesitan tick a tick, no solo al cierre.
 //
-// Un timestamp MAS VIEJO que la vela en formacion es un caso aparte: una
-// correccion tardia de una vela YA cerrada (el trade real ocurrio en ese
-// minuto pero el reporte del exchange/SIP llego despues de que ya cerramos
-// el minuto siguiente -- documentado, no un caso raro: "el primer trade del
-// minuto nuevo puede llegar varios segundos despues del cierre formal si el
-// simbolo opera poco o hay demoras tecnicas"). Antes, el simple "timestamp
-// distinto" de mas abajo confundia esto con una vela nueva -- cerraba de
-// golpe la vela en formacion REAL con datos a medio completar y reabria la
-// vieja como si fuera la actual. Confirmado en vivo el 2026-08-27/28: el
-// volumen real de un pico de un minuto tardaba varios ciclos del escaner en
-// reflejarse completo rio abajo. Ahora se despacha aparte via dispatchClosed,
-// SIN tocar current -- fusionada contra lastClosed[symbol] (la ultima vela
-// que SI cerro de verdad) para no perder los campos que dxLink no reenvio
-// (formato COMPACT: solo manda lo que cambio). Si lastClosed no tiene ese
-// timestamp exacto (la correccion apunta mas atras de una vela, caso raro),
-// se fusiona sobre una base vacia como antes -- mejor esfuerzo, no hay de
-// donde mas sacar el resto de los campos.
+// Un timestamp MAS VIEJO que la vela en formacion (o igual/anterior a
+// lastClosed cuando ya no hay "current" -- ver CloseElapsedForming) es un
+// caso aparte: una correccion tardia de una vela YA cerrada (el trade real
+// ocurrio en ese minuto pero el reporte del exchange/SIP llego despues de
+// que ya cerramos el minuto siguiente -- documentado, no un caso raro: "el
+// primer trade del minuto nuevo puede llegar varios segundos despues del
+// cierre formal si el simbolo opera poco o hay demoras tecnicas"). Antes,
+// el simple "timestamp distinto" de mas abajo confundia esto con una vela
+// nueva -- cerraba de golpe la vela en formacion REAL con datos a medio
+// completar y reabria la vieja como si fuera la actual. Confirmado en vivo
+// el 2026-08-27/28: el volumen real de un pico de un minuto tardaba varios
+// ciclos del escaner en reflejarse completo rio abajo. Ahora se despacha
+// aparte via dispatchClosed, SIN tocar current -- fusionada contra
+// lastClosed[symbol] (la ultima vela que SI cerro de verdad) para no perder
+// los campos que dxLink no reenvio (formato COMPACT: solo manda lo que
+// cambio). Si lastClosed no tiene ese timestamp exacto (la correccion apunta
+// mas atras de una vela, caso raro), se fusiona sobre una base vacia como
+// antes -- mejor esfuerzo, no hay de donde mas sacar el resto de los campos.
 func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 	p.lastLiveEventAtUnixNano.Store(time.Now().UnixNano())
 	p.currentMu.Lock()
 	prev, exists := p.current[symbol]
-	if exists && ev.Timestamp.Before(prev.Timestamp) {
+	last, hasLast := p.lastClosed[symbol]
+	// isLateCorrection cubre los dos caminos por los que un minuto puede
+	// haber quedado "ya cerrado" antes de que este evento llegara: el cierre
+	// organico de arriba (existe un "current" mas nuevo) y el cierre por
+	// tiempo de CloseElapsedForming (current ya se borro porque nadie mando
+	// un tick a tiempo, pero lastClosed s? tiene ese minuto). En los dos
+	// casos hay que fusionar contra lastClosed, no arrancar una vela "nueva"
+	// para un minuto que el sistema ya dio por cerrado y publico.
+	isLateCorrection := (exists && ev.Timestamp.Before(prev.Timestamp)) ||
+		(!exists && hasLast && !ev.Timestamp.After(last.Timestamp))
+	if isLateCorrection {
 		base := domain.Candle{}
-		if last, ok := p.lastClosed[symbol]; ok && last.Timestamp.Equal(ev.Timestamp) {
+		if hasLast && last.Timestamp.Equal(ev.Timestamp) {
 			base = last
 		}
 		corrected := mergeCandle(base, ev, symbol, domain.M1)
@@ -169,14 +180,14 @@ func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 
 	var forming domain.Candle
 	if exists && !prev.Timestamp.Equal(ev.Timestamp) {
-		// Un minuto sin ticks no deja vela -- por diseño: la vela solo se
-		// cierra cuando llega un tick del minuto siguiente, y un minuto
-		// muerto (sin operaciones) no genera ningun evento. Sintetizar velas
-		// planas para los minutos intermedios (open=close al ultimo precio,
-		// volumen 0) parecia dar continuidad al grafico, pero el usuario lo
-		// rechazo en vivo el 2026-08-19: barras identicas donde no cambio
-		// nada ensucian la serie -- el chart debe mostrar barras solo donde
-		// hubo movimiento real (como antes de a19301a).
+		// Cierre organico: llego un tick de un minuto mas nuevo. Sintetizar
+		// velas planas para los minutos intermedios sin tick (open=close al
+		// ultimo precio, volumen 0) parecia dar continuidad al grafico, pero
+		// el usuario lo rechazo en vivo el 2026-08-19: barras identicas donde
+		// no cambio nada ensucian la serie -- el chart debe mostrar barras
+		// solo donde hubo movimiento real (como antes de a19301a). Un minuto
+		// SIN ningun tick de por medio (silencio real) se cierra igual, pero
+		// por tiempo -- ver CloseElapsedForming.
 		closed := prev
 		p.current[symbol] = mergeCandle(domain.Candle{}, ev, symbol, domain.M1)
 		p.lastClosed[symbol] = closed
@@ -190,6 +201,46 @@ func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 	p.current[symbol] = forming
 	p.currentMu.Unlock()
 	p.dispatchTick(symbol, forming)
+}
+
+// closeElapsedGracePeriod: margen sobre el fin exacto del minuto antes de
+// forzar el cierre por tiempo -- deja que un tick que ya esta en camino (la
+// latencia normal de red/procesamiento) todavia alcance a cerrar la vela
+// por la via organica de arriba antes de que el sweep la fuerce con los
+// datos que tenia hasta ese momento. Mismo margen que ya usa
+// signal-processing-service del otro lado (_BAR_CLOSE_BUFFER_SECONDS) y que
+// RangeAggregated (RecentCache) para el mismo motivo.
+const closeElapsedGracePeriod = 1 * time.Second
+
+// CloseElapsedForming cierra por RELOJ cualquier vela M1 en formacion cuyo
+// minuto ya termino, sin esperar un tick del minuto siguiente -- sin esto,
+// un simbolo que se queda sin ticks justo en el cierre (silencio real de
+// mercado, no una suscripcion muerta) deja esa vela "en formacion" para
+// siempre hasta el proximo trade, que en un simbolo poco liquido puede
+// tardar minutos u horas (confirmado como el patron esperado: cierre por
+// tiempo de pared, no por llegada del proximo dato). Se llama
+// periodicamente desde un ticker de 1s (ver cmd/api) -- barata: solo itera
+// el mapa de velas en formacion, sin ningun I/O de red de por medio.
+func (p *CandlePool) CloseElapsedForming(now time.Time) {
+	type closedEntry struct {
+		symbol string
+		candle domain.Candle
+	}
+	var toClose []closedEntry
+
+	p.currentMu.Lock()
+	for symbol, c := range p.current {
+		if !now.Before(c.Timestamp.Add(time.Minute + closeElapsedGracePeriod)) {
+			toClose = append(toClose, closedEntry{symbol: symbol, candle: c})
+			delete(p.current, symbol)
+			p.lastClosed[symbol] = c
+		}
+	}
+	p.currentMu.Unlock()
+
+	for _, entry := range toClose {
+		p.dispatchClosed(entry.symbol, entry.candle)
+	}
 }
 
 // flushFormingCandles guarda la vela EN FORMACION de cada simbolo antes de
