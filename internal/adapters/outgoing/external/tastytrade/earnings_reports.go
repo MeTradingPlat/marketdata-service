@@ -2,9 +2,7 @@ package tastytrade
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -35,24 +33,9 @@ func (g *Gateway) EarningsReports(ctx context.Context, symbol string) ([]domain.
 	url := fmt.Sprintf("%s/market-metrics/historic-corporate-events/earnings-reports/%s?start-date=%s",
 		g.oauth.cfg.BaseURL, symbol, startDate)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	er, err := doAuthenticatedJSON[earningsReportsResponse](ctx, g, url)
 	if err != nil {
-		return nil, fmt.Errorf("building earnings reports request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+g.oauth.AccessToken())
-
-	resp, err := g.oauth.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("calling earnings reports endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("earnings reports endpoint returned status %d", resp.StatusCode)
-	}
-
-	var er earningsReportsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
-		return nil, fmt.Errorf("decoding earnings reports response: %w", err)
+		return nil, err
 	}
 
 	result := make([]domain.EarningsReportItem, 0, len(er.Data.Items))

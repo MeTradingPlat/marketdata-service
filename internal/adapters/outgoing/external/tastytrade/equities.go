@@ -2,9 +2,7 @@ package tastytrade
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -68,25 +66,9 @@ func (g *Gateway) ActiveSymbols(ctx context.Context) ([]domain.Symbol, error) {
 
 func (g *Gateway) fetchEquitiesPage(ctx context.Context, page, perPage int) ([]domain.Symbol, int, error) {
 	url := fmt.Sprintf("%s/instruments/equities/active?per-page=%d&page-offset=%d", g.oauth.cfg.BaseURL, perPage, page)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	er, err := doAuthenticatedJSON[equitiesResponse](ctx, g, url)
 	if err != nil {
-		return nil, 0, fmt.Errorf("building equities request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+g.oauth.AccessToken())
-
-	resp, err := g.oauth.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, fmt.Errorf("calling equities endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, 0, fmt.Errorf("equities endpoint returned status %d", resp.StatusCode)
-	}
-
-	var er equitiesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
-		return nil, 0, fmt.Errorf("decoding equities response: %w", err)
+		return nil, 0, err
 	}
 
 	symbols := make([]domain.Symbol, 0, len(er.Data.Items))

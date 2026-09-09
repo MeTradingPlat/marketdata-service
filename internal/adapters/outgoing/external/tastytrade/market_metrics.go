@@ -2,9 +2,6 @@ package tastytrade
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -61,25 +58,9 @@ func (g *Gateway) MarketMetrics(ctx context.Context, symbols []string) ([]domain
 
 func (g *Gateway) fetchMarketMetricsChunk(ctx context.Context, symbols []string) ([]domain.Fundamentals, error) {
 	q := url.Values{"symbols": {strings.Join(symbols, ",")}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.oauth.cfg.BaseURL+"/market-metrics?"+q.Encode(), nil)
+	mr, err := doAuthenticatedJSON[marketMetricsResponse](ctx, g, g.oauth.cfg.BaseURL+"/market-metrics?"+q.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("building market-metrics request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+g.oauth.AccessToken())
-
-	resp, err := g.oauth.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("calling market-metrics endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("market-metrics endpoint returned status %d", resp.StatusCode)
-	}
-
-	var mr marketMetricsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
-		return nil, fmt.Errorf("decoding market-metrics response: %w", err)
+		return nil, err
 	}
 
 	result := make([]domain.Fundamentals, 0, len(mr.Data.Items))

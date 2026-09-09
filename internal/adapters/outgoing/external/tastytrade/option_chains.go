@@ -2,9 +2,6 @@ package tastytrade
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -95,24 +92,9 @@ func (g *Gateway) OpenInterest(ctx context.Context, symbol string) (float64, boo
 }
 
 func (g *Gateway) frontMonthlyExpiration(ctx context.Context, symbol string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.oauth.cfg.BaseURL+"/option-chains/"+symbol, nil)
+	er, err := doAuthenticatedJSON[expirationsResponse](ctx, g, g.oauth.cfg.BaseURL+"/option-chains/"+symbol)
 	if err != nil {
-		return "", fmt.Errorf("building option-chains request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+g.oauth.AccessToken())
-
-	resp, err := g.oauth.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("calling option-chains: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("option-chains returned status %d", resp.StatusCode)
-	}
-
-	var er expirationsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
-		return "", fmt.Errorf("decoding option-chains: %w", err)
+		return "", err
 	}
 
 	now := time.Now()
@@ -129,24 +111,9 @@ func (g *Gateway) frontMonthlyExpiration(ctx context.Context, symbol string) (st
 }
 
 func (g *Gateway) sumOpenInterest(ctx context.Context, symbol, expiration string) (float64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.oauth.cfg.BaseURL+"/option-chains/"+symbol+"/"+expiration, nil)
+	cr, err := doAuthenticatedJSON[optionChainResponse](ctx, g, g.oauth.cfg.BaseURL+"/option-chains/"+symbol+"/"+expiration)
 	if err != nil {
-		return 0, fmt.Errorf("building option chain request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+g.oauth.AccessToken())
-
-	resp, err := g.oauth.httpClient.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("calling option chain: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("option chain returned status %d", resp.StatusCode)
-	}
-
-	var cr optionChainResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return 0, fmt.Errorf("decoding option chain: %w", err)
+		return 0, err
 	}
 
 	var total float64

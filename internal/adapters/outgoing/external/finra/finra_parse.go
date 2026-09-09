@@ -1,10 +1,10 @@
 package finra
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/pkg/numparse"
 )
 
 func parseFinraCsv(body []byte) map[string]domain.ShortInterestRecord {
@@ -28,9 +28,9 @@ func parseFinraCsv(body []byte) map[string]domain.ShortInterestRecord {
 			continue
 		}
 		rec := domain.ShortInterestRecord{
-			SharesShorted:  parseInt(cols[5]),
-			AvgDailyVolume: parseInt(cols[8]),
-			DaysToCover:    parseFloat(cols[9]),
+			SharesShorted:  numparse.Int(cols[5]),
+			AvgDailyVolume: numparse.Int(cols[8]),
+			DaysToCover:    numparse.Float(cols[9]),
 		}
 		if len(cols) > 13 {
 			rec.SettlementDate = strings.TrimSpace(cols[13])
@@ -38,20 +38,4 @@ func parseFinraCsv(body []byte) map[string]domain.ShortInterestRecord {
 		result[symbol] = rec
 	}
 	return result
-}
-
-func parseInt(v string) int64 {
-	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return n
-}
-
-func parseFloat(v string) float64 {
-	f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-	if err != nil {
-		return 0
-	}
-	return f
 }

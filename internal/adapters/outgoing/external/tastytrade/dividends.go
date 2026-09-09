@@ -2,14 +2,11 @@ package tastytrade
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/pkg/numparse"
 )
 
 const (
@@ -62,25 +59,9 @@ func (g *Gateway) fetchDividendChunk(ctx context.Context, symbols []string) ([]d
 	for _, s := range symbols {
 		q.Add("equity", s)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.oauth.cfg.BaseURL+"/market-data/by-type?"+q.Encode(), nil)
+	mr, err := doAuthenticatedJSON[marketDataResponse](ctx, g, g.oauth.cfg.BaseURL+"/market-data/by-type?"+q.Encode())
 	if err != nil {
-		return nil, fmt.Errorf("building market-data request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+g.oauth.AccessToken())
-
-	resp, err := g.oauth.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("calling market-data endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("market-data endpoint returned status %d", resp.StatusCode)
-	}
-
-	var mr marketDataResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
-		return nil, fmt.Errorf("decoding market-data response: %w", err)
+		return nil, err
 	}
 
 	result := make([]domain.Fundamentals, 0, len(mr.Data.Items))
@@ -118,9 +99,5 @@ func parseFloatOrZero(s *string) float64 {
 	if s == nil {
 		return 0
 	}
-	v, err := strconv.ParseFloat(*s, 64)
-	if err != nil {
-		return 0
-	}
-	return v
+	return numparse.Float(*s)
 }
