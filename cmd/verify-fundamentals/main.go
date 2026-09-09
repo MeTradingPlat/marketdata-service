@@ -9,6 +9,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/storage"
+	"github.com/MeTradingPlat/marketdata-service/internal/pkg/verifybootstrap"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -21,12 +22,7 @@ func main() {
 	cfg := configs.Load()
 	ctx := context.Background()
 
-	oauth := tastytrade.NewOAuth(tastytrade.OAuthConfig{
-		BaseURL:      cfg.TastyTradeBaseURL,
-		ClientID:     cfg.TastyTradeClientID,
-		ClientSecret: cfg.TastyTradeClientSecret,
-		RefreshToken: cfg.TastyTradeRefreshToken,
-	})
+	oauth := verifybootstrap.NewOAuth(cfg)
 	if _, err := oauth.RefreshAccessToken(ctx); err != nil {
 		log.Fatal().Err(err).Msg("oauth refresh failed")
 	}

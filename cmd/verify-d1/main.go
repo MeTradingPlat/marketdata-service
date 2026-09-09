@@ -8,16 +8,13 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
+	"github.com/MeTradingPlat/marketdata-service/internal/pkg/verifybootstrap"
 )
 
 func main() {
 	ctx := context.Background()
-	oauth := tastytrade.NewOAuth(tastytrade.OAuthConfig{
-		BaseURL:      "https://api.tastyworks.com",
-		ClientID:     os.Getenv("TT_CLIENT_ID"),
-		ClientSecret: os.Getenv("TT_CLIENT_SECRET"),
-		RefreshToken: os.Getenv("TT_REFRESH_TOKEN"),
-	})
+	oauth := verifybootstrap.NewOAuth(configs.Load())
 	qt := tastytrade.NewQuoteToken(oauth)
 	if err := qt.Refresh(ctx); err != nil {
 		fmt.Println("quote token:", err)

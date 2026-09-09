@@ -11,6 +11,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
+	"github.com/MeTradingPlat/marketdata-service/internal/pkg/verifybootstrap"
 )
 
 // verify abre su PROPIA conexion DxLink, independiente de la del servicio
@@ -26,12 +27,7 @@ func main() {
 	cfg := configs.Load()
 	ctx := context.Background()
 
-	oauth := tastytrade.NewOAuth(tastytrade.OAuthConfig{
-		BaseURL:      cfg.TastyTradeBaseURL,
-		ClientID:     cfg.TastyTradeClientID,
-		ClientSecret: cfg.TastyTradeClientSecret,
-		RefreshToken: cfg.TastyTradeRefreshToken,
-	})
+	oauth := verifybootstrap.NewOAuth(cfg)
 	if _, err := oauth.RefreshAccessToken(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "oauth refresh failed:", err)
 		os.Exit(1)
