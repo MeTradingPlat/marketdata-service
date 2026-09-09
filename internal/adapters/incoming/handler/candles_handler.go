@@ -9,6 +9,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type CandlesHandler struct {
@@ -35,6 +36,9 @@ func NewCandlesHandler(service in.GetCandlesService, current in.GetCurrentCandle
 // ningun tick real (no se fabrica una vela plana para cubrir el hueco).
 func (h *CandlesHandler) GetCurrentCandle(c echo.Context) error {
 	symbol := c.Param("symbol")
+	if !domain.ValidSymbolFormat(symbol) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid symbol")
+	}
 	timeframe := domain.Timeframe(c.QueryParam("timeframe"))
 	if timeframe == "" {
 		timeframe = domain.M1
@@ -54,6 +58,9 @@ func (h *CandlesHandler) GetCurrentCandle(c echo.Context) error {
 
 func (h *CandlesHandler) GetCandles(c echo.Context) error {
 	symbol := c.Param("symbol")
+	if !domain.ValidSymbolFormat(symbol) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid symbol")
+	}
 	timeframe := domain.Timeframe(c.QueryParam("timeframe"))
 	if !timeframe.Valid() {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid or missing timeframe")
@@ -79,7 +86,8 @@ func (h *CandlesHandler) GetCandles(c echo.Context) error {
 
 	candles, err := h.service.GetCandles(c.Request().Context(), symbol, timeframe, bars, before)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		log.Error().Err(err).Str("symbol", symbol).Str("timeframe", string(timeframe)).Msg("failed to get candles")
+		return echo.NewHTTPError(http.StatusInternalServerError, "no se pudieron obtener las candles")
 	}
 	return c.JSON(http.StatusOK, candles)
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 
+	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 	"github.com/gorilla/websocket"
 )
@@ -51,6 +52,10 @@ func (s *relayWSSession[T]) run(ctx context.Context) {
 }
 
 func (s *relayWSSession[T]) handleSubscribe(symbol string) {
+	if !domain.ValidSymbolFormat(symbol) {
+		return
+	}
+
 	s.mu.Lock()
 	_, exists := s.subs[symbol]
 	s.mu.Unlock()

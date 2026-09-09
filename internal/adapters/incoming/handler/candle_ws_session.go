@@ -80,6 +80,11 @@ func (s *wsSession) run(ctx context.Context) {
 // otro timeframe (los no soportados) responde error en vez de fallar en
 // silencio, mismo criterio que /marketdata/timeframes.
 func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe string) {
+	if !domain.ValidSymbolFormat(symbol) {
+		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "simbolo invalido"})
+		return
+	}
+
 	key := symbol + ":" + timeframe
 	s.mu.Lock()
 	_, exists := s.subs[key]
