@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -10,7 +9,6 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 	"github.com/gorilla/websocket"
-	"github.com/rs/zerolog/log"
 )
 
 const initialHistoryBars = 500
@@ -37,30 +35,28 @@ type candleSubscribeRequest struct {
 
 // wsSession es una conexion WS de /ws/candles -- multiplexa varias
 // suscripciones symbol:timeframe sobre el mismo socket, igual que hace el
-// cliente (ver candle-stream.service.ts). writeMu serializa las escrituras
-// porque gorilla/websocket no admite dos goroutines escribiendo al mismo
-// tiempo (aca compiten el loop de lectura y cada forwardLive en vivo).
+// cliente (ver candle-stream.service.ts). El resto del keepalive/cierre
+// (writeMu, ping, closeAll, sendJSON) vive en baseWSSession (mismo paquete),
+// compartido con relayWSSession[T].
 type wsSession struct {
-	conn        *websocket.Conn
-	writeMu     sync.Mutex
+	baseWSSession
 	getCandles  in.GetCandlesService
 	current     in.GetCurrentCandleService
 	broadcaster *livecandles.Broadcaster[domain.Candle]
-
-	mu   sync.Mutex
-	subs map[string]func()
 }
 
 func newWSSession(conn *websocket.Conn, getCandles in.GetCandlesService, current in.GetCurrentCandleService, broadcaster *livecandles.Broadcaster[domain.Candle]) *wsSession {
-	return &wsSession{conn: conn, getCandles: getCandles, current: current, broadcaster: broadcaster, subs: make(map[string]func())}
+	return &wsSession{
+		baseWSSession: newBaseWSSession(conn, "failed to write to candle ws client"),
+		getCandles:    getCandles,
+		current:       current,
+		broadcaster:   broadcaster,
+	}
 }
 
 func (s *wsSession) run(ctx context.Context) {
 	defer s.closeAll()
-	_ = s.conn.SetReadDeadline(time.Now().Add(pongWait))
-	s.conn.SetPongHandler(func(string) error {
-		return s.conn.SetReadDeadline(time.Now().Add(pongWait))
-	})
+	s.armKeepalive()
 	go s.pingLoop()
 	for {
 		var req candleSubscribeRequest
@@ -72,23 +68,6 @@ func (s *wsSession) run(ctx context.Context) {
 			s.handleSubscribe(ctx, req.Symbol, req.Timeframe)
 		case "unsubscribe":
 			s.handleUnsubscribe(req.Symbol, req.Timeframe)
-		}
-	}
-}
-
-// pingLoop mantiene el tunel de Cloudflare viendo trafico real (ver
-// pingInterval) -- WriteControl es seguro de llamar en paralelo con
-// WriteJSON/WriteMessage (godoc de gorilla/websocket: "Close and
-// WriteControl methods can be called concurrently with all other
-// methods"), no necesita competir por writeMu. Un error de escritura (el
-// socket ya se cerro) simplemente termina el loop -- closeAll() ya se
-// encarga de liberar todo lo demas cuando run() retorna.
-func (s *wsSession) pingLoop() {
-	ticker := time.NewTicker(pingInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		if err := s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
-			return
 		}
 	}
 }
@@ -240,25 +219,6 @@ func withEndTime(bar dto.CandleBar, tf domain.Timeframe) dto.CandleBar {
 func (s *wsSession) sendBar(symbol, timeframe string, bar dto.CandleBar, closed bool) {
 	bar.Closed = closed
 	s.sendJSON(dto.CandleBarMessage{Type: "bar", Symbol: symbol, Timeframe: timeframe, Bar: bar})
-}
-
-func (s *wsSession) closeAll() {
-	s.mu.Lock()
-	subs := s.subs
-	s.subs = nil
-	s.mu.Unlock()
-	for _, cancel := range subs {
-		cancel()
-	}
-	s.conn.Close()
-}
-
-func (s *wsSession) sendJSON(v any) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := s.conn.WriteJSON(v); err != nil {
-		log.Error().Err(err).Msg("failed to write to candle ws client")
-	}
 }
 
 func toBars(candles []domain.Candle) []dto.CandleBar {

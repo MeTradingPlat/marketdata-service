@@ -2,12 +2,9 @@ package handler
 
 import (
 	"context"
-	"sync"
-	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 	"github.com/gorilla/websocket"
-	"github.com/rs/zerolog/log"
 )
 
 type relaySubscribeRequest struct {
@@ -19,28 +16,25 @@ type relaySubscribeRequest struct {
 // /ws/fundamentals -- a diferencia de /ws/candles (wsSession en
 // candle_ws_session.go), no arma historial ni agrega timeframes: solo
 // reenvia tal cual cada Publish del Broadcaster[T] del simbolo suscripto.
-// pingInterval/pongWait son las constantes de candle_ws_session.go (mismo
-// paquete, mismo motivo: mantener vivo el tunel de Cloudflare).
+// El keepalive/cierre (writeMu, ping, closeAll, sendJSON) vive en
+// baseWSSession (mismo paquete), compartido con wsSession.
 type relayWSSession[T any] struct {
-	conn        *websocket.Conn
-	writeMu     sync.Mutex
+	baseWSSession
 	broadcaster *livecandles.Broadcaster[T]
 	toMessage   func(symbol string, item T) any
-
-	mu   sync.Mutex
-	subs map[string]func()
 }
 
 func newRelayWSSession[T any](conn *websocket.Conn, broadcaster *livecandles.Broadcaster[T], toMessage func(string, T) any) *relayWSSession[T] {
-	return &relayWSSession[T]{conn: conn, broadcaster: broadcaster, toMessage: toMessage, subs: make(map[string]func())}
+	return &relayWSSession[T]{
+		baseWSSession: newBaseWSSession(conn, "failed to write to relay ws client"),
+		broadcaster:   broadcaster,
+		toMessage:     toMessage,
+	}
 }
 
 func (s *relayWSSession[T]) run(ctx context.Context) {
 	defer s.closeAll()
-	_ = s.conn.SetReadDeadline(time.Now().Add(pongWait))
-	s.conn.SetPongHandler(func(string) error {
-		return s.conn.SetReadDeadline(time.Now().Add(pongWait))
-	})
+	s.armKeepalive()
 	go s.pingLoop()
 	for {
 		var req relaySubscribeRequest
@@ -52,16 +46,6 @@ func (s *relayWSSession[T]) run(ctx context.Context) {
 			s.handleSubscribe(req.Symbol)
 		case "unsubscribe":
 			s.handleUnsubscribe(req.Symbol)
-		}
-	}
-}
-
-func (s *relayWSSession[T]) pingLoop() {
-	ticker := time.NewTicker(pingInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		if err := s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
-			return
 		}
 	}
 }
@@ -96,21 +80,3 @@ func (s *relayWSSession[T]) forward(ch <-chan T, symbol string) {
 	}
 }
 
-func (s *relayWSSession[T]) closeAll() {
-	s.mu.Lock()
-	subs := s.subs
-	s.subs = nil
-	s.mu.Unlock()
-	for _, cancel := range subs {
-		cancel()
-	}
-	s.conn.Close()
-}
-
-func (s *relayWSSession[T]) sendJSON(v any) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := s.conn.WriteJSON(v); err != nil {
-		log.Error().Err(err).Msg("failed to write to relay ws client")
-	}
-}
