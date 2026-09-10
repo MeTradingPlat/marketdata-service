@@ -115,12 +115,7 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 	// mismo mensaje de historial -- el grafico NO espera un mensaje aparte
 	// para dibujarla. GetCurrentCandle devuelve nil cuando el periodo
 	// todavia no tiene ningun tick real (ya no fabrica una plana al ultimo
-	// cierre: confirmado en vivo un candle fantasma open=close dibujado en
-	// post-mercado para un minuto sin ningun trade, que desaparecia solo al
-	// re-suscribirse) -- en ese caso no se agrega nada, el grafico
-	// simplemente no tiene vela en formacion hasta que llegue el primer
-	// dato real (forwardLive la crea ahi). La agregacion en vivo sigue
-	// desde ahi (forwardLive).
+	// cierre). La agregacion en vivo sigue desde ahi (forwardLive).
 	bars := toBars(candles)
 	var seed *dto.CandleBar
 	if s.current != nil {
@@ -159,18 +154,7 @@ func (s *wsSession) handleUnsubscribe(symbol, timeframe string) {
 // arranca la siguiente en formacion -- el frontend hace update() por
 // tiempo, asi que una vela cerrada repetida solo reemplaza su version.
 // lastHistoryTime protege la serie: jamas se emite una vela anterior al
-// ultimo bar del historial (lightweight-charts rompe con tiempos
-// descendentes).
-// seedAggregate convierte el seed (estampado con el FIN de su periodo, misma
-// convencion que el resto del grafico -- ver GetCurrentCandle: b.Time =
-// end.Unix()) al INICIO que usa el agregador de forwardLive para comparar y
-// crear periodos (period, mas abajo). Sin esta conversion, el primer tick
-// real que llegaba despues de CUALQUIER suscripcion nueva (abrir un grafico,
-// cambiar de simbolo o timeframe) nunca coincidia con el seed -- se mandaba
-// como "cerrado" con el timestamp corrido un periodo entero hacia adelante.
-// Confirmado en vivo: una vela fantasma "cerrada" en el horario equivocado en
-// cada suscripcion (ej. M5 sembrado en :35, fantasma cerrado en :40 en vez
-// del cierre real de la vela que seguia formandose).
+// ultimo bar del historial.
 func seedAggregate(seed *dto.CandleBar, tf domain.Timeframe, now time.Time) *dto.CandleBar {
 	if seed == nil {
 		return nil
@@ -185,15 +169,14 @@ func (s *wsSession) forwardLive(ch <-chan domain.Candle, symbol, timeframe strin
 	agg := seedAggregate(seed, tf, time.Now())
 	for c := range ch {
 		// Un tick puede traer OHLC parcial (minuto sin trades, primer evento
-		// de un periodo) -- se dibuja igual (plano) y el siguiente tick lo
-		// completa; descartar por OHLC incompleto dejaba huecos en la serie.
+		// de un periodo) -- se dibuja igual y el siguiente tick lo completa.
 		if c.Close == 0 {
 			continue
 		}
 		period := livecandles.FormingPeriodStart(c.Timestamp, tf).Unix()
 		if agg == nil || agg.Time != period {
 			if agg != nil && agg.Time >= lastHistoryTime {
-				s.sendBar(symbol, timeframe, withEndTime(*agg, tf), true)
+				s.sendBar(symbol, timeframe, *agg, true)
 			}
 			agg = &dto.CandleBar{Time: period, Open: c.Open, High: c.High, Low: c.Low, Close: c.Close, Volume: c.Volume, Closed: false}
 		} else {
@@ -207,18 +190,9 @@ func (s *wsSession) forwardLive(ch <-chan domain.Candle, symbol, timeframe strin
 			agg.Volume += c.Volume
 		}
 		if agg.Time >= lastHistoryTime {
-			s.sendBar(symbol, timeframe, withEndTime(*agg, tf), false)
+			s.sendBar(symbol, timeframe, *agg, false)
 		}
 	}
-}
-
-// withEndTime estampa la vela con el FIN del periodo (misma convencion que
-// CurrentCandleService y el seed) -- el agg interno conserva el inicio como
-// clave de agregacion, pero lo que llega al grafico debe dibujarse en el
-// tick de cierre del periodo.
-func withEndTime(bar dto.CandleBar, tf domain.Timeframe) dto.CandleBar {
-	bar.Time = livecandles.FormingPeriodEnd(time.Unix(bar.Time, 0), tf).Unix()
-	return bar
 }
 
 func (s *wsSession) sendBar(symbol, timeframe string, bar dto.CandleBar, closed bool) {
