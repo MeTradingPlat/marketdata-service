@@ -139,12 +139,11 @@ func (c *FundamentalsCache) MergeMarketMetrics(updates []domain.Fundamentals) {
 	}
 }
 
-// MergeBeta -- ver UpsertBeta, sin COALESCE.
+// MergeBeta -- ver UpsertBeta: solo toca beta.
 func (c *FundamentalsCache) MergeBeta(updates []domain.Fundamentals) {
 	for _, u := range updates {
-		beta := u.Beta
 		c.merge(u.Symbol, func(f *domain.Fundamentals) {
-			f.Beta = beta
+			f.Beta = u.Beta
 		})
 	}
 }
@@ -240,6 +239,24 @@ func (c *FundamentalsCache) MergePrevPostMarketVolume(volumes map[string]int64, 
 	for _, symbol := range attemptedOnly {
 		c.merge(symbol, func(f *domain.Fundamentals) {
 			f.PrevPostMarketVolumeUpdatedAt = &now
+		})
+	}
+}
+
+// MergeOpenInterest -- ver UpsertOpenInterestBatch: guarda open_interest y
+// open_interest_updated_at en cache.
+func (c *FundamentalsCache) MergeOpenInterest(openInterests map[string]float64, attemptedOnly []string) {
+	now := time.Now()
+	for symbol, value := range openInterests {
+		v := value
+		c.merge(symbol, func(f *domain.Fundamentals) {
+			f.OpenInterest = &v
+			f.OpenInterestUpdatedAt = &now
+		})
+	}
+	for _, symbol := range attemptedOnly {
+		c.merge(symbol, func(f *domain.Fundamentals) {
+			f.OpenInterestUpdatedAt = &now
 		})
 	}
 }

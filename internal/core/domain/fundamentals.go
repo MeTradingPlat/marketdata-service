@@ -100,4 +100,10 @@ type Fundamentals struct {
 	// "todavia no se busco" de un dato real.
 	OccurredDate      string     `json:"-"`
 	EarningsUpdatedAt *time.Time `json:"-"`
+
+	// OpenInterest es el total de open interest del vencimiento mensual
+	// frontal, refrescado durante el mantenimiento diario y servido desde
+	// cache. nil cuando el simbolo no tiene opciones o nunca se intento.
+	OpenInterest          *float64   `json:"openInterest,omitempty"`
+	OpenInterestUpdatedAt *time.Time `json:"-"`
 }

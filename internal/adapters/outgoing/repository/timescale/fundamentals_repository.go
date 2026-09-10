@@ -35,7 +35,8 @@ const fundamentalsSelectSQL = `
 	d.external_updated_at, d.float_updated_at,
 	COALESCE(d.occurred_date, ''),
 	d.prev_close, d.prev_close_updated_at,
-	d.prev_post_market_volume, d.prev_post_market_volume_updated_at
+	d.prev_post_market_volume, d.prev_post_market_volume_updated_at,
+	d.open_interest, d.open_interest_updated_at
 `
 
 const getFundamentalsSQL = `
@@ -60,6 +61,7 @@ func scanFundamentals(row pgx.Row, f *domain.Fundamentals) error {
 		&f.OccurredDate,
 		&f.PrevClose, &f.PrevCloseUpdatedAt,
 		&f.PrevPostMarketVolume, &f.PrevPostMarketVolumeUpdatedAt,
+		&f.OpenInterest, &f.OpenInterestUpdatedAt,
 	)
 }
 
@@ -112,6 +114,7 @@ func (r *FundamentalsRepository) GetBatch(ctx context.Context, symbols []string)
 			&f.OccurredDate,
 			&f.PrevClose, &f.PrevCloseUpdatedAt,
 			&f.PrevPostMarketVolume, &f.PrevPostMarketVolumeUpdatedAt,
+			&f.OpenInterest, &f.OpenInterestUpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning fundamentals batch row: %w", err)
 		}
@@ -350,13 +353,33 @@ const getSymbolsDueForFloatRefreshSQL = `
 	SELECT s.symbol, d.shares_outstanding, d.insider_shares, d.insider_ciks
 	FROM tracked_symbols s
 	JOIN dividends d ON d.symbol_id = s.symbol_id
-	WHERE s.is_active = TRUE AND d.shares_outstanding IS NOT NULL AND d.insider_shares IS NOT NULL
+	WHERE s.is_active = TRUE
+	  AND d.shares_outstanding IS NOT NULL
+	  AND d.insider_shares IS NOT NULL
 	ORDER BY d.float_updated_at ASC NULLS FIRST
 	LIMIT $1
 `
 
-// RecordStepDone registra cuando termino un refresh de fundamentales -- la
-// marca persistida que evita recalcular en cada reinicio del contenedor: un
+func (r *FundamentalsRepository) GetSymbolsDueForFloatRefresh(ctx context.Context, limit int) ([]domain.Fundamentals, error) {
+	rows, err := r.pool.Query(ctx, getSymbolsDueForFloatRefreshSQL, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying symbols due for float refresh: %w", err)
+	}
+	defer rows.Close()
+
+	var result []domain.Fundamentals
+	for rows.Next() {
+		var f domain.Fundamentals
+		if err := rows.Scan(&f.Symbol, &f.SharesOutstanding, &f.InsiderShares, &f.InsiderCiks); err != nil {
+			return nil, fmt.Errorf("scanning float refresh symbol row: %w", err)
+		}
+		result = append(result, f)
+	}
+	return result, rows.Err()
+}
+
+// RecordStepDone registra cuando termino un refresh diario de fundamentales
+// (beta, earnings, market metrics, externos) en Postgres -- en reinicios el
 // paso se salta si su done_at cae dentro de la ventana de mantenimiento
 // actual (ver LastMaintenanceWindowStart en daily_catchup.go). Solo se
 // registra al terminar OK; un refresh fallido queda stale y se reintenta.
@@ -536,6 +559,72 @@ func (r *FundamentalsRepository) UpsertPrevPostMarketVolumeBatch(ctx context.Con
 	return nil
 }
 
+// GetSymbolsWithStaleOpenInterest trae los simbolos cuyo open_interest no se
+// calculo en la ventana de mantenimiento actual (mismo guard por-simbolo).
+func (r *FundamentalsRepository) GetSymbolsWithStaleOpenInterest(ctx context.Context, windowStart time.Time) ([]string, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT s.symbol
+		FROM tracked_symbols s
+		LEFT JOIN dividends d ON d.symbol_id = s.symbol_id
+		WHERE s.is_active = TRUE
+		  AND s.symbol !~ '/'
+		  AND (d.open_interest_updated_at IS NULL OR d.open_interest_updated_at < $1)
+		ORDER BY s.symbol`, windowStart)
+	if err != nil {
+		return nil, fmt.Errorf("listing symbols with stale open interest: %w", err)
+	}
+	defer rows.Close()
+	var symbols []string
+	for rows.Next() {
+		var symbol string
+		if err := rows.Scan(&symbol); err != nil {
+			return nil, fmt.Errorf("scanning stale open interest symbol: %w", err)
+		}
+		symbols = append(symbols, symbol)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating stale open interest symbols: %w", err)
+	}
+	return symbols, nil
+}
+
+const upsertOpenInterestSQL = `
+	INSERT INTO dividends (symbol_id, open_interest, open_interest_updated_at)
+	SELECT symbol_id, $2, now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET open_interest = EXCLUDED.open_interest, open_interest_updated_at = now()
+`
+
+const markOpenInterestAttemptedSQL = `
+	INSERT INTO dividends (symbol_id, open_interest_updated_at)
+	SELECT symbol_id, now() FROM tracked_symbols WHERE symbol = $1
+	ON CONFLICT (symbol_id) DO UPDATE SET open_interest_updated_at = now()
+`
+
+// UpsertOpenInterestBatch guarda el open interest calculado para el lote de
+// simbolos que tuvieron opciones y estampa open_interest_updated_at para los
+// que se marcaron como intentados sin opciones.
+func (r *FundamentalsRepository) UpsertOpenInterestBatch(ctx context.Context, openInterests map[string]float64, attemptedOnly []string) error {
+	total := len(openInterests) + len(attemptedOnly)
+	if total == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for symbol, oi := range openInterests {
+		batch.Queue(upsertOpenInterestSQL, symbol, oi)
+	}
+	for _, symbol := range attemptedOnly {
+		batch.Queue(markOpenInterestAttemptedSQL, symbol)
+	}
+	results := r.pool.SendBatch(ctx, batch)
+	defer results.Close()
+	for i := 0; i < total; i++ {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("upserting open interest batch: %w", err)
+		}
+	}
+	return nil
+}
+
 // StepDoneAt devuelve cuando se calculo por ultima vez el paso (false si
 // nunca se calculo -- primer arranque o paso que nunca corrio).
 func (r *FundamentalsRepository) StepDoneAt(ctx context.Context, step string) (time.Time, bool, error) {
@@ -549,22 +638,4 @@ func (r *FundamentalsRepository) StepDoneAt(ctx context.Context, step string) (t
 		return time.Time{}, false, fmt.Errorf("reading fundamental refresh %s: %w", step, err)
 	}
 	return at, true, nil
-}
-
-func (r *FundamentalsRepository) GetSymbolsDueForFloatRefresh(ctx context.Context, limit int) ([]domain.Fundamentals, error) {
-	rows, err := r.pool.Query(ctx, getSymbolsDueForFloatRefreshSQL, limit)
-	if err != nil {
-		return nil, fmt.Errorf("querying symbols due for float refresh: %w", err)
-	}
-	defer rows.Close()
-
-	var result []domain.Fundamentals
-	for rows.Next() {
-		f := domain.Fundamentals{}
-		if err := rows.Scan(&f.Symbol, &f.SharesOutstanding, &f.InsiderShares, &f.InsiderCiks); err != nil {
-			return nil, fmt.Errorf("scanning float refresh candidate row: %w", err)
-		}
-		result = append(result, f)
-	}
-	return result, rows.Err()
 }

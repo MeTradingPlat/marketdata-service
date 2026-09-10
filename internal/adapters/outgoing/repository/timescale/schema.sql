@@ -212,6 +212,10 @@ ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_close_updated_at TIMESTAMPTZ
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_post_market_volume BIGINT;
 ALTER TABLE dividends ADD COLUMN IF NOT EXISTS prev_post_market_volume_updated_at TIMESTAMPTZ;
 
+-- Open interest y guard por-simbolo para refresco diario
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS open_interest DOUBLE PRECISION;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS open_interest_updated_at TIMESTAMPTZ;
+
 -- verified: las velas guardadas por el refill/backfill (Save withWatermark
 -- = TRUE) son verificadas (vienen de TastyTrade pedidas expresamente) --
 -- las del live en vivo (sin watermark) son provisionales y un reinicio las

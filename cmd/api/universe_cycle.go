@@ -162,6 +162,15 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		})
 	}()
 
+	// Open interest de opciones via TastyTrade (por simbolo, sin batch): se
+	// corre en background para no demorar las fases de velas y mantiene
+	// el cache al dia para responder GetSymbolDetails en 0ms.
+	go func() {
+		refreshFundamentalsOnce(ctx, fundamentals, "open interest", windowStart, func() error {
+			return catchup.RefreshOpenInterest(ctx, gateway.(out.OpenInterestGateway), fundamentals, fundamentalsCache, windowStart)
+		})
+	}()
+
 	if !firstRun {
 		gateway.ResetLiveConnections()
 	}

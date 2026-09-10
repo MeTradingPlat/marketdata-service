@@ -87,6 +87,12 @@ func (f *fakeFundamentalsRepo) GetSymbolsWithStalePrevPostMarketVolume(ctx conte
 func (f *fakeFundamentalsRepo) UpsertPrevPostMarketVolumeBatch(ctx context.Context, volumes map[string]int64, attemptedOnly []string) error {
 	return nil
 }
+func (f *fakeFundamentalsRepo) GetSymbolsWithStaleOpenInterest(ctx context.Context, windowStart time.Time) ([]string, error) {
+	return nil, nil
+}
+func (f *fakeFundamentalsRepo) UpsertOpenInterestBatch(ctx context.Context, openInterests map[string]float64, attemptedOnly []string) error {
+	return nil
+}
 
 func TestFundamentalsCache_ReloadAll_PopulatesFromRepo(t *testing.T) {
 	symbols := &fakeSymbolRepo{tracked: []domain.Symbol{{Symbol: "AAPL"}, {Symbol: "MSFT"}}}
@@ -110,7 +116,7 @@ func TestFundamentalsCache_ReloadAll_PopulatesFromRepo(t *testing.T) {
 	}
 }
 
-func TestFundamentalsCache_ReloadAll_KeepsPreviousDataOnError(t *testing.T) {
+func TestFundamentalsCache_ReloadAll_PreservesOldDataOnError(t *testing.T) {
 	symbols := &fakeSymbolRepo{tracked: []domain.Symbol{{Symbol: "AAPL"}}}
 	repo := &fakeFundamentalsRepo{batch: map[string]domain.Fundamentals{"AAPL": {Symbol: "AAPL", MarketCap: 100}}}
 	cache := NewFundamentalsCache(repo, symbols, nil)
@@ -121,48 +127,47 @@ func TestFundamentalsCache_ReloadAll_KeepsPreviousDataOnError(t *testing.T) {
 
 	got := cache.GetBatch([]string{"AAPL"})
 	if got["AAPL"].MarketCap != 100 {
-		t.Fatalf("expected stale-but-present data to survive a failed reload, got %+v", got)
+		t.Fatalf("expected old data to survive db error, got %+v", got)
 	}
 }
 
-func TestFundamentalsCache_GetBatch_EmptyBeforeFirstReload(t *testing.T) {
+func TestFundamentalsCache_MergeDividends_UpdatesOnlyDividendFields(t *testing.T) {
 	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
-	got := cache.GetBatch([]string{"AAPL"})
-	if len(got) != 0 {
-		t.Fatalf("expected empty cache before any reload, got %+v", got)
+	cache.MergeMarketMetrics([]domain.Fundamentals{{Symbol: "AAPL", MarketCap: 100, Beta: 1.2}})
+
+	cache.MergeDividends([]domain.Fundamentals{{Symbol: "AAPL", DividendAmount: 0.25, TradingStatus: "T"}})
+
+	got := cache.GetBatch([]string{"AAPL"})["AAPL"]
+	if got.MarketCap != 100 || got.Beta != 1.2 {
+		t.Errorf("expected existing metrics to be preserved, got %+v", got)
+	}
+	if got.DividendAmount != 0.25 || got.TradingStatus != "T" {
+		t.Errorf("expected dividend fields to apply, got %+v", got)
+	}
+	if got.MarketDataUpdatedAt == nil {
+		t.Error("expected MarketDataUpdatedAt to be stamped")
 	}
 }
 
-// TestFundamentalsCache_MergeMarketMetrics_DoesNotWipeOtherRefreshesFields
-// reproduce el motivo real de tener Merge* separados en vez de un solo
-// reemplazo del registro: dividendos y market metrics conviven en el mismo
-// Fundamentals pero los escribe cada uno en un momento distinto del ciclo
-// -- pisar el registro entero con lo que trae SOLO market metrics borraria
-// el dividendo que MergeDividends ya habia guardado antes. (Beta es
-// intencionalmente la excepcion: tanto market metrics como el refresh de
-// beta propio escriben esa MISMA columna sin COALESCE -- ver
-// upsertMarketMetricsSQL/upsertBetaSQL -- el que corre despues gana, por
-// eso RefreshBeta corre DESPUES de RefreshMarketMetrics en el ciclo real.)
-func TestFundamentalsCache_MergeMarketMetrics_DoesNotWipeOtherRefreshesFields(t *testing.T) {
+func TestFundamentalsCache_MergeMarketMetrics_UpdatesOnlyMetricsFields(t *testing.T) {
 	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
 	cache.MergeDividends([]domain.Fundamentals{{Symbol: "AAPL", DividendAmount: 0.25}})
 
-	cache.MergeMarketMetrics([]domain.Fundamentals{{Symbol: "AAPL", MarketCap: 3_000_000_000}})
+	cache.MergeMarketMetrics([]domain.Fundamentals{{Symbol: "AAPL", MarketCap: 100, Eps: 3.5}})
 
 	got := cache.GetBatch([]string{"AAPL"})["AAPL"]
 	if got.DividendAmount != 0.25 {
-		t.Errorf("expected dividend from the earlier MergeDividends to survive, got %v", got.DividendAmount)
+		t.Errorf("expected existing dividends to be preserved, got %+v", got)
 	}
-	if got.MarketCap != 3_000_000_000 {
-		t.Errorf("expected the new market cap to apply, got %v", got.MarketCap)
+	if got.MarketCap != 100 || got.Eps != 3.5 {
+		t.Errorf("expected metrics to apply, got %+v", got)
+	}
+	if got.MetricsUpdatedAt == nil {
+		t.Error("expected MetricsUpdatedAt to be stamped")
 	}
 }
 
-// TestFundamentalsCache_MergeExternalFundamentals_KeepsExistingWhenNil
-// reproduce el COALESCE de UpsertExternalFundamentals en memoria: un update
-// sin sharesOutstanding (nil, ej. DxLink no lo trajo esta vuelta) no debe
-// pisar el que SEC EDGAR ya habia completado antes.
-func TestFundamentalsCache_MergeExternalFundamentals_KeepsExistingWhenNil(t *testing.T) {
+func TestFundamentalsCache_MergeExternalFundamentals_CoalescesPointers(t *testing.T) {
 	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
 	shares := int64(1000)
 	cache.MergeExternalFundamentals([]domain.Fundamentals{{Symbol: "AAPL", SharesOutstanding: &shares}})
@@ -175,7 +180,7 @@ func TestFundamentalsCache_MergeExternalFundamentals_KeepsExistingWhenNil(t *tes
 		t.Errorf("expected sharesOutstanding to survive a later update that left it nil, got %+v", got.SharesOutstanding)
 	}
 	if got.FloatShares == nil || *got.FloatShares != 800 {
-		t.Errorf("expected floatShares to apply, got %+v", got.FloatShares)
+		t.Errorf("expected floatShares to apply, got %+v", got)
 	}
 }
 
@@ -192,6 +197,28 @@ func TestFundamentalsCache_MergeEarningsHistory_EmptyDateDoesNotOverwrite(t *tes
 	got := cache.GetBatch([]string{"AAPL"})["AAPL"]
 	if got.NextEarningsDate != "2026-10-30" {
 		t.Errorf("expected the existing earnings date to survive an empty update, got %q", got.NextEarningsDate)
+	}
+}
+
+func TestFundamentalsCache_MergeOpenInterest(t *testing.T) {
+	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
+	cache.MergeOpenInterest(map[string]float64{"AAPL": 12500}, []string{"FTFT"})
+
+	got := cache.GetBatch([]string{"AAPL", "FTFT"})
+	aapl := got["AAPL"]
+	if aapl.OpenInterest == nil || *aapl.OpenInterest != 12500 {
+		t.Errorf("expected AAPL open interest = 12500, got %+v", aapl.OpenInterest)
+	}
+	if aapl.OpenInterestUpdatedAt == nil {
+		t.Error("expected AAPL open interest timestamp to be set")
+	}
+
+	ftft := got["FTFT"]
+	if ftft.OpenInterest != nil {
+		t.Errorf("expected FTFT open interest to be nil, got %+v", ftft.OpenInterest)
+	}
+	if ftft.OpenInterestUpdatedAt == nil {
+		t.Error("expected FTFT open interest timestamp to be set")
 	}
 }
 

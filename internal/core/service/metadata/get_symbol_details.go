@@ -6,7 +6,6 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
-	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 )
 
@@ -14,11 +13,10 @@ type getSymbolDetailsService struct {
 	symbols      *SymbolsCache
 	fundamentals *fundamentalscache.FundamentalsCache
 	intraday     in.GetIntradaySnapshotService
-	openInterest out.OpenInterestGateway
 }
 
-func NewGetSymbolDetailsService(symbols *SymbolsCache, fundamentals *fundamentalscache.FundamentalsCache, intraday in.GetIntradaySnapshotService, openInterest out.OpenInterestGateway) in.GetSymbolDetailsService {
-	return &getSymbolDetailsService{symbols: symbols, fundamentals: fundamentals, intraday: intraday, openInterest: openInterest}
+func NewGetSymbolDetailsService(symbols *SymbolsCache, fundamentals *fundamentalscache.FundamentalsCache, intraday in.GetIntradaySnapshotService) in.GetSymbolDetailsService {
+	return &getSymbolDetailsService{symbols: symbols, fundamentals: fundamentals, intraday: intraday}
 }
 
 func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol string) (dto.SymbolDetails, error) {
@@ -29,13 +27,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 
 	// Servido desde el cache en memoria (ya se recarga completo tras cada
 	// refresh nocturno/de trading status, ver FundamentalsCache) en vez de
-	// una consulta a Postgres por cada apertura del panel de detalle --
-	// confirmado en vivo el 2026-09-02: este endpoint era el unico camino de
-	// fundamentales que todavia pegaba directo a la BD por simbolo, y un
-	// simbolo sin fundamentales conocidos (recien trackeado) volvia error
-	// duro en vez de mostrar igual el resto del detalle (mismo criterio de
-	// "no tirar todo por una parte que falta" que ya se usa abajo con el
-	// snapshot intradia).
+	// una consulta a Postgres o APIs externas por cada apertura del panel de detalle.
 	fundamentals := s.fundamentals.GetBatch([]string{symbol})[symbol]
 
 	// El snapshot intradia (OHLC/volumen del dia) es una fuente separada de
@@ -75,6 +67,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			MarketCap:                   nonzeroOrNil(domain.MarketCapLive(fundamentals.MarketCap, fundamentals.SharesOutstanding, snapshot)),
 			Eps:                         nonzeroOrNil(fundamentals.Eps),
 			Beta:                        nonzeroOrNil(fundamentals.Beta),
+			OpenInterest:                fundamentals.OpenInterest,
 			Lendability:                 fundamentals.Lendability,
 			BorrowRate:                  fundamentals.BorrowRate,
 			Liquidity:                   fundamentals.Liquidity,
@@ -88,9 +81,6 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 		},
 	}
 	applyExternalFundamentals(&details.FundamentalData, fundamentals)
-	if oi, ok := s.openInterest.OpenInterest(ctx, symbol); ok && oi > 0 {
-		details.FundamentalData.OpenInterest = &oi
-	}
 	return details, nil
 }
 

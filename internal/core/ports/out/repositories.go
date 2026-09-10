@@ -82,7 +82,7 @@ type SymbolRepository interface {
 	// SymbolsCache.ReloadAll, que necesita ese dato para reproducir el orden
 	// de Search() en memoria. Separado de Tracked() para no tocar sus otros
 	// llamadores (reconciliador, barrido nocturno) con una columna que no
-	// necesitan.
+	// necesitan).
 	TrackedWithVolume(ctx context.Context) ([]domain.Symbol, error)
 	GetBySymbol(ctx context.Context, symbol string) (domain.Symbol, error)
 	// GetBatch es una sola consulta acotada por symbol = ANY(...), no N
@@ -151,4 +151,9 @@ type FundamentalsRepository interface {
 	// UpsertPrevPostMarketVolumeBatch: mismo patron de UN SOLO pgx.Batch que
 	// UpsertPrevCloseBatch, para prev_post_market_volume.
 	UpsertPrevPostMarketVolumeBatch(ctx context.Context, volumes map[string]int64, attemptedOnly []string) error
+	// GetSymbolsWithStaleOpenInterest trae los simbolos cuyo open_interest no se
+	// calculo en la ventana de mantenimiento actual.
+	GetSymbolsWithStaleOpenInterest(ctx context.Context, windowStart time.Time) ([]string, error)
+	// UpsertOpenInterestBatch guarda open_interest y open_interest_updated_at para un lote.
+	UpsertOpenInterestBatch(ctx context.Context, openInterests map[string]float64, attemptedOnly []string) error
 }
