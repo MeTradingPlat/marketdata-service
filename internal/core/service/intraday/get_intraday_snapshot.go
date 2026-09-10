@@ -21,13 +21,21 @@ func NewGetIntradaySnapshotService(repo out.CandleRepository, gateway out.Market
 }
 
 // GetSnapshot arma todo lo que se puede sacar de fundamentales SOLO con
-// nuestras propias velas -- sesiones de hoy (repo), precio/volumen actual
-// (la vela M1 en formacion, o la ultima M1 cerrada si el simbolo no esta
-// en vivo ahora mismo), y el cierre D1 mas reciente como prevClose.
+// nuestras propias velas -- sesiones de hoy (tracker en memoria, o repo si no esta),
+// precio/volumen actual (la vela M1 en formacion, o la ultima M1 cerrada), y el cierre D1
+// mas reciente como prevClose.
 func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol string) (domain.IntradaySnapshot, error) {
-	snap, err := s.repo.GetIntradaySessions(ctx, symbol)
-	if err != nil {
-		return domain.IntradaySnapshot{}, fmt.Errorf("getting intraday sessions for %s: %w", symbol, err)
+	var snap domain.IntradaySnapshot
+	var found bool
+	if s.tracker != nil {
+		snap, found = s.tracker.Snapshot(symbol)
+	}
+	if !found {
+		var err error
+		snap, err = s.repo.GetIntradaySessions(ctx, symbol)
+		if err != nil {
+			return domain.IntradaySnapshot{}, fmt.Errorf("getting intraday sessions for %s: %w", symbol, err)
+		}
 	}
 	snap.Symbol = symbol
 	snap.AsOf = time.Now()
@@ -36,9 +44,16 @@ func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol str
 		snap.CurrentPrice = current.Close
 		snap.CurrentVolume = current.Volume
 		mergeFormingCandle(&snap, current)
+	} else if price, volume, ok := s.tracker.LastClose(symbol); ok {
+		snap.CurrentPrice = price
+		snap.CurrentVolume = volume
 	} else if lastM1, err := s.repo.GetCandles(ctx, symbol, domain.M1, 1, nil); err == nil && len(lastM1) > 0 {
 		snap.CurrentPrice = lastM1[0].Close
 		snap.CurrentVolume = lastM1[0].Volume
+	}
+
+	if snap.PrevClose > 0 {
+		return snap, nil
 	}
 
 	// prevClose = cierre REGULAR de la sesion anterior (subasta 16:00 ET)

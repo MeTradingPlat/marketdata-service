@@ -183,6 +183,15 @@ func (t *SnapshotTracker) LastClose(symbol string) (price float64, volume int64,
 	return lc.Price, lc.Volume, ok
 }
 
+// Snapshot devuelve el snapshot intradia acumulado para un unico simbolo desde
+// la memoria RAM sin consultar la base de datos.
+func (t *SnapshotTracker) Snapshot(symbol string) (domain.IntradaySnapshot, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	snap, ok := t.data[symbol]
+	return snap, ok
+}
+
 // SnapshotBatch devuelve las sesiones ya acumuladas del lote -- un simbolo
 // sin ninguna vela registrada hoy todavia (recien empezo a suscribirse en
 // vivo, sin seed que lo cubriera) simplemente no aparece en el mapa; el

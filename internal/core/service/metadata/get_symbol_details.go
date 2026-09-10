@@ -37,6 +37,9 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 	if err != nil {
 		snapshot = domain.IntradaySnapshot{}
 	}
+	if snapshot.PrevClose == 0 && fundamentals.PrevClose != nil && *fundamentals.PrevClose > 0 {
+		snapshot.PrevClose = *fundamentals.PrevClose
+	}
 
 	// Una next_earnings_date que ya paso no es "la proxima" de nada (ver
 	// domain.IsFutureOrToday) -- tratarla como si nunca se hubiera buscado
