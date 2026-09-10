@@ -47,16 +47,16 @@ func refreshWithRetry(name string, fn func() error) {
 // Orden del barrido (diseno original del usuario, pensado para MINIMIZAR
 // carga en el servidor): D1 primero con lotes de 100 simbolos por
 // suscripcion; al terminar se desuscribe y se CIERRAN las conexiones para
-// asegurarse de que la fase termino; luego H1 con el mismo patron; y por
-// ultimo M1, que se queda suscrito para siempre. Cada fase arranca con
-// cero sesiones abiertas ante TastyTrade -- confirmado en vivo que
-// arrastrar conexiones de una fase a la siguiente puede superar el limite
-// de sesiones concurrentes. Cada simbolo retoma desde su propio watermark
+// asegurarse de que la fase termino; luego M1, que se queda suscrito para
+// siempre (H1 y demas timeframes intradiarios se derivan en vivo de M1).
+// Cada fase arranca con cero sesiones abiertas ante TastyTrade -- confirmado
+// en vivo que arrastrar conexiones de una fase a la siguiente puede superar el
+// limite de sesiones concurrentes. Cada simbolo retoma desde su propio watermark
 // (con replay de lo perdido en M1), sin hueco real de datos.
 //
 // Los fundamentales que son REST puro (trading status, market metrics,
 // earnings history, y en background el externo de SEC/FINRA) van ANTES de
-// D1/H1/M1, no despues -- no compiten por conexiones DxLink con las fases
+// D1/M1, no despues -- no compiten por conexiones DxLink con las fases
 // de velas y no hay motivo para que esperen 20-30 min a que el barrido
 // termine. Solo beta (D1) y prevClose/prevPostMarketVolume (M1) quedan
 // despues de su fase respectiva, porque esos si dependen de velas propias
@@ -77,18 +77,11 @@ func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Ma
 }
 
 func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
-	// Pipeline del backfill (diseno del usuario): D1 primero, se cierran
-	// las conexiones, se calcula TODO lo que se calcula con D1 (beta y
-	// prevClose, por-simbolo con fecha), luego H1 (se cierra, se calcula lo
-	// suyo), y por ultimo M1 que se queda suscrito. backfilling bloquea SOLO
-	// las rutas de signal-processing-service mientras dura (ver
-	// router.go/BackfillGate) -- restaurado el 2026-09-03 sin la excepcion
-	// de "mercado activo" que tenia la version vieja: confirmado en vivo que
-	// un firstRun (todo redeploy dispara uno) corriendo a la vez que
-	// signal-processing pedia mas de 1 req/s en pleno horario de mercado
-	// agotaba los mismos recursos compartidos que el barrido necesita. Las
-	// rutas del frontend NO se bloquean (symbolsCache/fundamentalsCache ya
-	// sirven la ultima foto buena conocida).
+	// Pipeline del backfill: D1 primero, se cierran las conexiones, se calcula
+	// beta (D1), luego M1 (que se queda suscrito en vivo). H1 y demas timeframes
+	// intradiarios se derivan al vuelo desde M1.
+	// backfilling bloquea SOLO las rutas de signal-processing-service mientras dura
+	// (ver router.go/BackfillGate). Las rutas del frontend NO se bloquean.
 	backfilling.Store(true)
 	defer backfilling.Store(false)
 
@@ -126,7 +119,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// TastyTrade/SEC/FINRA) van ANTES del barrido de velas, no despues --
 	// pedido explicito del usuario: un redeploy no deberia dejar
 	// market-cap/beta-del-proveedor/earnings/dividendos desactualizados
-	// durante los 20-30 min que tarda D1+H1+M1, cuando nada de esto necesita
+	// durante los 20-30 min que tarda D1+M1, cuando nada de esto necesita
 	// esperar a esas fases. Solo quedan DESPUES del barrido los que si
 	// dependen de velas propias: RefreshBeta (D1) y RefreshPrevClose/
 	// RefreshPrevPostMarketVolume (M1), ver mas abajo.
@@ -192,43 +185,28 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 
 	// Simbolos sin D1 nuevo hace demasiado (fusion de SPAC, deslistado, nota
 	// vencida -- TastyTrade los sigue listando "activos" pero dxFeed no manda
-	// mas dato) no pagan H1/M1/suscripcion en vivo -- el D1 de ARRIBA, que
+	// mas dato) no pagan M1/suscripcion en vivo -- el D1 de ARRIBA, que
 	// SIEMPRE corre para el universo completo, es la unica señal de "¿ya
 	// volvio?" que hace falta (ver FilterStaleSymbols).
 	activeTracked := catchup.FilterStaleSymbols(ctx, candles, tracked, time.Now())
 
-	// FASE 2: H1, desde cero sesiones (RunSweepPhase cierra al terminar).
-	catchup.RunSweepPhase(ctx, gateway, candles, ingest, activeTracked, domain.H1, cfg.SweepWorkers)
-
-	// FASE 3: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
+	// FASE 2: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
 	// las velas M1 de la sesion anterior, asi que va DESPUES del rollout
 	// M1 -- corria antes con la tabla M1 vacia en un refill en frio y
 	// calculaba 0). Sin verificacion de huecos de 10 dias: cada vela
 	// guardada (en vivo y en refill) actualiza su watermark, asi que un
 	// reinicio retoma desde el ultimo minuto guardado y el replay de la
-	// suscripcion rellena solo el hueco de las horas caidas -- pedir 10
-	// dias era redundante y costoso (una pasada de 25+ min sobre el M1
-	// completo en el primer refill).
-	// El sweep M1 es el REFILL que avanza el watermark M1 -- sin el, el
-	// rollout (StreamLive) guardaba el replay con withWatermark=false y el
-	// watermark nunca avanzaba: cada ciclo re-jugaba ~1.5 dias de M1 por
-	// simbolo (rollout de 11+ min, confirmado en vivo el 2026-08-18). Con el
-	// sweep, el watermark avanza diario y el rollout solo re-juega el hueco
-	// del downtime (~minutos).
+	// suscripcion rellena solo el hueco de las horas caidas.
+	// El sweep M1 es el REFILL que avanza el watermark M1.
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, activeTracked, domain.M1, cfg.SweepWorkers)
 
-	// Sembrar el SnapshotTracker con UNA sola consulta de lote (el mismo
-	// costo que antes pagaba CADA request de fundamentals/realtime) justo
-	// despues del sweep M1 y antes de abrir las suscripciones en vivo -- sin
-	// esto, GetSnapshotsBatch caeria al fallback de BD para el universo
-	// entero hasta que cada simbolo recibiera su primer tick en vivo.
+	// Sembrar el SnapshotTracker con UNA sola consulta de lote justo
+	// despues del sweep M1 y antes de abrir las suscripciones en vivo.
 	seedSnapshotTracker(ctx, candles, tracker, activeTracked)
 
 	startLiveUniverse(ctx, ingest, activeTracked)
 	// A partir de aca un simbolo que siga sin IsAttempted no esta "esperando
-	// su turno" -- se cayo de la foto de tracked/activeTracked (ver
-	// seedRetryDelay mas abajo para el precedente de esa consulta fallando
-	// en silencio bajo presion) y el reconciler ya lo puede tratar como
+	// su turno" -- se cayo de la foto de tracked/activeTracked y el reconciler ya lo puede tratar como
 	// cualquier otro caido.
 	liveRolloutDone.Store(true)
 	refreshWithRetry("prev close", func() error {
@@ -237,11 +215,8 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	refreshWithRetry("prev post market volume", func() error {
 		return catchup.RefreshPrevPostMarketVolume(ctx, candles, fundamentals, fundamentalsCache, windowStart)
 	})
-	// Todo lo que este ciclo escribio (market metrics/earnings/trading
-	// status/external ANTES del barrido; beta/prevClose/
-	// prevPostMarketVolume aca arriba) ya quedo reflejado en el cache al
-	// momento de escribirse -- ver el Merge* dentro de cada Refresh* en
-	// fundamentals_cache.go. Ya no hace falta un ReloadAll de cierre.
+	// Todo lo que este ciclo escribio ya quedo reflejado en el cache al
+	// momento de escribirse. Ya no hace falta un ReloadAll de cierre.
 }
 
 // refreshFundamentalsOnce corre el refresh solo si no se completo ya en la
@@ -332,7 +307,7 @@ func seedSnapshotTracker(ctx context.Context, candles out.CandleRepository, trac
 	// (GetSnapshotsBatch, ver LastClose) no tendria nada que devolver para
 	// ningun simbolo hasta su primer tick en vivo, y caeria de nuevo en la
 	// consulta lenta para el universo ENTERO justo tras este mismo
-	// despliegue -- confirmado en vivo el 2026-08-20.
+	// despliegue.
 	lastStart := time.Now()
 	lastCandles, err := candles.GetSeries(ctx, symbols, domain.M1, 1)
 	if err != nil {

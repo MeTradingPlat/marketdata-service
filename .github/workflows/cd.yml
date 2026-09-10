@@ -231,36 +231,21 @@ jobs:
 
       - name: Run Application Container
         run: |
-          # Binario Go, sin JVM que calentar -- memoria muchisimo mas baja
-          # que el servicio Java que reemplaza (ver historial de este repo).
-          # 1g, no 512m: confirmado con dmesg (kernel OOM-killer) que el
-          # proceso llego a ~518-522MB de RSS real y el cgroup lo mato dos
-          # veces el 2026-08-19 -- una durante el barrido normal D1/H1/M1
-          # (obligando a reiniciar el ciclo entero desde cero cada vez) y
-          # otra bajo un lote grande de /historical/batch con gzip (el
-          # payload de ~9MB por lote se arma completo en memoria antes de
-          # comprimir). 1g deja margen real por encima de lo ya observado.
-          # --stop-timeout 25: un docker stop (cada deploy, o manual) manda
-          # SIGTERM y despues de este plazo mata a la fuerza con SIGKILL. El
-          # shutdown handler (main.go) primero apaga el servidor HTTP (hasta
-          # 10s de gracia propios) y RECIEN DESPUES cierra las ~40 conexiones
-          # DxLink con FIN explicito para no dejar sesiones huerfanas -- con
-          # el default de Docker (10s) el SIGKILL podia llegar antes de que
-          # el cierre de DxLink ni empezara, dejando sesiones huerfanas en
-          # CADA deploy pese a que el codigo ya intentaba evitarlo
-          # (confirmado el 2026-09-02: storm de "sessions exceeded" en pleno
-          # mercado horas despues de un deploy). 25s da margen real para las
-          # dos etapas del shutdown, no solo la primera.
+          # 2g limite de memoria y GOMEMLIMIT=1600MiB para que el GC de Go
+          # recolecte proactivamente sin alcanzar el tope duro del cgroup de Docker.
+          # --stop-timeout 25: margen para shutdown graceful de conexiones.
           docker run -d \
             --name "marketdata-service" \
             --network "metradingplat-network" \
             --restart "unless-stopped" \
             --stop-timeout 25 \
             --cpus "1.0" \
-            --memory "1g" \
-            --memory-swap "1g" \
+            --memory "2g" \
+            --memory-swap "2g" \
             --label project="metradingplat" \
             --label service="marketdata-service" \
+            -e GOMEMLIMIT="1600MiB" \
+            -e GOGC="50" \
             -e DB_HOST="postgres-marketdata" \
             -e DB_PORT="5432" \
             -e DB_NAME="marketdata_db" \
@@ -283,32 +268,30 @@ jobs:
         run: |
           echo "Cleaning old images for marketdata-service service..."
           CURRENT_IMAGE=$(docker inspect marketdata-service --format='{{.Image}}' 2>/dev/null || echo "")
-          if [ -n "$CURRENT_IMAGE" ]; then
-            docker images --filter "label=service=marketdata-service" --format "{{.ID}}" | while read img; do
-              if [ "$img" != "${CURRENT_IMAGE:7:12}" ]; then
-                echo "Removing old image: $img"
-                docker rmi -f $img 2>/dev/null || true
-              fi
-            done
-          fi
-          docker images virtud142/metradingplat_marketdata_service --format "{{.ID}} {{.Tag}}" | grep -v "latest" | awk '{print $1}' | xargs -r docker rmi -f 2>/dev/null || true
+          ALL_IMAGES=$(docker images "virtud142/metradingplat_marketdata_service" --format "{{.ID}}")
+          for img in $ALL_IMAGES; do
+            FULL_IMG_ID=$(docker inspect "$img" --format='{{.Id}}' 2>/dev/null || echo "$img")
+            if [ -n "$CURRENT_IMAGE" ] && [ "$FULL_IMG_ID" = "$CURRENT_IMAGE" ]; then
+              echo "Skipping current active image: $img ($FULL_IMG_ID)"
+            else
+              echo "Removing old image: $img"
+              docker rmi -f "$img" || true
+            fi
+          done
 
       - name: Clean Stopped Containers of This Service
         run: |
           echo "Cleaning stopped containers for marketdata-service service..."
-          docker ps -a --filter "label=service=marketdata-service" --filter "status=exited" -q | xargs -r docker rm 2>/dev/null || true
+          docker ps -a --filter "label=project=metradingplat" --filter "label=service=marketdata-service" --filter "status=exited" -q | xargs -r docker rm -f || true
 
       - name: Final Status Check
         run: |
-          sleep 10
-          docker ps | grep marketdata-service
-          echo "--- Container Logs (last 20 lines) ---"
-          docker logs --tail 20 marketdata-service
+          echo "--- FINAL STATUS ---"
+          docker ps --filter "name=marketdata-service"
+          docker ps --filter "name=postgres-marketdata"
 
       - name: Release exclusive deploy lock
         if: always()
         run: |
-          LOCK_DIR="/tmp/metradingplat-deploy.lock"
-          if [ -f "$LOCK_DIR/owner" ] && [ "$(cat "$LOCK_DIR/owner")" = "${{ github.repository }}" ]; then
-            rm -rf "$LOCK_DIR"
-          fi
+          rm -rf "/tmp/metradingplat-deploy.lock"
+          echo "Lock de deploy liberado"
