@@ -147,7 +147,7 @@ func TestGetCurrentPrices_ConcurrentCallersEachBatchOnce(t *testing.T) {
 func TestGetCurrentPrices_LiveAndTrackerHitsSkipDBEntirely(t *testing.T) {
 	repo := &fakeSlowRepo{callDelay: time.Millisecond}
 	tracker := NewSnapshotTracker()
-	tracker.SeedLastClose(map[string]domain.Candle{"AAPL": {Close: 42}})
+	tracker.SeedLastClose([]string{"AAPL"}, map[string]domain.Candle{"AAPL": {Close: 42}})
 	svc := NewGetCurrentPricesService(repo, noLiveGateway{}, tracker)
 
 	prices := svc.GetCurrentPrices(context.Background(), []string{"AAPL"})

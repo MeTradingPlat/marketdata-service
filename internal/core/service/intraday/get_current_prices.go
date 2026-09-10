@@ -43,7 +43,9 @@ func (s *getCurrentPricesService) GetCurrentPrices(ctx context.Context, symbols 
 			continue
 		}
 		if price, _, ok := s.tracker.LastClose(symbol); ok {
-			result[symbol] = price
+			if price != 0 {
+				result[symbol] = price
+			}
 			continue
 		}
 		needDB = append(needDB, symbol)

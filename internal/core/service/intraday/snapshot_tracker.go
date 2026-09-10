@@ -113,9 +113,17 @@ func (t *SnapshotTracker) MergeReconcile(day time.Time, requested []string, snap
 // que devolver hasta que cada simbolo reciba su primer tick en vivo tras el
 // rollout, y GetSnapshotsBatch volveria a caer en la consulta lenta para el
 // universo entero justo despues de cada despliegue.
-func (t *SnapshotTracker) SeedLastClose(closes map[string]domain.Candle) {
+//
+// requested cubre el caso de simbolos sin ninguna vela M1 en BD (warrants,
+// simbolos iliquidos): se guardan con Price: 0 para que LastClose devuelva
+// ok=true, evitando que GetCurrentPrices vuelva a escanear Postgres para
+// buscar velas que no existen.
+func (t *SnapshotTracker) SeedLastClose(requested []string, closes map[string]domain.Candle) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for _, sym := range requested {
+		t.last[sym] = lastClose{}
+	}
 	for symbol, c := range closes {
 		t.last[symbol] = lastClose{Price: c.Close, Volume: c.Volume}
 	}
