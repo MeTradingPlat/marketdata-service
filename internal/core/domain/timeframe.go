@@ -31,13 +31,13 @@ const (
 	Y1  Timeframe = "Y1"
 )
 
-// BaseTimeframes son los unicos que TastyTrade entrega nativos -- el resto
-// se deriva agrupando estos (ver timeframe_aggregation.go).
-var BaseTimeframes = []Timeframe{M1, H1, D1}
+// BaseTimeframes son los unicos que TastyTrade entrega nativos y se guardan
+// en la tabla candles -- el resto se deriva agrupando estos (ver timeframe_aggregation.go).
+var BaseTimeframes = []Timeframe{M1, D1}
 
 func (t Timeframe) IsBase() bool {
 	switch t {
-	case M1, H1, D1:
+	case M1, D1:
 		return true
 	default:
 		return false

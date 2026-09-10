@@ -56,6 +56,13 @@ func (s *getIntradaySnapshotService) GetSnapshot(ctx context.Context, symbol str
 		return snap, nil
 	}
 
+	if s.tracker != nil {
+		if price, _, ok := s.tracker.LastClose(symbol); ok && price > 0 {
+			snap.PrevClose = price
+			return snap, nil
+		}
+	}
+
 	// prevClose = cierre REGULAR de la sesion anterior (subasta 16:00 ET)
 	// sacado de M1 -- la vela D1 que se guardaba antes cierra a las 20:00 ET
 	// con el post-market incluido, que no es el cierre oficial que usa el

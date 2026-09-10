@@ -6,9 +6,9 @@ import "time"
 // agruparlo y con que ancho de bucket. Confirmado contra dxFeed real: el
 // alineamiento por defecto (CandleAlignment.MIDNIGHT, sin el parametro
 // a=s de sesion) es UTC, no hora de mercado -- coincide con lo que ya
-// vemos en M1/H1/D1 propios (D1 en T00:00:00Z, H1 en horas exactas UTC),
+// vemos en M1/D1 propios (D1 en T00:00:00Z, M1 en minutos exactos UTC),
 // asi que agrupar con limites UTC reproduce la misma alineacion que
-// tendria un M5/H4/etc. nativo de TastyTrade, no una convencion inventada.
+// tendria un M5/H1/H4/etc. nativo de TastyTrade, no una convencion inventada.
 type aggregationSpec struct {
 	Source Timeframe
 	Bucket string
@@ -26,10 +26,11 @@ var derivedTimeframes = map[Timeframe]aggregationSpec{
 	M15: {M1, "15 minutes", 15 * time.Minute},
 	M30: {M1, "30 minutes", 30 * time.Minute},
 	M45: {M1, "45 minutes", 45 * time.Minute},
-	H2:  {H1, "2 hours", 2 * time.Hour},
-	H3:  {H1, "3 hours", 3 * time.Hour},
-	H4:  {H1, "4 hours", 4 * time.Hour},
-	H12: {H1, "12 hours", 12 * time.Hour},
+	H1:  {M1, "1 hour", time.Hour},
+	H2:  {M1, "2 hours", 2 * time.Hour},
+	H3:  {M1, "3 hours", 3 * time.Hour},
+	H4:  {M1, "4 hours", 4 * time.Hour},
+	H12: {M1, "12 hours", 12 * time.Hour},
 	D2:  {D1, "2 days", 2 * 24 * time.Hour},
 	D3:  {D1, "3 days", 3 * 24 * time.Hour},
 	W1:  {D1, "7 days", 7 * 24 * time.Hour},
@@ -42,7 +43,7 @@ var derivedTimeframes = map[Timeframe]aggregationSpec{
 // Aggregation devuelve, para un timeframe derivado, el timeframe base del
 // que agruparlo, el ancho de bucket (formato interval de Postgres) y un
 // margen de fecha aproximado para acotar la consulta. ok es false para
-// timeframes base (M1/H1/D1) o invalidos.
+// timeframes base (M1/D1) o invalidos.
 func (t Timeframe) Aggregation() (source Timeframe, bucket string, approxPeriod time.Duration, ok bool) {
 	spec, ok := derivedTimeframes[t]
 	return spec.Source, spec.Bucket, spec.approxPeriod, ok
