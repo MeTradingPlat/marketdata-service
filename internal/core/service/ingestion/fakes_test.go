@@ -64,6 +64,10 @@ type fakeRepo struct {
 	saveErr   error
 	getResult []domain.Candle
 	watermark *time.Time
+
+	seriesResult    map[string][]domain.Candle
+	seriesErr       error
+	getCandlesCalls int
 }
 
 func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
@@ -75,6 +79,12 @@ func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle, withWaterm
 }
 
 func (f *fakeRepo) GetSeries(ctx context.Context, symbols []string, tf domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
+	if f.seriesErr != nil {
+		return nil, f.seriesErr
+	}
+	if f.seriesResult != nil {
+		return f.seriesResult, nil
+	}
 	return map[string][]domain.Candle{}, nil
 }
 
@@ -87,6 +97,7 @@ func (f *fakeRepo) GetSeriesAggregatedBatch(ctx context.Context, symbols []strin
 }
 
 func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
+	f.getCandlesCalls++
 	return f.getResult, nil
 }
 

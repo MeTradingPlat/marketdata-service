@@ -219,30 +219,43 @@ func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []strin
 
 	if source, bucket, approxPeriod, ok := timeframe.Aggregation(); ok {
 		if batch, err := s.repo.GetSeriesAggregatedBatch(ctx, missing, timeframe, source, bucket, approxPeriod, bars); err == nil {
-			for symbol, candles := range batch {
-				s.cache.put(candleCacheKey(symbol, timeframe, bars, nil), candles)
-				result[symbol] = s.freshen(symbol, candles, timeframe, bars)
-			}
-			// Un simbolo sin filas en el batch (sin dato M1 real, ~9.7% del
-			// universo NYSE+NASDAQ+AMEX confirmado en vivo el 2026-08-23) no
-			// aparece en batch y sin este cacheo quedaba "missing" para
-			// siempre -- pagando el JOIN LATERAL de nuevo en CADA llamada,
-			// sin ningun beneficio del cache. Mismo comportamiento que ya
-			// tiene GetCandles (put incondicional aunque candles sea vacio).
-			for _, symbol := range missing {
-				if _, ok := batch[symbol]; !ok {
-					s.cache.put(candleCacheKey(symbol, timeframe, bars, nil), []domain.Candle{})
-					if fresh := s.freshen(symbol, nil, timeframe, bars); len(fresh) > 0 {
-						result[symbol] = fresh
-					}
-				}
-			}
-			return result
+			return s.absorbBatch(missing, batch, timeframe, bars, result)
 		}
+	} else if batch, err := s.repo.GetSeries(ctx, missing, timeframe, bars); err == nil {
+		// Timeframe base (M1/D1): GetSeries ya resuelve el lote completo en
+		// una sola consulta (ver CandleRepository.GetSeries), igual que
+		// GetSeriesAggregatedBatch para los derivados -- sin esta rama, todo
+		// batch de un timeframe base caia siempre a getCandlesBatchPerSymbol
+		// (4 workers, 2 round trips POR SIMBOLO), que con lotes de miles de
+		// simbolos (ej. RANGE_EXTREME_PROXIMITY en D1) tardaba mas que el
+		// timeout de 90s del cliente. Confirmado en vivo el 2026-09-11.
+		return s.absorbBatch(missing, batch, timeframe, bars, result)
 	}
 
 	for symbol, candles := range s.getCandlesBatchPerSymbol(ctx, missing, timeframe, bars) {
 		result[symbol] = candles
+	}
+	return result
+}
+
+// absorbBatch aplica al resultado de un batch (agregado o base) el mismo
+// tratamiento: cachear cada serie (incluida vacia, para no volver a pagar la
+// consulta en cada llamada -- ver comentario historico sobre el ~9.7% del
+// universo sin dato M1 real) y aplicar freshen antes de devolver.
+func (s *getCandlesService) absorbBatch(
+	missing []string, batch map[string][]domain.Candle, timeframe domain.Timeframe, bars int, result map[string][]domain.Candle,
+) map[string][]domain.Candle {
+	for symbol, candles := range batch {
+		s.cache.put(candleCacheKey(symbol, timeframe, bars, nil), candles)
+		result[symbol] = s.freshen(symbol, candles, timeframe, bars)
+	}
+	for _, symbol := range missing {
+		if _, ok := batch[symbol]; !ok {
+			s.cache.put(candleCacheKey(symbol, timeframe, bars, nil), []domain.Candle{})
+			if fresh := s.freshen(symbol, nil, timeframe, bars); len(fresh) > 0 {
+				result[symbol] = fresh
+			}
+		}
 	}
 	return result
 }

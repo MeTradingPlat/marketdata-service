@@ -2,6 +2,7 @@ package ingestion_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -99,6 +100,53 @@ func TestGetCandles_DerivedTimeframeUpToNow_FoldsFreshM1FromCache(t *testing.T) 
 // armar ese bucket con las pocas M1 que hay produciria un OHLCV incompleto
 // (le falta la parte de atras, que ya salio de la ventana del cache) Y
 // ademas duplicaria la fila que ya traia la BD para ese mismo bucket.
+// Regression 2026-09-11: un lote de un timeframe BASE (D1, tambien M1) caia
+// siempre a getCandlesBatchPerSymbol (4 workers, 2 round trips por simbolo) --
+// con RANGE_EXTREME_PROXIMITY evaluando D1 sobre miles de simbolos, eso
+// disparaba timeouts reales en produccion. GetSeries ya resuelve el lote
+// completo en una sola consulta (usado por RefreshBeta); GetCandlesBatch debe
+// usarlo para D1/M1 igual que ya usa GetSeriesAggregatedBatch para H1/M15/etc.
+func TestGetCandlesBatch_BaseTimeframe_UsesSeriesNotPerSymbolFallback(t *testing.T) {
+	repo := &fakeRepo{
+		seriesResult: map[string][]domain.Candle{
+			"AAPL": {{Symbol: "AAPL", Timeframe: domain.D1, Close: 230}},
+			"MSFT": {{Symbol: "MSFT", Timeframe: domain.D1, Close: 410}},
+		},
+	}
+	svc := ingestion.NewGetCandlesService(repo, livecandles.NewDefaultRecentCache())
+
+	got := svc.GetCandlesBatch(context.Background(), []string{"AAPL", "MSFT"}, domain.D1, 10)
+
+	if len(got) != 2 {
+		t.Fatalf("got %d symbols, want 2", len(got))
+	}
+	if got["AAPL"][0].Close != 230 || got["MSFT"][0].Close != 410 {
+		t.Errorf("unexpected candle data: %+v", got)
+	}
+	if repo.getCandlesCalls != 0 {
+		t.Errorf("expected the slow per-symbol fallback to NOT run, but GetCandles was called %d times", repo.getCandlesCalls)
+	}
+}
+
+// Si GetSeries falla, el lote debe seguir resolviendose (degradado) por el
+// camino per-simbolo de siempre, no devolver vacio.
+func TestGetCandlesBatch_BaseTimeframe_FallsBackToPerSymbolOnSeriesError(t *testing.T) {
+	repo := &fakeRepo{
+		seriesErr: errors.New("boom"),
+		getResult: []domain.Candle{{Symbol: "AAPL", Timeframe: domain.D1, Close: 230}},
+	}
+	svc := ingestion.NewGetCandlesService(repo, livecandles.NewDefaultRecentCache())
+
+	got := svc.GetCandlesBatch(context.Background(), []string{"AAPL"}, domain.D1, 10)
+
+	if len(got) != 1 || got["AAPL"][0].Close != 230 {
+		t.Fatalf("expected the per-symbol fallback result, got %+v", got)
+	}
+	if repo.getCandlesCalls == 0 {
+		t.Errorf("expected the per-symbol fallback to run when GetSeries fails")
+	}
+}
+
 func TestGetCandles_BucketWiderThanCacheCoverage_LeavesBaseUntouched(t *testing.T) {
 	hourStart := time.Date(2026, 8, 27, 18, 0, 0, 0, time.UTC)
 	fromDB := domain.Candle{
