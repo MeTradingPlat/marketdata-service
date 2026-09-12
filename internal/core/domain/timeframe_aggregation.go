@@ -26,7 +26,11 @@ var derivedTimeframes = map[Timeframe]aggregationSpec{
 	M15: {M1, "15 minutes", 15 * time.Minute},
 	M30: {M1, "30 minutes", 30 * time.Minute},
 	M45: {M1, "45 minutes", 45 * time.Minute},
-	H1:  {M1, "1 hour", time.Hour},
+	// H1 NO esta aca -- volvio a ser timeframe base con su propio backfill
+	// nativo de TastyTrade (ver universe_cycle.go FASE 2), restaurado el
+	// 2026-09-11 a pedido expreso -- se habia sacado de aca el 2026-09-10
+	// para derivarlo al vuelo desde M1, pero eso dejaba H1 sin dato propio
+	// verificado en Postgres.
 	H2:  {M1, "2 hours", 2 * time.Hour},
 	H3:  {M1, "3 hours", 3 * time.Hour},
 	H4:  {M1, "4 hours", 4 * time.Hour},

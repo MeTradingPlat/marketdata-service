@@ -166,6 +166,16 @@ func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Close() marca closing=true pero no cancela ctx (de vida larga,
+			// del barrido/proceso) -- sin este chequeo, esta goroutine (y el
+			// DxLinkConn entero, que sigue vivo mientras algo lo referencie)
+			// quedaba corriendo para siempre tras cada cierre en cada frontera
+			// D1->H1->M1, llamando a scheduleReconnect solo para que se
+			// auto-descarte por closing=true. Confirmado como causa de fuga
+			// de memoria acumulada entre reinicios (2026-09-11).
+			if c.closing.Load() {
+				return
+			}
 			if !c.Connected() {
 				c.scheduleReconnect(ctx)
 				continue
@@ -187,6 +197,10 @@ func (c *DxLinkConn) keepaliveLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Mismo motivo que en healthCheckLoop: Close() no cancela ctx.
+			if c.closing.Load() {
+				return
+			}
 			if c.Connected() {
 				if err := c.send(keepaliveMessage{Type: "KEEPALIVE", Channel: 0}); err != nil {
 					log.Error().Err(err).Msg("dxlink: failed to send keepalive")

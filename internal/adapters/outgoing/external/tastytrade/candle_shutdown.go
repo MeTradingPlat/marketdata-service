@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/rs/zerolog/log"
@@ -115,5 +116,10 @@ func (p *CandlePool) CloseAllConnections() {
 		pc.conn.Close()
 	}
 
-	log.Info().Int("connections", len(conns)).Msg("closed all dxlink connections at phase boundary")
+	// goroutines DESPUES de cerrar: si healthCheckLoop/keepaliveLoop de las
+	// conexiones recien cerradas no se apagan solas, este numero no baja
+	// entre fronteras aunque las conexiones ya esten "cerradas" -- la unica
+	// forma de confirmarlo desde los logs sin exponer pprof.
+	log.Info().Int("connections", len(conns)).Int("goroutines", runtime.NumGoroutine()).
+		Msg("closed all dxlink connections at phase boundary")
 }

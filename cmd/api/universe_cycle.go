@@ -47,16 +47,16 @@ func refreshWithRetry(name string, fn func() error) {
 // Orden del barrido (diseno original del usuario, pensado para MINIMIZAR
 // carga en el servidor): D1 primero con lotes de 100 simbolos por
 // suscripcion; al terminar se desuscribe y se CIERRAN las conexiones para
-// asegurarse de que la fase termino; luego M1, que se queda suscrito para
-// siempre (H1 y demas timeframes intradiarios se derivan en vivo de M1).
-// Cada fase arranca con cero sesiones abiertas ante TastyTrade -- confirmado
-// en vivo que arrastrar conexiones de una fase a la siguiente puede superar el
-// limite de sesiones concurrentes. Cada simbolo retoma desde su propio watermark
+// asegurarse de que la fase termino; luego H1 con el mismo patron; y por
+// ultimo M1, que se queda suscrito para siempre. Cada fase arranca con
+// cero sesiones abiertas ante TastyTrade -- confirmado en vivo que
+// arrastrar conexiones de una fase a la siguiente puede superar el limite
+// de sesiones concurrentes. Cada simbolo retoma desde su propio watermark
 // (con replay de lo perdido en M1), sin hueco real de datos.
 //
 // Los fundamentales que son REST puro (trading status, market metrics,
 // earnings history, y en background el externo de SEC/FINRA) van ANTES de
-// D1/M1, no despues -- no compiten por conexiones DxLink con las fases
+// D1/H1/M1, no despues -- no compiten por conexiones DxLink con las fases
 // de velas y no hay motivo para que esperen 20-30 min a que el barrido
 // termine. Solo beta (D1) y prevClose/prevPostMarketVolume (M1) quedan
 // despues de su fase respectiva, porque esos si dependen de velas propias
@@ -78,10 +78,10 @@ func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Ma
 
 func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
 	// Pipeline del backfill: D1 primero, se cierran las conexiones, se calcula
-	// beta (D1), luego M1 (que se queda suscrito en vivo). H1 y demas timeframes
-	// intradiarios se derivan al vuelo desde M1.
-	// backfilling bloquea SOLO las rutas de signal-processing-service mientras dura
-	// (ver router.go/BackfillGate). Las rutas del frontend NO se bloquean.
+	// beta (D1), luego H1 (se cierra, backfill nativo propio), y por ultimo
+	// M1 que se queda suscrito. backfilling bloquea SOLO las rutas de
+	// signal-processing-service mientras dura (ver router.go/BackfillGate).
+	// Las rutas del frontend NO se bloquean.
 	backfilling.Store(true)
 	defer backfilling.Store(false)
 
@@ -185,12 +185,18 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 
 	// Simbolos sin D1 nuevo hace demasiado (fusion de SPAC, deslistado, nota
 	// vencida -- TastyTrade los sigue listando "activos" pero dxFeed no manda
-	// mas dato) no pagan M1/suscripcion en vivo -- el D1 de ARRIBA, que
+	// mas dato) no pagan H1/M1/suscripcion en vivo -- el D1 de ARRIBA, que
 	// SIEMPRE corre para el universo completo, es la unica señal de "¿ya
 	// volvio?" que hace falta (ver FilterStaleSymbols).
 	activeTracked := catchup.FilterStaleSymbols(ctx, candles, tracked, time.Now())
 
-	// FASE 2: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
+	// FASE 2: H1, desde cero sesiones (RunSweepPhase cierra al terminar) --
+	// restaurada el 2026-09-11: H1 volvio a ser timeframe base con backfill
+	// nativo propio (ver timeframe_aggregation.go), no un derivado de M1
+	// calculado al vuelo.
+	catchup.RunSweepPhase(ctx, gateway, candles, ingest, activeTracked, domain.H1, cfg.SweepWorkers)
+
+	// FASE 3: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
 	// las velas M1 de la sesion anterior, asi que va DESPUES del rollout
 	// M1 -- corria antes con la tabla M1 vacia en un refill en frio y
 	// calculaba 0). Sin verificacion de huecos de 10 dias: cada vela

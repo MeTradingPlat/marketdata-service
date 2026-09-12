@@ -136,6 +136,7 @@ func main() {
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo, fundamentalsCache)
 		StartSessionResetLoop(ctx, cfg, oauth, gateway)
+		StartRuntimeStatsLoop(ctx)
 
 		r.Init()
 		address := fmt.Sprintf(":%s", cfg.ServerPort)
