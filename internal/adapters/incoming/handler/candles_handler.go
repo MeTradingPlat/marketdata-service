@@ -12,14 +12,28 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// lightBatchMaxSymbols: por debajo de este tamano, un request de
+// /historical/batch (ej. pivots del frontend, 1 simbolo) usa lightBatchSema
+// en vez de batchSema -- confirmado en vivo el 2026-09-12 que un pivots de
+// UN simbolo tardaba 14-15s por request porque hacia fila detras de los
+// escaneres (cientos/miles de simbolos) por el mismo cupo de 4. El riesgo de
+// memoria que batchSema evita (~9MB sin comprimir por respuesta) no aplica a
+// un puñado de simbolos, asi que no tiene sentido que compitan por el mismo
+// semaforo.
+const lightBatchMaxSymbols = 10
+const lightBatchConcurrency = 16
+
 type CandlesHandler struct {
 	service in.GetCandlesService
 	current in.GetCurrentCandleService
 
 	// batchSema: ver el comentario de MAX_CONCURRENT_BATCH_RESPONSES en
-	// config.go -- acota cuantas respuestas de /historical/batch (~9MB sin
-	// comprimir cada una) se arman en memoria a la vez.
+	// config.go -- acota cuantas respuestas GRANDES de /historical/batch
+	// (~9MB sin comprimir cada una) se arman en memoria a la vez.
 	batchSema chan struct{}
+	// lightBatchSema: ver lightBatchMaxSymbols -- cupo aparte, mas generoso,
+	// para requests chicos que no deben esperar detras de un escaner.
+	lightBatchSema chan struct{}
 }
 
 func NewCandlesHandler(service in.GetCandlesService, current in.GetCurrentCandleService, cfg *configs.Config) *CandlesHandler {
@@ -27,7 +41,12 @@ func NewCandlesHandler(service in.GetCandlesService, current in.GetCurrentCandle
 	if max <= 0 {
 		max = 4
 	}
-	return &CandlesHandler{service: service, current: current, batchSema: make(chan struct{}, max)}
+	return &CandlesHandler{
+		service:        service,
+		current:        current,
+		batchSema:      make(chan struct{}, max),
+		lightBatchSema: make(chan struct{}, lightBatchConcurrency),
+	}
 }
 
 // GetCurrentCandle sirve la vela EN FORMACION del simbolo+timeframe (query

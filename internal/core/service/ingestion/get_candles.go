@@ -11,6 +11,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
+	"golang.org/x/sync/singleflight"
 )
 
 // candleCacheTTL: las consultas de velas repetidas (el frontend cambia de
@@ -93,10 +94,25 @@ type getCandlesService struct {
 	repo        out.CandleRepository
 	cache       candleCache
 	recentCache *livecandles.RecentCache
+	// fetchGroup colapsa pedidos concurrentes de la MISMA clave (simbolo +
+	// timeframe + bars + before) en una sola consulta real -- sin esto, dos
+	// llamadas que llegan al mismo tiempo (ej. dos pestañas del frontend
+	// mirando el mismo simbolo, o un escaner y un pivots pidiendo D1 de AAPL
+	// a la vez) ambas ven el cache vacio y pagan la misma consulta a
+	// Postgres por duplicado -- mismo patron ya usado en oauth.go para el
+	// mismo tipo de problema (confirmado en vivo alla: llamadas concurrentes
+	// duplicando trabajo real).
+	fetchGroup singleflight.Group
+	// coalescer: mismo motivo que fetchGroup, para GetCandlesBatch -- ver
+	// batchCoalescer.
+	coalescer *batchCoalescer
 }
 
 func NewGetCandlesService(repo out.CandleRepository, recentCache *livecandles.RecentCache) in.GetCandlesService {
-	return &getCandlesService{repo: repo, cache: candleCache{entries: make(map[string]candleCacheEntry)}, recentCache: recentCache}
+	return &getCandlesService{
+		repo: repo, cache: candleCache{entries: make(map[string]candleCacheEntry)},
+		recentCache: recentCache, coalescer: newBatchCoalescer(),
+	}
 }
 
 func (s *getCandlesService) GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
@@ -105,12 +121,14 @@ func (s *getCandlesService) GetCandles(ctx context.Context, symbol string, timef
 	if cached, ok := s.cache.get(key); ok {
 		candles = cached
 	} else {
-		fetched, err := s.repo.GetCandles(ctx, symbol, timeframe, bars, before)
+		fetched, err, _ := s.fetchGroup.Do(key, func() (interface{}, error) {
+			return s.repo.GetCandles(ctx, symbol, timeframe, bars, before)
+		})
 		if err != nil {
 			return nil, fmt.Errorf("getting candles for %s %s: %w", symbol, timeframe, err)
 		}
-		s.cache.put(key, fetched)
-		candles = fetched
+		candles = fetched.([]domain.Candle)
+		s.cache.put(key, candles)
 	}
 	// "hasta ahora" (before=nil): la cola de lo que RecentCache ya cubre se
 	// reemplaza por su version agregada en vivo, sin importar si el resto
@@ -202,17 +220,55 @@ const candlesBatchFallbackWorkers = 4
 // de siempre.
 func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) map[string][]domain.Candle {
 	result := make(map[string][]domain.Candle, len(symbols))
-	missing := make([]string, 0, len(symbols))
+	symbolByKey := make(map[string]string, len(symbols))
+	missingKeys := make([]string, 0, len(symbols))
 	for _, symbol := range symbols {
-		if candles, ok := s.cache.get(candleCacheKey(symbol, timeframe, bars, nil)); ok {
+		key := candleCacheKey(symbol, timeframe, bars, nil)
+		if candles, ok := s.cache.get(key); ok {
 			// GetCandlesBatch no tiene parametro `before` -- toda llamada es
 			// "hasta ahora", asi que el cache de 60s (bulk historico, cacheable
 			// sin riesgo) siempre se refresca con RecentCache antes de servirse.
 			result[symbol] = s.freshen(symbol, candles, timeframe, bars)
 			continue
 		}
-		missing = append(missing, symbol)
+		symbolByKey[key] = symbol
+		missingKeys = append(missingKeys, key)
 	}
+	if len(missingKeys) == 0 {
+		return result
+	}
+
+	// claim/join (ver batchCoalescer): si otro GetCandlesBatch concurrente
+	// (otro escaner, u otro caller) ya esta pidiendo alguno de estos mismos
+	// simbolos ahora mismo, este caller no repite esa consulta -- espera el
+	// resultado en vez de duplicarla.
+	ownKeys, joinKeys := s.coalescer.claim(missingKeys)
+	ownSymbols := make([]string, len(ownKeys))
+	for i, key := range ownKeys {
+		ownSymbols[i] = symbolByKey[key]
+	}
+
+	owned := s.fetchAndCacheMissing(ctx, ownSymbols, timeframe, bars)
+	for symbol, candles := range owned {
+		result[symbol] = candles
+	}
+	s.coalescer.resolve(ownKeys, symbolByKey, owned)
+
+	for key, pf := range joinKeys {
+		<-pf.done
+		if pf.hasData {
+			result[symbolByKey[key]] = pf.candles
+		}
+	}
+	return result
+}
+
+// fetchAndCacheMissing resuelve `missing` (ya filtrado por cache y por
+// coalescer -- solo lo que este caller reclamo de verdad) con el camino de
+// siempre: lote agregado/base en una sola consulta, o per-simbolo si ambos
+// fallan. Deja todo cacheado antes de devolver.
+func (s *getCandlesService) fetchAndCacheMissing(ctx context.Context, missing []string, timeframe domain.Timeframe, bars int) map[string][]domain.Candle {
+	result := make(map[string][]domain.Candle, len(missing))
 	if len(missing) == 0 {
 		return result
 	}

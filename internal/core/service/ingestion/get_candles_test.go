@@ -100,6 +100,112 @@ func TestGetCandles_DerivedTimeframeUpToNow_FoldsFreshM1FromCache(t *testing.T) 
 // armar ese bucket con las pocas M1 que hay produciria un OHLCV incompleto
 // (le falta la parte de atras, que ya salio de la ventana del cache) Y
 // ademas duplicaria la fila que ya traia la BD para ese mismo bucket.
+// Regression 2026-09-12: 2 pedidos concurrentes de la MISMA clave (simbolo +
+// timeframe + bars) en un cache-miss pagaban 2 consultas reales a Postgres
+// -- confirmado en vivo el mismo dia con pivots del frontend haciendo fila
+// detras de escaneres. GetCandles debe colapsarlos en una sola llamada al
+// repo (singleflight), sin importar cuantos pedidos identicos lleguen a la
+// vez.
+func TestGetCandles_ConcurrentIdenticalRequests_CollapseIntoOneFetch(t *testing.T) {
+	repo := &fakeRepo{
+		getResult:         []domain.Candle{{Symbol: "AAPL"}},
+		getCandlesStarted: make(chan struct{}, 1),
+		getCandlesGate:    make(chan struct{}),
+	}
+	svc := ingestion.NewGetCandlesService(repo, livecandles.NewDefaultRecentCache())
+
+	type result struct {
+		candles []domain.Candle
+		err     error
+	}
+	results := make(chan result, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			got, err := svc.GetCandles(context.Background(), "AAPL", domain.D1, 10, nil)
+			results <- result{got, err}
+		}()
+	}
+
+	// Solo debe llegar UNA señal de arranque -- singleflight.Do bloquea al
+	// segundo caller ANTES de que toque el repo, nunca llega a ejecutarlo.
+	<-repo.getCandlesStarted
+	close(repo.getCandlesGate)
+
+	for i := 0; i < 2; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("unexpected error: %v", r.err)
+		}
+		if len(r.candles) != 1 {
+			t.Fatalf("got %d candles, want 1", len(r.candles))
+		}
+	}
+	if repo.getCandlesCalls != 1 {
+		t.Errorf("expected exactly 1 real fetch for 2 concurrent identical requests, got %d", repo.getCandlesCalls)
+	}
+}
+
+// Regression 2026-09-12: 2 llamadas concurrentes a GetCandlesBatch de
+// escaneres DISTINTOS con universos solapados no debian pagar la misma
+// consulta para el simbolo compartido -- confirmado en vivo como una fuente
+// real de trabajo duplicado (varios escaneres corriendo ~cada 5min con alta
+// superposicion entre si). El caller B pide SOLO el simbolo compartido (sin
+// nada propio): si el coalescer funciona, B nunca debe tocar el repo, y
+// el unico llamado real (del caller A) debe pedir los 2 simbolos de A.
+func TestGetCandlesBatch_ConcurrentOverlappingCallers_ShareOneFetchForCommonSymbol(t *testing.T) {
+	repo := &fakeRepo{
+		seriesResult: map[string][]domain.Candle{
+			"AAPL": {{Symbol: "AAPL", Timeframe: domain.D1}},
+			"MSFT": {{Symbol: "MSFT", Timeframe: domain.D1}},
+		},
+		getSeriesStarted: make(chan struct{}, 1),
+		getSeriesGate:    make(chan struct{}),
+	}
+	svc := ingestion.NewGetCandlesService(repo, livecandles.NewDefaultRecentCache())
+
+	type result struct{ got map[string][]domain.Candle }
+	resultsA := make(chan result, 1)
+	resultsB := make(chan result, 1)
+
+	go func() {
+		got := svc.GetCandlesBatch(context.Background(), []string{"AAPL", "MSFT"}, domain.D1, 10)
+		resultsA <- result{got}
+	}()
+	// Esperar a que A ya haya reclamado (claim) y este bloqueada DENTRO del
+	// fetch real, antes de arrancar B -- asi B encuentra "MSFT" ya en vuelo
+	// por A de forma deterministica, no por suerte de scheduling.
+	<-repo.getSeriesStarted
+
+	go func() {
+		got := svc.GetCandlesBatch(context.Background(), []string{"MSFT"}, domain.D1, 10)
+		resultsB <- result{got}
+	}()
+	// B no debe tocar el repo en absoluto (su unico simbolo ya esta en
+	// vuelo) -- si lo hiciera, quedaria bloqueada esperando el gate y este
+	// segundo receive de getSeriesStarted nunca llegaria a tiempo. Un pequeño
+	// margen es suficiente porque claim() no bloquea (es solo un mutex).
+	select {
+	case <-repo.getSeriesStarted:
+		t.Fatal("caller B no debia llamar a GetSeries -- su unico simbolo ya estaba en vuelo por A")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(repo.getSeriesGate)
+
+	rA := <-resultsA
+	rB := <-resultsB
+
+	if len(rA.got["AAPL"]) != 1 || len(rA.got["MSFT"]) != 1 {
+		t.Fatalf("caller A: resultado incompleto: %+v", rA.got)
+	}
+	if len(rB.got["MSFT"]) != 1 {
+		t.Fatalf("caller B: no recibio MSFT via coalescer: %+v", rB.got)
+	}
+	if len(repo.getSeriesCalls) != 1 {
+		t.Fatalf("esperaba exactamente 1 llamada real a GetSeries, hubo %d: %v", len(repo.getSeriesCalls), repo.getSeriesCalls)
+	}
+}
+
 // Regression 2026-09-11: un lote de un timeframe BASE (D1, tambien M1) caia
 // siempre a getCandlesBatchPerSymbol (4 workers, 2 round trips por simbolo) --
 // con RANGE_EXTREME_PROXIMITY evaluando D1 sobre miles de simbolos, eso

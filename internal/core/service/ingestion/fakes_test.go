@@ -2,6 +2,7 @@ package ingestion_test
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -67,7 +68,22 @@ type fakeRepo struct {
 
 	seriesResult    map[string][]domain.Candle
 	seriesErr       error
+	getCandlesMu    sync.Mutex
 	getCandlesCalls int
+	// getCandlesStarted/getCandlesGate: usados solo por el test de
+	// singleflight -- si estan seteados, GetCandles avisa que arranco y
+	// despues espera a que el test la libere, para garantizar que 2
+	// llamadas concurrentes esten realmente las 2 en vuelo a la vez.
+	getCandlesStarted chan struct{}
+	getCandlesGate    chan struct{}
+
+	// getSeriesStarted/getSeriesGate: mismo mecanismo que arriba, para el
+	// test del batchCoalescer -- avisa cuando arranca y espera a que el
+	// test la libere.
+	seriesMu         sync.Mutex
+	getSeriesCalls   [][]string
+	getSeriesStarted chan struct{}
+	getSeriesGate    chan struct{}
 }
 
 func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
@@ -79,6 +95,15 @@ func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle, withWaterm
 }
 
 func (f *fakeRepo) GetSeries(ctx context.Context, symbols []string, tf domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
+	f.seriesMu.Lock()
+	f.getSeriesCalls = append(f.getSeriesCalls, append([]string(nil), symbols...))
+	f.seriesMu.Unlock()
+	if f.getSeriesStarted != nil {
+		f.getSeriesStarted <- struct{}{}
+	}
+	if f.getSeriesGate != nil {
+		<-f.getSeriesGate
+	}
 	if f.seriesErr != nil {
 		return nil, f.seriesErr
 	}
@@ -97,7 +122,15 @@ func (f *fakeRepo) GetSeriesAggregatedBatch(ctx context.Context, symbols []strin
 }
 
 func (f *fakeRepo) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
+	f.getCandlesMu.Lock()
 	f.getCandlesCalls++
+	f.getCandlesMu.Unlock()
+	if f.getCandlesStarted != nil {
+		f.getCandlesStarted <- struct{}{}
+	}
+	if f.getCandlesGate != nil {
+		<-f.getCandlesGate
+	}
 	return f.getResult, nil
 }
 
