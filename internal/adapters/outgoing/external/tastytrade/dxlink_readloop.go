@@ -52,6 +52,11 @@ func (c *DxLinkConn) notifyHandshakeFailure(err error) {
 	// Confirmado en vivo el 2026-08-30/31: el barrido pedia conexiones
 	// nuevas para el backfill y cada una se cerraba asi durante el storm.
 	if ce, ok := err.(*websocket.CloseError); ok && ce.Code == websocket.CloseNormalClosure {
+		// Visibilidad, no logica nueva -- confirmar con datos reales (no una
+		// sola observacion) si vale la pena cancelar dials en vuelo cuando
+		// el breaker se activa, antes de tocar codigo historicamente fragil
+		// (ver docs/dxlink-session-incidents.md).
+		log.Warn().Msg("dxlink session saturation detected during handshake (new connection rejected)")
 		c.markSessionSaturated()
 	}
 
