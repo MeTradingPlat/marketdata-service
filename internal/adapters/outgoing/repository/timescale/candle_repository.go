@@ -195,40 +195,64 @@ func (r *CandleRepository) GetSeriesPriority(ctx context.Context, symbols []stri
 	return getSeriesFrom(ctx, r.snapshotPool, symbols, timeframe, bars)
 }
 
+// seriesLookbackWindow calcula cuanto retroceder en el tiempo para
+// encontrar `bars` velas de una temporalidad dada -- funcion pura, separada
+// de getSeriesFrom, para poder testearla sin tocar la base de datos.
+//
+// Sin cota de ts, ROW_NUMBER() OVER (PARTITION BY symbol_id ...) tiene que
+// leer y ordenar TODA la historia de cada simbolo antes de recortar a
+// `bars` -- para D1 eso son años de chunks comprimidos. Confirmado en vivo
+// el 2026-08-21: una consulta de este tipo llevaba 68+ segundos activa
+// bajo carga concurrente de escaneres (pg_stat_activity). JOIN LATERAL
+// (la solucion que funciono para el mismo problema en seriesAggregatedBatchSQL)
+// NO sirve aca: con D1 abarcando cientos de chunks el planner tarda 11+
+// segundos SOLO planificando un lateral por simbolo. La cota de ts deja
+// que TimescaleDB excluya chunks viejos enteros antes de siquiera
+// descomprimirlos.
+//
+// minLookback pisa la formula cuando da una ventana absurdamente angosta
+// -- SeedLastClose llama esto con bars=1 (M1: bars*3+60 = 63 MINUTOS), a
+// proposito para sobrevivir el hueco entre el cierre de ayer y el primer
+// tick de hoy (ver el comentario de SnapshotTracker.last). Confirmado en
+// vivo el 2026-08-22: un arranque en fin de semana (horas despues del
+// cierre del viernes) caia fuera de esos 63 minutos, la siembra volvia 0
+// simbolos, y CADA lookup de precio en vivo terminaba cayendo al fallback
+// individual de resolvePrice en vez de servirse del tracker -- 10 dias
+// cubre de sobra cualquier fin de semana largo sin resucitar el problema
+// original.
+//
+// D1+: ~5 dias habiles cada 7 calendario -- bars*3 sobreestima ~2x lo que
+// realmente hace falta. Confirmado en vivo: pivots pide bars=1038 (4 anios
+// de historial) y bars*3+60 daba una ventana de 8.7 anios, forzando
+// escanear/descomprimir miles de chunks de mas para UN solo simbolo (37+s
+// activo en pg_stat_activity, sin ningun lock de por medio). x1.6 (la
+// proporcion real mas colchon de feriados) da ~4.7 anios para ese mismo
+// caso -- margen comodo sin ser 2x mas ancho de lo necesario. Los
+// timeframes intradia (M1/M5/H1/etc.) no tienen este problema -- su hueco
+// de fin de semana es chico frente al total de `bars`, asi que siguen con
+// la formula generica de siempre (igual de generosa que el ensanchamiento
+// de ventana de GetCandles, sobra para los pedidos chicos que hace ese
+// camino).
+func seriesLookbackWindow(bars int, duration time.Duration) time.Duration {
+	const minLookback = 10 * 24 * time.Hour
+	var window time.Duration
+	if duration >= 24*time.Hour {
+		window = time.Duration(float64(bars)*1.6+60) * duration
+	} else {
+		window = time.Duration(bars*3+60) * duration
+	}
+	return max(window, minLookback)
+}
+
 func getSeriesFrom(ctx context.Context, pool *pgxpool.Pool, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
 	if len(symbols) == 0 {
 		return map[string][]domain.Candle{}, nil
 	}
-	// Sin cota de ts, ROW_NUMBER() OVER (PARTITION BY symbol_id ...) tiene que
-	// leer y ordenar TODA la historia de cada simbolo antes de recortar a
-	// `bars` -- para D1 eso son años de chunks comprimidos. Confirmado en vivo
-	// el 2026-08-21: una consulta de este tipo llevaba 68+ segundos activa
-	// bajo carga concurrente de escaneres (pg_stat_activity). JOIN LATERAL
-	// (la solucion que funciono para el mismo problema en seriesAggregatedBatchSQL)
-	// NO sirve aca: con D1 abarcando cientos de chunks el planner tarda 11+
-	// segundos SOLO planificando un lateral por simbolo. La cota de ts deja
-	// que TimescaleDB excluya chunks viejos enteros antes de siquiera
-	// descomprimirlos -- bars*3+60 periodos de margen (igual de generoso que
-	// el ensanchamiento de ventana de GetCandles) alcanza de sobra para los
-	// pedidos chicos (5-15 barras) que hace este camino.
-	//
-	// minLookback pisa esa formula cuando da una ventana absurdamente angosta
-	// -- SeedLastClose llama esto con bars=1 (M1: bars*3+60 = 63 MINUTOS), a
-	// proposito para sobrevivir el hueco entre el cierre de ayer y el primer
-	// tick de hoy (ver el comentario de SnapshotTracker.last). Confirmado en
-	// vivo el 2026-08-22: un arranque en fin de semana (horas despues del
-	// cierre del viernes) caia fuera de esos 63 minutos, la siembra volvia 0
-	// simbolos, y CADA lookup de precio en vivo terminaba cayendo al fallback
-	// individual de resolvePrice en vez de servirse del tracker -- 10 dias
-	// cubre de sobra cualquier fin de semana largo sin resucitar el problema
-	// original (D1 con bars=500 ya da ~4 anios de ventana, muy por encima de
-	// este piso).
-	const minLookback = 10 * 24 * time.Hour
 	duration, err := timeframe.Duration()
 	if err != nil {
 		return nil, fmt.Errorf("resolving duration for %s: %w", timeframe, err)
 	}
-	from := time.Now().Add(-max(time.Duration(bars*3+60)*duration, minLookback))
+	from := time.Now().Add(-seriesLookbackWindow(bars, duration))
 	rows, err := pool.Query(ctx, `
 		SELECT s.symbol, ts, open, high, low, close, volume, source
 		FROM (
