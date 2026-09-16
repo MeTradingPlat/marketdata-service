@@ -28,9 +28,10 @@ const (
 )
 
 type candleSubscribeRequest struct {
-	Action    string `json:"action"`
-	Symbol    string `json:"symbol"`
-	Timeframe string `json:"timeframe"`
+	Action    string   `json:"action"`
+	Symbol    string   `json:"symbol"`
+	Symbols   []string `json:"symbols"`
+	Timeframe string   `json:"timeframe"`
 }
 
 // wsSession es una conexion WS de /ws/candles -- multiplexa varias
@@ -40,17 +41,17 @@ type candleSubscribeRequest struct {
 // compartido con relayWSSession[T].
 type wsSession struct {
 	baseWSSession
-	getCandles  in.GetCandlesService
-	current     in.GetCurrentCandleService
-	broadcaster *livecandles.Broadcaster[domain.Candle]
+	getCandles in.GetCandlesService
+	current    in.GetCurrentCandleService
+	hub        *candleAggregateHub
 }
 
-func newWSSession(conn *websocket.Conn, getCandles in.GetCandlesService, current in.GetCurrentCandleService, broadcaster *livecandles.Broadcaster[domain.Candle]) *wsSession {
+func newWSSession(conn *websocket.Conn, getCandles in.GetCandlesService, current in.GetCurrentCandleService, hub *candleAggregateHub) *wsSession {
 	return &wsSession{
 		baseWSSession: newBaseWSSession(conn, "failed to write to candle ws client"),
 		getCandles:    getCandles,
 		current:       current,
-		broadcaster:   broadcaster,
+		hub:           hub,
 	}
 }
 
@@ -65,9 +66,19 @@ func (s *wsSession) run(ctx context.Context) {
 		}
 		switch req.Action {
 		case "subscribe":
-			s.handleSubscribe(ctx, req.Symbol, req.Timeframe)
+			if len(req.Symbols) > 0 {
+				s.handleSubscribeBatch(ctx, req.Symbols, req.Timeframe)
+			} else {
+				s.handleSubscribe(ctx, req.Symbol, req.Timeframe)
+			}
 		case "unsubscribe":
-			s.handleUnsubscribe(req.Symbol, req.Timeframe)
+			if len(req.Symbols) > 0 {
+				for _, symbol := range req.Symbols {
+					s.handleUnsubscribe(symbol, req.Timeframe)
+				}
+			} else {
+				s.handleUnsubscribe(req.Symbol, req.Timeframe)
+			}
 		}
 	}
 }
@@ -84,12 +95,7 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "simbolo invalido"})
 		return
 	}
-
-	key := symbol + ":" + timeframe
-	s.mu.Lock()
-	_, exists := s.subs[key]
-	s.mu.Unlock()
-	if exists {
+	if s.alreadySubscribed(symbol, timeframe) {
 		return
 	}
 
@@ -104,21 +110,67 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "no se pudo cargar el historial"})
 		return
 	}
+	s.seedAndSubscribe(ctx, symbol, timeframe, tf, candles)
+}
 
+// handleSubscribeBatch es handleSubscribe para varios simbolos del MISMO
+// timeframe de una sola vez -- pensado para un cliente que necesita
+// suscribir de golpe cientos o miles de simbolos (ej.
+// signal-processing-service al arrancar el dia, ver RealtimeCandleClient),
+// en vez de un mensaje por simbolo: antes de esto cada suscripcion
+// disparaba su propio GetCandles individual contra el mismo socket, en
+// fila -- con miles de simbolos de golpe eso tardaba un buen rato en
+// ponerse al dia. GetCandlesBatch trae el historial de todos en una sola
+// consulta, igual que ya hace /marketdata/historical/batch por REST.
+func (s *wsSession) handleSubscribeBatch(ctx context.Context, symbols []string, timeframe string) {
+	tf := domain.Timeframe(timeframe)
+	if !tf.Valid() {
+		s.sendJSON(dto.CandleControlMessage{Type: "error", Timeframe: timeframe, Message: "timeframe no soportado todavia"})
+		return
+	}
+
+	pending := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		if !domain.ValidSymbolFormat(symbol) {
+			s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "simbolo invalido"})
+			continue
+		}
+		if !s.alreadySubscribed(symbol, timeframe) {
+			pending = append(pending, symbol)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+
+	candlesBatch := s.getCandles.GetCandlesBatch(ctx, pending, tf, initialHistoryBars)
+	for _, symbol := range pending {
+		s.seedAndSubscribe(ctx, symbol, timeframe, tf, candlesBatch[symbol])
+	}
+}
+
+func (s *wsSession) alreadySubscribed(symbol, timeframe string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, exists := s.subs[symbol+":"+timeframe]
+	return exists
+}
+
+// seedAndSubscribe manda el historial (con la vela en formacion sembrada
+// desde GetCurrentCandle DENTRO del mismo mensaje -- el grafico/consumidor
+// no espera un mensaje aparte para tenerla) y engancha la sesion al hub
+// compartido -- ultimo paso comun entre una suscripcion individual y una
+// en lote.
+func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe string, tf domain.Timeframe, candles []domain.Candle) {
 	var lastTime int64
 	if len(candles) > 0 {
 		lastTime = candles[len(candles)-1].Timestamp.Unix()
 	}
 
-	// La vela en formacion se siembra al instante desde el servicio (M1 del
-	// pool, derivados agregando las M1 reales del periodo) y va DENTRO del
-	// mismo mensaje de historial -- el grafico NO espera un mensaje aparte
-	// para dibujarla. GetCurrentCandle devuelve nil cuando el periodo
-	// todavia no tiene ningun tick real (ya no fabrica una plana al ultimo
-	// cierre). La agregacion en vivo sigue desde ahi (forwardLive).
 	bars := toBars(candles)
 	var seed *dto.CandleBar
 	if s.current != nil {
+		var err error
 		seed, err = s.current.GetCurrentCandle(ctx, symbol, tf)
 		if err != nil {
 			seed = nil
@@ -129,11 +181,11 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 	}
 	s.sendJSON(dto.CandleHistoryMessage{Type: "history", Symbol: symbol, Timeframe: timeframe, Bars: bars})
 
-	ch, cancel := s.broadcaster.Subscribe(symbol)
+	ch, cancel := s.hub.Subscribe(ctx, symbol, timeframe, tf)
 	s.mu.Lock()
-	s.subs[key] = cancel
+	s.subs[symbol+":"+timeframe] = cancel
 	s.mu.Unlock()
-	go s.forwardLive(ch, symbol, timeframe, lastTime, seed)
+	go s.forwardLive(ch, symbol, timeframe, lastTime)
 }
 
 func (s *wsSession) handleUnsubscribe(symbol, timeframe string) {
@@ -147,14 +199,10 @@ func (s *wsSession) handleUnsubscribe(symbol, timeframe string) {
 	}
 }
 
-// forwardLive reenvia las velas M1 del simbolo agregadas al periodo del
-// timeframe suscrito: para M1 el periodo es el minuto de la vela misma
-// (identidad), para H1/D1/etc. la vela en formacion se arma sumando las M1
-// del periodo. Cada periodo nuevo emite la vela anterior como cerrada y
-// arranca la siguiente en formacion -- el frontend hace update() por
-// tiempo, asi que una vela cerrada repetida solo reemplaza su version.
-// lastHistoryTime protege la serie: jamas se emite una vela anterior al
-// ultimo bar del historial.
+// seedAggregate arranca el agregado compartido (candleAggregateHub) del
+// primer suscriptor de un (symbol, timeframe) con la vela en formacion que
+// ya existia -- sin esto, el hub creado recien perderia el progreso que
+// GetCurrentCandle ya tenia hasta que llegue el proximo tick real.
 func seedAggregate(seed *dto.CandleBar, tf domain.Timeframe, now time.Time) *dto.CandleBar {
 	if seed == nil {
 		return nil
@@ -164,40 +212,19 @@ func seedAggregate(seed *dto.CandleBar, tf domain.Timeframe, now time.Time) *dto
 	return &start
 }
 
-func (s *wsSession) forwardLive(ch <-chan domain.Candle, symbol, timeframe string, lastHistoryTime int64, seed *dto.CandleBar) {
-	tf := domain.Timeframe(timeframe)
-	agg := seedAggregate(seed, tf, time.Now())
-	for c := range ch {
-		// Un tick puede traer OHLC parcial (minuto sin trades, primer evento
-		// de un periodo) -- se dibuja igual y el siguiente tick lo completa.
-		if c.Close == 0 {
+// forwardLive reenvia lo que ya viene agregado del hub compartido (ver
+// candle_aggregate_hub.go) -- esta sesion ya no agrega nada por su cuenta.
+// lastHistoryTime protege la serie DE ESTA sesion en particular: jamas
+// reenvia una vela anterior al ultimo bar del historial que ya le mando en
+// el mensaje "history" (otra sesion pudo pedir su propio historial en un
+// instante levemente distinto).
+func (s *wsSession) forwardLive(ch <-chan dto.CandleBar, symbol, timeframe string, lastHistoryTime int64) {
+	for bar := range ch {
+		if bar.Time < lastHistoryTime {
 			continue
 		}
-		period := livecandles.FormingPeriodStart(c.Timestamp, tf).Unix()
-		if agg == nil || agg.Time != period {
-			if agg != nil && agg.Time >= lastHistoryTime {
-				s.sendBar(symbol, timeframe, *agg, true)
-			}
-			agg = &dto.CandleBar{Time: period, Open: c.Open, High: c.High, Low: c.Low, Close: c.Close, Volume: c.Volume, Closed: false}
-		} else {
-			if c.High > agg.High {
-				agg.High = c.High
-			}
-			if c.Low < agg.Low {
-				agg.Low = c.Low
-			}
-			agg.Close = c.Close
-			agg.Volume += c.Volume
-		}
-		if agg.Time >= lastHistoryTime {
-			s.sendBar(symbol, timeframe, *agg, false)
-		}
+		s.sendJSON(dto.CandleBarMessage{Type: "bar", Symbol: symbol, Timeframe: timeframe, Bar: bar})
 	}
-}
-
-func (s *wsSession) sendBar(symbol, timeframe string, bar dto.CandleBar, closed bool) {
-	bar.Closed = closed
-	s.sendJSON(dto.CandleBarMessage{Type: "bar", Symbol: symbol, Timeframe: timeframe, Bar: bar})
 }
 
 func toBars(candles []domain.Candle) []dto.CandleBar {
