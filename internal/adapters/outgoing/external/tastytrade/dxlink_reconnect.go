@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -22,6 +23,17 @@ const (
 	// min entre intentos las sesiones expiran entre medio y la mesa se
 	// desocupa de verdad.
 	sessionSaturatedDelay = 15 * time.Minute
+
+	// sessionSaturatedJitter: sin esto, varias conexiones que se saturaron
+	// juntas en el storm original vuelven a reintentar casi en el mismo
+	// instante 15 min despues (su propio reloj fijo, sin relacion con el
+	// jitter de 3s de SessionBreaker.Wait -- ese se comparte entre TODAS las
+	// conexiones y arranca desde el mismo evento, asi que tampoco las separa
+	// de verdad). Confirmado en vivo el 2026-09-16: un grupo de ~3 conexiones
+	// repitiendo el mismo choque cada 15 min de forma sostenida, en vez de
+	// resolverse solo. Un margen de varios minutos (no segundos) es lo que
+	// hace falta para que no todas caigan en la misma ventana de nuevo.
+	sessionSaturatedJitter = 3 * time.Minute
 
 	// staleConnectionThreshold: si no llega NINGUN mensaje del servidor
 	// (dato real o su propio KEEPALIVE) en este tiempo, se asume conexion
@@ -110,7 +122,7 @@ func (c *DxLinkConn) reconnectLoop(ctx context.Context) {
 
 		delay := reconnectDelay(int(attempts))
 		if c.sessionSaturated.Load() && delay < sessionSaturatedDelay {
-			delay = sessionSaturatedDelay
+			delay = sessionSaturatedDelay + time.Duration(rand.Int63n(int64(sessionSaturatedJitter)))
 		}
 		select {
 		case <-time.After(delay):
