@@ -168,3 +168,38 @@ func TestHandleSubscribeBatch_NoBloqueaElLoopDeLecturaMientrasCargaElHistorial(t
 		t.Fatal("no llego el pong dentro de 200ms -- el fetch lento del batch subscribe esta bloqueando el loop de lectura")
 	}
 }
+
+func TestHandleSubscribeBatch_SesionCerradaMientrasElFetchSigueEnVuelo(t *testing.T) {
+	// Regresion: si el cliente se desconecta (closeAll corre, nilea s.subs)
+	// ANTES de que un handleSubscribeBatch lanzado en su propia goroutine
+	// termine su fetch lento, ese handler no debe panicar al intentar
+	// guardar la suscripcion -- confirmado en CI 2026-09-16 (panic:
+	// assignment to entry in nil map, tumbaba el proceso entero).
+	fake := &fakeGetCandlesService{batchDelay: 150 * time.Millisecond}
+	broadcaster := livecandles.NewBroadcaster[domain.Candle]()
+	h := NewCandleWSHandler(fake, nilCurrentCandleService{}, broadcaster)
+	e := echo.New()
+	e.GET("/ws/candles", h.Handle)
+	srv := httptest.NewServer(e)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/candles"
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+
+	req := candleSubscribeRequest{Action: "subscribe", Symbols: []string{"AAPL"}, Timeframe: "M5"}
+	if err := conn.WriteJSON(req); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	// Cierra del lado del cliente casi de inmediato -- el fetch de 150ms
+	// del fake sigue corriendo en su propia goroutine del lado del
+	// servidor cuando esto pasa.
+	conn.Close()
+
+	// Si el servidor panicara en esa goroutine, se lleva el proceso de
+	// test entero (no aparece como un t.Fatal normal) -- llegar hasta aca
+	// sin abortar ya es la asercion real.
+	time.Sleep(300 * time.Millisecond)
+}

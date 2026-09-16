@@ -195,6 +195,19 @@ func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe stri
 
 	ch, cancel := s.hub.Subscribe(ctx, symbol, timeframe, tf)
 	s.mu.Lock()
+	if s.subs == nil {
+		// La sesion ya se esta cerrando -- closeAll() nilea s.subs bajo el
+		// mismo mutex para señalar justo esto. Como el handler ahora corre
+		// en su propia goroutine (ver run()), puede seguir en vuelo cuando
+		// run() ya salio del loop de lectura y disparo closeAll() por su
+		// cuenta. Sin este chequeo, la asignacion de mas abajo entraba en
+		// un mapa nil y tumbaba el proceso entero con un panic (confirmado
+		// en CI 2026-09-16). Nadie va a llamar a este cancel() -- se hace
+		// aca para no dejar el worker compartido del hub huerfano.
+		s.mu.Unlock()
+		cancel()
+		return
+	}
 	s.subs[symbol+":"+timeframe] = cancel
 	s.mu.Unlock()
 	go s.forwardLive(ch, symbol, timeframe, lastTime)
