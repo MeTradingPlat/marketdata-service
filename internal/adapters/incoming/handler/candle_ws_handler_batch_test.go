@@ -23,6 +23,10 @@ type fakeGetCandlesService struct {
 	batchCalls   int
 	batchSymbols []string
 	singleCalls  int
+	// batchDelay simula un GetCandlesBatch lento (universo grande, DB bajo
+	// carga) -- usado para probar que la sesion sigue respondiendo a otra
+	// cosa (ej. un PING) mientras este esta en vuelo.
+	batchDelay time.Duration
 }
 
 func (f *fakeGetCandlesService) GetCandles(_ context.Context, symbol string, _ domain.Timeframe, _ int, _ *time.Time) ([]domain.Candle, error) {
@@ -36,7 +40,11 @@ func (f *fakeGetCandlesService) GetCandlesBatch(_ context.Context, symbols []str
 	f.mu.Lock()
 	f.batchCalls++
 	f.batchSymbols = append(f.batchSymbols, symbols...)
+	delay := f.batchDelay
 	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	result := make(map[string][]domain.Candle, len(symbols))
 	for _, symbol := range symbols {
 		result[symbol] = []domain.Candle{{Symbol: symbol, Timestamp: time.Unix(1_700_000_000, 0), Open: 1, High: 1, Low: 1, Close: 1, Volume: 1}}
@@ -103,5 +111,60 @@ func TestHandleSubscribeBatch_UnaSolaConsultaParaVariosSimbolos(t *testing.T) {
 		if !got[symbol] {
 			t.Fatalf("no llego historial para %s", symbol)
 		}
+	}
+}
+
+func TestHandleSubscribeBatch_NoBloqueaElLoopDeLecturaMientrasCargaElHistorial(t *testing.T) {
+	fake := &fakeGetCandlesService{batchDelay: 500 * time.Millisecond}
+	broadcaster := livecandles.NewBroadcaster[domain.Candle]()
+	h := NewCandleWSHandler(fake, nilCurrentCandleService{}, broadcaster)
+	e := echo.New()
+	e.GET("/ws/candles", h.Handle)
+	srv := httptest.NewServer(e)
+	t.Cleanup(srv.Close)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/candles"
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+	defer conn.Close()
+
+	req := candleSubscribeRequest{Action: "subscribe", Symbols: []string{"AAPL", "MSFT", "TSLA"}, Timeframe: "M5"}
+	if err := conn.WriteJSON(req); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	// El batch subscribe recien pedido tarda 500ms del lado del servidor
+	// (fake.batchDelay) -- si el handler corriera en la MISMA goroutine que
+	// lee del socket (el bug real, confirmado en vivo 2026-09-16), un PING
+	// mandado ahora quedaria sin PONG hasta que ese fetch termine. Con el
+	// fix (handler en su propia goroutine), el servidor sigue respondiendo
+	// pings de inmediato aunque el fetch siga en vuelo.
+	pongReceived := make(chan struct{}, 1)
+	conn.SetPongHandler(func(string) error {
+		select {
+		case pongReceived <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	go func() {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	time.Sleep(50 * time.Millisecond) // deja que el subscribe arranque su fetch lento
+	if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("failed to send ping: %v", err)
+	}
+
+	select {
+	case <-pongReceived:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("no llego el pong dentro de 200ms -- el fetch lento del batch subscribe esta bloqueando el loop de lectura")
 	}
 }

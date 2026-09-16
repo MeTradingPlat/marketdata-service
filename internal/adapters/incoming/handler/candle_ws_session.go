@@ -66,10 +66,22 @@ func (s *wsSession) run(ctx context.Context) {
 		}
 		switch req.Action {
 		case "subscribe":
-			if len(req.Symbols) > 0 {
-				s.handleSubscribeBatch(ctx, req.Symbols, req.Timeframe)
+			// Corre en su propia goroutine -- handleSubscribe/handleSubscribeBatch
+			// hacen I/O sincrono (GetCandles/GetCandlesBatch) que puede tardar,
+			// y esta goroutine (run) es la UNICA que lee del socket: si el
+			// handler corriera aca mismo, un lote grande (ej. todo el universo
+			// de un escaner sin pre-filtros, miles de simbolos de golpe)
+			// bloqueaba ReadJSON el tiempo entero que tarda ese fetch, sin
+			// volver a leer nada del cliente -- incluidos los PING de
+			// keepalive, que terminaban venciendo su propio timeout y
+			// tumbando la conexion antes de que la suscripcion llegara a
+			// completarse. Confirmado en vivo 2026-09-16.
+			symbols, timeframe := req.Symbols, req.Timeframe
+			if len(symbols) > 0 {
+				go s.handleSubscribeBatch(ctx, symbols, timeframe)
 			} else {
-				s.handleSubscribe(ctx, req.Symbol, req.Timeframe)
+				symbol := req.Symbol
+				go s.handleSubscribe(ctx, symbol, timeframe)
 			}
 		case "unsubscribe":
 			if len(req.Symbols) > 0 {
