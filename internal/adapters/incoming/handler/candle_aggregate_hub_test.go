@@ -30,11 +30,21 @@ func mustDrain(t *testing.T, ch <-chan dto.CandleBar, want int) []dto.CandleBar 
 	return got
 }
 
+// subscribeToChan adapta el Subscribe basado en callback a un canal para que
+// los tests puedan seguir usando mustDrain -- mismo patron que usa
+// production (wsSession.seedAndSubscribe), solo que aca el push encola en un
+// canal de test en vez de publicar a la sesion WS.
+func subscribeToChan(hub *candleAggregateHub, symbol, timeframe string, tf domain.Timeframe) (<-chan dto.CandleBar, func()) {
+	ch := make(chan dto.CandleBar, 16)
+	cancel := hub.Subscribe(context.Background(), symbol, timeframe, tf, func(bar dto.CandleBar) { ch <- bar })
+	return ch, cancel
+}
+
 func TestCandleAggregateHub_AggregatesM1IntoRequestedTimeframe(t *testing.T) {
 	raw := livecandles.NewBroadcaster[domain.Candle]()
 	hub := newCandleAggregateHub(raw, nilCurrentCandleService{})
 
-	ch, cancel := hub.Subscribe(context.Background(), "AAPL", "M5", domain.M5)
+	ch, cancel := subscribeToChan(hub, "AAPL", "M5", domain.M5)
 	defer cancel()
 
 	base := time.Date(2026, 8, 21, 14, 35, 0, 0, time.UTC)
@@ -63,9 +73,9 @@ func TestCandleAggregateHub_CompartelaAgregacionEntreSuscriptores(t *testing.T) 
 	raw := livecandles.NewBroadcaster[domain.Candle]()
 	hub := newCandleAggregateHub(raw, nilCurrentCandleService{})
 
-	ch1, cancel1 := hub.Subscribe(context.Background(), "AAPL", "M5", domain.M5)
+	ch1, cancel1 := subscribeToChan(hub, "AAPL", "M5", domain.M5)
 	defer cancel1()
-	ch2, cancel2 := hub.Subscribe(context.Background(), "AAPL", "M5", domain.M5)
+	ch2, cancel2 := subscribeToChan(hub, "AAPL", "M5", domain.M5)
 	defer cancel2()
 
 	hub.mu.Lock()
@@ -93,8 +103,8 @@ func TestCandleAggregateHub_ApagaElWorkerCuandoSeVaElUltimoSuscriptor(t *testing
 	raw := livecandles.NewBroadcaster[domain.Candle]()
 	hub := newCandleAggregateHub(raw, nilCurrentCandleService{})
 
-	_, cancel1 := hub.Subscribe(context.Background(), "AAPL", "M5", domain.M5)
-	_, cancel2 := hub.Subscribe(context.Background(), "AAPL", "M5", domain.M5)
+	_, cancel1 := subscribeToChan(hub, "AAPL", "M5", domain.M5)
+	_, cancel2 := subscribeToChan(hub, "AAPL", "M5", domain.M5)
 
 	cancel1()
 	hub.mu.Lock()

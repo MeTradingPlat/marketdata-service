@@ -37,6 +37,7 @@ func (s *relayWSSession[T]) run(ctx context.Context) {
 	defer s.closeAll()
 	s.armKeepalive()
 	go s.pingLoop()
+	go s.dispatchLoop()
 	for {
 		var req relaySubscribeRequest
 		if err := s.conn.ReadJSON(&req); err != nil {
@@ -62,11 +63,19 @@ func (s *relayWSSession[T]) handleSubscribe(symbol string) {
 	if exists {
 		return
 	}
-	ch, cancel := s.broadcaster.Subscribe(symbol)
+	cancel := s.broadcaster.Subscribe(symbol, func(item T) {
+		s.publish(s.toMessage(symbol, item))
+	})
 	s.mu.Lock()
+	if s.subs == nil {
+		// La sesion ya se esta cerrando -- mismo chequeo y motivo que
+		// wsSession.seedAndSubscribe (candle_ws_session.go).
+		s.mu.Unlock()
+		cancel()
+		return
+	}
 	s.subs[symbol] = cancel
 	s.mu.Unlock()
-	go s.forward(ch, symbol)
 }
 
 func (s *relayWSSession[T]) handleUnsubscribe(symbol string) {
@@ -76,12 +85,6 @@ func (s *relayWSSession[T]) handleUnsubscribe(symbol string) {
 	s.mu.Unlock()
 	if exists {
 		cancel()
-	}
-}
-
-func (s *relayWSSession[T]) forward(ch <-chan T, symbol string) {
-	for item := range ch {
-		s.sendJSON(s.toMessage(symbol, item))
 	}
 }
 

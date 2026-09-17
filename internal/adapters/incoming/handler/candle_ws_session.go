@@ -59,6 +59,7 @@ func (s *wsSession) run(ctx context.Context) {
 	defer s.closeAll()
 	s.armKeepalive()
 	go s.pingLoop()
+	go s.dispatchLoop()
 	for {
 		var req candleSubscribeRequest
 		if err := s.conn.ReadJSON(&req); err != nil {
@@ -193,7 +194,17 @@ func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe stri
 	}
 	s.sendJSON(dto.CandleHistoryMessage{Type: "history", Symbol: symbol, Timeframe: timeframe, Bars: bars})
 
-	ch, cancel := s.hub.Subscribe(ctx, symbol, timeframe, tf)
+	// El chequeo contra lastTime protege la serie DE ESTA sesion: jamas
+	// reenvia una vela anterior al ultimo bar del historial que ya mando en
+	// el mensaje "history" (otra sesion pudo pedir su propio historial en un
+	// instante levemente distinto). Corre en la goroutine que publica el
+	// tick, no en la de esta sesion -- debe ser rapido y no bloqueante.
+	cancel := s.hub.Subscribe(ctx, symbol, timeframe, tf, func(bar dto.CandleBar) {
+		if bar.Time < lastTime {
+			return
+		}
+		s.publish(dto.CandleBarMessage{Type: "bar", Symbol: symbol, Timeframe: timeframe, Bar: bar})
+	})
 	s.mu.Lock()
 	if s.subs == nil {
 		// La sesion ya se esta cerrando -- closeAll() nilea s.subs bajo el
@@ -210,7 +221,6 @@ func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe stri
 	}
 	s.subs[symbol+":"+timeframe] = cancel
 	s.mu.Unlock()
-	go s.forwardLive(ch, symbol, timeframe, lastTime)
 }
 
 func (s *wsSession) handleUnsubscribe(symbol, timeframe string) {
@@ -235,21 +245,6 @@ func seedAggregate(seed *dto.CandleBar, tf domain.Timeframe, now time.Time) *dto
 	start := *seed
 	start.Time = livecandles.FormingPeriodStart(now, tf).Unix()
 	return &start
-}
-
-// forwardLive reenvia lo que ya viene agregado del hub compartido (ver
-// candle_aggregate_hub.go) -- esta sesion ya no agrega nada por su cuenta.
-// lastHistoryTime protege la serie DE ESTA sesion en particular: jamas
-// reenvia una vela anterior al ultimo bar del historial que ya le mando en
-// el mensaje "history" (otra sesion pudo pedir su propio historial en un
-// instante levemente distinto).
-func (s *wsSession) forwardLive(ch <-chan dto.CandleBar, symbol, timeframe string, lastHistoryTime int64) {
-	for bar := range ch {
-		if bar.Time < lastHistoryTime {
-			continue
-		}
-		s.sendJSON(dto.CandleBarMessage{Type: "bar", Symbol: symbol, Timeframe: timeframe, Bar: bar})
-	}
 }
 
 func toBars(candles []domain.Candle) []dto.CandleBar {

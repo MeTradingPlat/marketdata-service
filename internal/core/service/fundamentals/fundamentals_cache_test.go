@@ -226,7 +226,8 @@ func TestFundamentalsCache_ReloadAll_PublishesToSubscribers(t *testing.T) {
 	symbols := &fakeSymbolRepo{tracked: []domain.Symbol{{Symbol: "AAPL"}}}
 	repo := &fakeFundamentalsRepo{batch: map[string]domain.Fundamentals{"AAPL": {Symbol: "AAPL", MarketCap: 100}}}
 	broadcaster := livecandles.NewBroadcaster[domain.Fundamentals]()
-	ch, cancel := broadcaster.Subscribe("AAPL")
+	ch := make(chan domain.Fundamentals, 1)
+	cancel := broadcaster.Subscribe("AAPL", func(f domain.Fundamentals) { ch <- f })
 	defer cancel()
 	cache := NewFundamentalsCache(repo, symbols, broadcaster)
 
