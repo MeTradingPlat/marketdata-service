@@ -234,6 +234,17 @@ jobs:
           # 2g limite de memoria y GOMEMLIMIT=1600MiB para que el GC de Go
           # recolecte proactivamente sin alcanzar el tope duro del cgroup de Docker.
           # --stop-timeout 25: margen para shutdown graceful de conexiones.
+          # GODEBUG=madvdontneed=1: por defecto Go en Linux libera memoria al
+          # SO con MADV_FREE, que el kernel no reclama hasta tener presion
+          # real -- el cgroup de Docker SI cuenta esas paginas como "en uso",
+          # asi que memoria ya recolectada por el GC (heapAlloc bajo, ver
+          # runtime_stats_loop.go) igual se quedaba pegada cerca del tope del
+          # contenedor (confirmado en vivo: heapSys estancado en ~3098MB con
+          # heapAlloc real de ~850-930MB). Con MADV_DONTNEED el kernel
+          # reclama de inmediato, y el uso reportado sigue al heap real en
+          # vez de subir y no bajar nunca -- causa real de los sucesivos
+          # aumentos de limite desde julio (256m -> 2g -> 3g) sin nunca
+          # arreglar nada de fondo.
           docker run -d \
             --name "marketdata-service" \
             --network "metradingplat-network" \
@@ -246,6 +257,7 @@ jobs:
             --label service="marketdata-service" \
             -e GOMEMLIMIT="1600MiB" \
             -e GOGC="50" \
+            -e GODEBUG="madvdontneed=1" \
             -e DB_HOST="postgres-marketdata" \
             -e DB_PORT="5432" \
             -e DB_NAME="marketdata_db" \
