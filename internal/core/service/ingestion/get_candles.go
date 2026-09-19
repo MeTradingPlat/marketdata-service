@@ -36,6 +36,12 @@ const candleCacheTTL = 60 * time.Second
 // contenedores, subir el limite del contenedor le resta margen a los demas).
 const candleCacheMaxEntries = 8000
 
+// candleCacheMaxCandles acota el cache por VELAS totales, no solo por
+// entradas: con bars elegido por el cliente (hasta 2000 en /ws/candles) el
+// tope de 8000 entradas permitia ~2GB en el peor caso. ~1.2M velas x ~130
+// bytes mantiene el mismo presupuesto de ~150MB que tenia el tope original.
+const candleCacheMaxCandles = 1_200_000
+
 type candleCacheEntry struct {
 	expires time.Time
 	candles []domain.Candle
@@ -44,6 +50,7 @@ type candleCacheEntry struct {
 type candleCache struct {
 	mu      sync.Mutex
 	entries map[string]candleCacheEntry
+	total   int
 }
 
 func (c *candleCache) get(key string) ([]domain.Candle, bool) {
@@ -54,7 +61,7 @@ func (c *candleCache) get(key string) ([]domain.Candle, bool) {
 		return nil, false
 	}
 	if time.Now().After(entry.expires) {
-		delete(c.entries, key)
+		c.deleteLocked(key)
 		return nil, false
 	}
 	return entry.candles, true
@@ -63,10 +70,24 @@ func (c *candleCache) get(key string) ([]domain.Candle, bool) {
 func (c *candleCache) put(key string, candles []domain.Candle) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.entries) >= candleCacheMaxEntries {
-		c.evictOneLocked()
+	if len(candles) > candleCacheMaxCandles/8 {
+		return
+	}
+	c.deleteLocked(key)
+	for len(c.entries) >= candleCacheMaxEntries || c.total+len(candles) > candleCacheMaxCandles {
+		if !c.evictOneLocked() {
+			break
+		}
 	}
 	c.entries[key] = candleCacheEntry{expires: time.Now().Add(candleCacheTTL), candles: candles}
+	c.total += len(candles)
+}
+
+func (c *candleCache) deleteLocked(key string) {
+	if entry, ok := c.entries[key]; ok {
+		c.total -= len(entry.candles)
+		delete(c.entries, key)
+	}
 }
 
 // evictOneLocked libera espacio para la entrada nueva -- primero intenta
@@ -76,18 +97,19 @@ func (c *candleCache) put(key string, candles []domain.Candle) {
 // aleatorio, asi que sin este intento previo un TTL corto (60s) bajo carga
 // alta (candleCacheMaxEntries=20000 lleno) podia desalojar una entrada
 // recien puesta en vez de una que ya no serve a nadie.
-func (c *candleCache) evictOneLocked() {
+func (c *candleCache) evictOneLocked() bool {
 	now := time.Now()
 	for k, entry := range c.entries {
 		if now.After(entry.expires) {
-			delete(c.entries, k)
-			return
+			c.deleteLocked(k)
+			return true
 		}
 	}
 	for k := range c.entries {
-		delete(c.entries, k)
-		return
+		c.deleteLocked(k)
+		return true
 	}
+	return false
 }
 
 type getCandlesService struct {
