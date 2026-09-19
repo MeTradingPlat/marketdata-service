@@ -260,7 +260,7 @@ func getSeriesFrom(ctx context.Context, pool *pgxpool.Pool, symbols []string, ti
 			       row_number() OVER (PARTITION BY c.symbol_id ORDER BY c.ts DESC) AS rn
 			FROM candles c
 			WHERE c.timeframe = $1 AND c.ts >= $4
-			  AND c.symbol_id IN (SELECT symbol_id FROM tracked_symbols WHERE symbol = ANY($2))
+			  AND c.symbol_id = ANY(ARRAY(SELECT symbol_id FROM tracked_symbols WHERE symbol = ANY($2)))
 		) t
 		JOIN tracked_symbols s ON s.symbol_id = t.symbol_id
 		WHERE rn <= $3
