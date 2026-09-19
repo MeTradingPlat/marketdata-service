@@ -22,6 +22,7 @@ type fakeGetCandlesService struct {
 	mu           sync.Mutex
 	batchCalls   int
 	batchSymbols []string
+	batchBars    []int
 	singleCalls  int
 	// batchDelay simula un GetCandlesBatch lento (universo grande, DB bajo
 	// carga) -- usado para probar que la sesion sigue respondiendo a otra
@@ -36,9 +37,10 @@ func (f *fakeGetCandlesService) GetCandles(_ context.Context, symbol string, _ d
 	return []domain.Candle{{Symbol: symbol, Timestamp: time.Unix(1_700_000_000, 0), Open: 1, High: 1, Low: 1, Close: 1, Volume: 1}}, nil
 }
 
-func (f *fakeGetCandlesService) GetCandlesBatch(_ context.Context, symbols []string, _ domain.Timeframe, _ int) map[string][]domain.Candle {
+func (f *fakeGetCandlesService) GetCandlesBatch(_ context.Context, symbols []string, _ domain.Timeframe, bars int) map[string][]domain.Candle {
 	f.mu.Lock()
 	f.batchCalls++
+	f.batchBars = append(f.batchBars, bars)
 	f.batchSymbols = append(f.batchSymbols, symbols...)
 	delay := f.batchDelay
 	f.mu.Unlock()
@@ -202,4 +204,42 @@ func TestHandleSubscribeBatch_SesionCerradaMientrasElFetchSigueEnVuelo(t *testin
 	// test entero (no aparece como un t.Fatal normal) -- llegar hasta aca
 	// sin abortar ya es la asercion real.
 	time.Sleep(300 * time.Millisecond)
+}
+
+func subscribeBatchAndAwaitHistory(t *testing.T, req candleSubscribeRequest) *fakeGetCandlesService {
+	t.Helper()
+	wsURL, fake := startCandleWSServer(t)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial failed: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.WriteJSON(req); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read failed waiting for history: %v", err)
+	}
+	return fake
+}
+
+func TestHandleSubscribeBatch_UsaLasBarrasQuePideElCliente(t *testing.T) {
+	cases := map[string]struct{ requested, want int }{
+		"pedido explicito":         {requested: 120, want: 120},
+		"sin pedido usa default":   {requested: 0, want: defaultHistoryBars},
+		"pedido excesivo se acota": {requested: 1_000_000, want: maxHistoryBars},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake := subscribeBatchAndAwaitHistory(t, candleSubscribeRequest{
+				Action: "subscribe", Symbols: []string{"AAPL"}, Timeframe: "M5", Bars: tc.requested,
+			})
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if len(fake.batchBars) != 1 || fake.batchBars[0] != tc.want {
+				t.Fatalf("batchBars = %v, want [%d]", fake.batchBars, tc.want)
+			}
+		})
+	}
 }

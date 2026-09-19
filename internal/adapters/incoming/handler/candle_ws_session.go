@@ -11,8 +11,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const initialHistoryBars = 500
-
 // pingInterval/pongWait: el dominio se expone via Cloudflare Tunnel (ver
 // systemctl cloudflared.service en el VAIO) -- confirmado en vivo el
 // 2026-08-24 que /ws/candles se cerraba solo cada ~125.6s de forma
@@ -32,6 +30,7 @@ type candleSubscribeRequest struct {
 	Symbol    string   `json:"symbol"`
 	Symbols   []string `json:"symbols"`
 	Timeframe string   `json:"timeframe"`
+	Bars      int      `json:"bars"`
 }
 
 // wsSession es una conexion WS de /ws/candles -- multiplexa varias
@@ -77,12 +76,12 @@ func (s *wsSession) run(ctx context.Context) {
 			// keepalive, que terminaban venciendo su propio timeout y
 			// tumbando la conexion antes de que la suscripcion llegara a
 			// completarse. Confirmado en vivo 2026-09-16.
-			symbols, timeframe := req.Symbols, req.Timeframe
+			symbols, timeframe, bars := req.Symbols, req.Timeframe, historyBars(req.Bars)
 			if len(symbols) > 0 {
-				go s.handleSubscribeBatch(ctx, symbols, timeframe)
+				go s.handleSubscribeBatch(ctx, symbols, timeframe, bars)
 			} else {
 				symbol := req.Symbol
-				go s.handleSubscribe(ctx, symbol, timeframe)
+				go s.handleSubscribe(ctx, symbol, timeframe, bars)
 			}
 		case "unsubscribe":
 			if len(req.Symbols) > 0 {
@@ -103,7 +102,7 @@ func (s *wsSession) run(ctx context.Context) {
 // validos tienen vela en formacion en el grafico, no solo M1. Cualquier
 // otro timeframe (los no soportados) responde error en vez de fallar en
 // silencio, mismo criterio que /marketdata/timeframes.
-func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe string) {
+func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe string, bars int) {
 	if !domain.ValidSymbolFormat(symbol) {
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "simbolo invalido"})
 		return
@@ -118,7 +117,7 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 		return
 	}
 
-	candles, err := s.getCandles.GetCandles(ctx, symbol, tf, initialHistoryBars, nil)
+	candles, err := s.getCandles.GetCandles(ctx, symbol, tf, bars, nil)
 	if err != nil {
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "no se pudo cargar el historial"})
 		return
@@ -135,7 +134,7 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 // fila -- con miles de simbolos de golpe eso tardaba un buen rato en
 // ponerse al dia. GetCandlesBatch trae el historial de todos en una sola
 // consulta, igual que ya hace /marketdata/historical/batch por REST.
-func (s *wsSession) handleSubscribeBatch(ctx context.Context, symbols []string, timeframe string) {
+func (s *wsSession) handleSubscribeBatch(ctx context.Context, symbols []string, timeframe string, bars int) {
 	tf := domain.Timeframe(timeframe)
 	if !tf.Valid() {
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Timeframe: timeframe, Message: "timeframe no soportado todavia"})
@@ -156,7 +155,7 @@ func (s *wsSession) handleSubscribeBatch(ctx context.Context, symbols []string, 
 		return
 	}
 
-	candlesBatch := s.getCandles.GetCandlesBatch(ctx, pending, tf, initialHistoryBars)
+	candlesBatch := s.getCandles.GetCandlesBatch(ctx, pending, tf, bars)
 	for _, symbol := range pending {
 		s.seedAndSubscribe(ctx, symbol, timeframe, tf, candlesBatch[symbol])
 	}
