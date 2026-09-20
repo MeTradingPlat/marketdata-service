@@ -17,7 +17,7 @@ import (
 // para semana/mes/anio calendario (esa alineacion no es de ancho fijo).
 // Devuelve hasta maxBuckets buckets, en el mismo orden DESC de entrada.
 func aggregateIntoBuckets(raw []domain.Candle, timeframe domain.Timeframe, bucketWidth time.Duration, maxBuckets int) []domain.Candle {
-	result := make([]domain.Candle, 0, maxBuckets)
+	result := make([]domain.Candle, 0, min(maxBuckets, len(raw)))
 	var acc domain.Candle
 	var bucketStart time.Time
 	open := false

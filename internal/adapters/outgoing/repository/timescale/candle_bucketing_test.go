@@ -81,3 +81,19 @@ func TestSourcePeriodOf(t *testing.T) {
 		}
 	}
 }
+
+func TestAggregateIntoBucketsNoReservaCapacidadDeMasParaSimbolosRalos(t *testing.T) {
+	raw := []domain.Candle{
+		{Timestamp: time.Date(2026, 9, 18, 15, 1, 0, 0, time.UTC), Open: 1, High: 2, Low: 1, Close: 2, Volume: 10},
+		{Timestamp: time.Date(2026, 9, 18, 15, 0, 0, 0, time.UTC), Open: 1, High: 1, Low: 1, Close: 1, Volume: 5},
+	}
+
+	got := aggregateIntoBuckets(raw, domain.M5, 5*time.Minute, 500)
+
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 bucket", len(got))
+	}
+	if cap(got) > len(raw) {
+		t.Fatalf("cap = %d, no debe superar las %d filas crudas (maxBuckets=500)", cap(got), len(raw))
+	}
+}
