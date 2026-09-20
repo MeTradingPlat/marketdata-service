@@ -137,6 +137,7 @@ func main() {
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo, fundamentalsCache)
 		StartSessionResetLoop(ctx, cfg, oauth, gateway)
 		StartRuntimeStatsLoop(ctx)
+		StartPprofServer()
 
 		r.Init()
 		address := fmt.Sprintf(":%s", cfg.ServerPort)
