@@ -147,6 +147,16 @@ jobs:
           # bgwriter_delay/lru_maxpages mas agresivos sacan paginas sucias de
           # forma continua entre checkpoints, para que cada uno tenga menos
           # por escribir de golpe.
+          #
+          # El reinicio de postgres solo se hace si pg_settings.pending_restart
+          # lo pide (un ajuste PGC_POSTMASTER con valor nuevo, o un contenedor
+          # recien creado). Reiniciar en cada deploy dejaba la cache de
+          # postgres en frio y los primeros /fundamentals/realtime tras el
+          # deploy tardaban ~90s (confirmado el 2026-09-20).
+          for i in $(seq 1 30); do
+            docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
+            sleep 2
+          done
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_connections = 200;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET maintenance_work_mem = '256MB';"
@@ -158,11 +168,19 @@ jobs:
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET checkpoint_timeout = '15min';"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET bgwriter_delay = '100ms';"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET bgwriter_lru_maxpages = 400;"
-          docker restart postgres-marketdata
-          for i in $(seq 1 15); do
-            docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
-            sleep 2
-          done
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "SELECT pg_reload_conf();"
+          sleep 2
+          PENDING_RESTART=$(docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -At -c "SELECT count(*) FROM pg_settings WHERE pending_restart;")
+          if [ "$PENDING_RESTART" -gt 0 ]; then
+            echo "$PENDING_RESTART ajuste(s) exigen reinicio, reiniciando postgres-marketdata"
+            docker restart postgres-marketdata
+            for i in $(seq 1 15); do
+              docker exec postgres-marketdata pg_isready -U user_marketdata >/dev/null 2>&1 && break
+              sleep 2
+            done
+          else
+            echo "Sin ajustes pendientes de reinicio: postgres-marketdata sigue en marcha"
+          fi
 
       - name: Harden postgres memory against OOM (memory.high)
         run: |
