@@ -14,143 +14,14 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// candleCacheTTL: solo cubre pedidos casi simultaneos de otro escaner o
-// pestaña sobre los mismos simbolos (los que llegan literalmente a la vez ya
-// los junta batchCoalescer); un TTL largo no ayuda, porque cada consumidor
-// pide un numero de barras distinto segun sus filtros y guardar de mas solo
-// ocupa memoria.
-const candleCacheTTL = 2 * time.Second
-
-// candleCacheSweepInterval: las entradas vencidas solo se borraban al leerse
-// o al llenarse el cache, asi que el TTL no liberaba memoria por si solo.
-const candleCacheSweepInterval = time.Second
-
-// candleCacheMaxEntries: 20000 (valor original) podia pesar hasta ~400MB
-// en el peor caso (bars=151 tipico, ~19KB por entrada) -- confirmado en
-// vivo el 2026-08-23 que el contenedor ya usa 773MB de un limite duro de
-// 1GB (--memory 1g --memory-swap 1g en cd.yml, sin colchon de swap), asi
-// que llenar el cache entero lo hubiera empujado a que Docker lo matara
-// por OOM. 8000 entradas topea el peor caso en ~150MB, dejando margen real
-// bajo el limite actual sin tocar la asignacion de memoria del contenedor
-// (el VAIO entero ya esta ajustado: 915MB libres compartidos entre 26
-// contenedores, subir el limite del contenedor le resta margen a los demas).
-const candleCacheMaxEntries = 8000
-
-// candleCacheMaxCandles acota el cache por VELAS totales, no solo por
-// entradas: con bars elegido por el cliente (hasta 2000 en /ws/candles) el
-// tope de 8000 entradas permitia ~2GB en el peor caso. ~1.2M velas x ~130
-// bytes mantiene el mismo presupuesto de ~150MB que tenia el tope original.
-const candleCacheMaxCandles = 1_200_000
-
-type candleCacheEntry struct {
-	expires time.Time
-	bars    int
-	candles []domain.Candle
-}
-
-type candleCache struct {
-	mu        sync.Mutex
-	entries   map[string]candleCacheEntry
-	total     int
-	lastSweep time.Time
-}
-
-// get sirve cualquier pedido de hasta las barras con que se guardo la serie
-// (la cola mas reciente); uno que pide mas es un miss y se consulta a la BD.
-func (c *candleCache) get(key string, bars int) ([]domain.Candle, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := time.Now()
-	c.sweepExpiredLocked(now)
-	entry, ok := c.entries[key]
-	if !ok {
-		return nil, false
-	}
-	if now.After(entry.expires) {
-		c.deleteLocked(key)
-		return nil, false
-	}
-	if entry.bars < bars {
-		return nil, false
-	}
-	if len(entry.candles) > bars {
-		return entry.candles[len(entry.candles)-bars:], true
-	}
-	return entry.candles, true
-}
-
-func (c *candleCache) put(key string, bars int, candles []domain.Candle) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := time.Now()
-	c.sweepExpiredLocked(now)
-	if len(candles) > candleCacheMaxCandles/8 {
-		return
-	}
-	if existing, ok := c.entries[key]; ok && existing.bars > bars && now.Before(existing.expires) {
-		return
-	}
-	c.deleteLocked(key)
-	for len(c.entries) >= candleCacheMaxEntries || c.total+len(candles) > candleCacheMaxCandles {
-		if !c.evictOneLocked() {
-			break
-		}
-	}
-	c.entries[key] = candleCacheEntry{expires: now.Add(candleCacheTTL), bars: bars, candles: candles}
-	c.total += len(candles)
-}
-
-func (c *candleCache) sweepExpiredLocked(now time.Time) {
-	if now.Sub(c.lastSweep) < candleCacheSweepInterval {
-		return
-	}
-	c.lastSweep = now
-	for key, entry := range c.entries {
-		if now.After(entry.expires) {
-			c.deleteLocked(key)
-		}
-	}
-}
-
-func (c *candleCache) deleteLocked(key string) {
-	if entry, ok := c.entries[key]; ok {
-		c.total -= len(entry.candles)
-		delete(c.entries, key)
-	}
-}
-
-// evictOneLocked libera espacio para la entrada nueva -- primero intenta
-// una ya vencida (barata de perder, iba a expirar sola de todas formas);
-// solo si no encuentra ninguna en la primera vuelta de iteracion cae a
-// borrar la primera que encuentre. El orden de iteracion de un map en Go es
-// aleatorio, asi que sin este intento previo un TTL corto (60s) bajo carga
-// alta (candleCacheMaxEntries=20000 lleno) podia desalojar una entrada
-// recien puesta en vez de una que ya no serve a nadie.
-func (c *candleCache) evictOneLocked() bool {
-	now := time.Now()
-	for k, entry := range c.entries {
-		if now.After(entry.expires) {
-			c.deleteLocked(k)
-			return true
-		}
-	}
-	for k := range c.entries {
-		c.deleteLocked(k)
-		return true
-	}
-	return false
-}
-
 type getCandlesService struct {
 	repo        out.CandleRepository
-	cache       candleCache
 	recentCache *livecandles.RecentCache
 	// fetchGroup colapsa pedidos concurrentes de la MISMA clave (simbolo +
 	// timeframe + bars + before) en una sola consulta real -- sin esto, dos
 	// llamadas que llegan al mismo tiempo (ej. dos pestañas del frontend
 	// mirando el mismo simbolo, o un escaner y un pivots pidiendo D1 de AAPL
-	// a la vez) ambas ven el cache vacio y pagan la misma consulta a
-	// Postgres por duplicado -- mismo patron ya usado en oauth.go para el
+	// a la vez) pagan la misma consulta a Postgres por duplicado -- mismo patron ya usado en oauth.go para el
 	// mismo tipo de problema (confirmado en vivo alla: llamadas concurrentes
 	// duplicando trabajo real).
 	fetchGroup singleflight.Group
@@ -161,31 +32,22 @@ type getCandlesService struct {
 
 func NewGetCandlesService(repo out.CandleRepository, recentCache *livecandles.RecentCache) in.GetCandlesService {
 	return &getCandlesService{
-		repo: repo, cache: candleCache{entries: make(map[string]candleCacheEntry)},
-		recentCache: recentCache, coalescer: newBatchCoalescer(),
+		repo: repo, recentCache: recentCache, coalescer: newBatchCoalescer(),
 	}
 }
 
 func (s *getCandlesService) GetCandles(ctx context.Context, symbol string, timeframe domain.Timeframe, bars int, before *time.Time) ([]domain.Candle, error) {
 	key := candleCacheKey(symbol, timeframe, bars, before)
-	seriesKey := candleSeriesKey(symbol, timeframe, before)
-	var candles []domain.Candle
-	if cached, ok := s.cache.get(seriesKey, bars); ok {
-		candles = cached
-	} else {
-		fetched, err, _ := s.fetchGroup.Do(key, func() (interface{}, error) {
-			return s.repo.GetCandles(ctx, symbol, timeframe, bars, before)
-		})
-		if err != nil {
-			return nil, fmt.Errorf("getting candles for %s %s: %w", symbol, timeframe, err)
-		}
-		candles = fetched.([]domain.Candle)
-		s.cache.put(seriesKey, bars, candles)
+	fetched, err, _ := s.fetchGroup.Do(key, func() (interface{}, error) {
+		return s.repo.GetCandles(ctx, symbol, timeframe, bars, before)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("getting candles for %s %s: %w", symbol, timeframe, err)
 	}
+	candles := fetched.([]domain.Candle)
 	// "hasta ahora" (before=nil): la cola de lo que RecentCache ya cubre se
-	// reemplaza por su version agregada en vivo, sin importar si el resto
-	// vino del cache de 2s o de Postgres recien -- ninguno de los dos
-	// garantiza que la fila mas reciente ya sea visible/completa (confirmado
+	// reemplaza por su version agregada en vivo -- Postgres no garantiza que
+	// la fila mas reciente ya sea visible/completa (confirmado
 	// en vivo el 2026-08-27 con EMAT: volumen incompleto de una vela recien
 	// cerrada). Una fecha puntual (before != nil) es historico ya cerrado,
 	// no necesita nada de esto.
@@ -264,25 +126,15 @@ const candlesBatchFallbackWorkers = 4
 // menos M5/M15) no tenian ningun camino en lote y siempre caian al
 // per-simbolo; ahora lo tienen todos por igual.
 //
-// Consulta primero el cache per-simbolo (mismo candleCache de GetCandles,
-// misma key) -- signal-processing repite el batch del universo completo con
-// alta superposicion de simbolos entre corridas, asi que solo los simbolos
-// faltantes pagan la agregacion. Si el batch agregado da error, el resto
-// (los que ya estaban en el cache no necesitan ni eso) cae al per-simbolo
-// de siempre.
+// Los pedidos concurrentes de los mismos simbolos se juntan en
+// batchCoalescer; ninguna serie se guarda despues de responder. Si el batch
+// agregado da error, cae al per-simbolo de siempre.
 func (s *getCandlesService) GetCandlesBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) map[string][]domain.Candle {
 	result := make(map[string][]domain.Candle, len(symbols))
 	symbolByKey := make(map[string]string, len(symbols))
 	missingKeys := make([]string, 0, len(symbols))
 	for _, symbol := range symbols {
 		key := candleCacheKey(symbol, timeframe, bars, nil)
-		if candles, ok := s.cache.get(candleSeriesKey(symbol, timeframe, nil), bars); ok {
-			// GetCandlesBatch no tiene parametro `before` -- toda llamada es
-			// "hasta ahora", asi que el cache de 2s (bulk historico, cacheable
-			// sin riesgo) siempre se refresca con RecentCache antes de servirse.
-			result[symbol] = s.freshen(symbol, candles, timeframe, bars)
-			continue
-		}
 		symbolByKey[key] = symbol
 		missingKeys = append(missingKeys, key)
 	}
@@ -354,12 +206,10 @@ func (s *getCandlesService) absorbBatch(
 	missing []string, batch map[string][]domain.Candle, timeframe domain.Timeframe, bars int, result map[string][]domain.Candle,
 ) map[string][]domain.Candle {
 	for symbol, candles := range batch {
-		s.cache.put(candleSeriesKey(symbol, timeframe, nil), bars, candles)
 		result[symbol] = s.freshen(symbol, candles, timeframe, bars)
 	}
 	for _, symbol := range missing {
 		if _, ok := batch[symbol]; !ok {
-			s.cache.put(candleSeriesKey(symbol, timeframe, nil), bars, []domain.Candle{})
 			if fresh := s.freshen(symbol, nil, timeframe, bars); len(fresh) > 0 {
 				result[symbol] = fresh
 			}
@@ -396,14 +246,6 @@ func (s *getCandlesService) getCandlesBatchPerSymbol(ctx context.Context, symbol
 	}
 	wg.Wait()
 	return result
-}
-
-func candleSeriesKey(symbol string, timeframe domain.Timeframe, before *time.Time) string {
-	beforeKey := ""
-	if before != nil {
-		beforeKey = strconv.FormatInt(before.UnixMilli(), 10)
-	}
-	return symbol + "|" + string(timeframe) + "|" + beforeKey
 }
 
 func candleCacheKey(symbol string, timeframe domain.Timeframe, bars int, before *time.Time) string {

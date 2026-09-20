@@ -129,6 +129,7 @@ func TestGetCandles_ConcurrentIdenticalRequests_CollapseIntoOneFetch(t *testing.
 	// Solo debe llegar UNA señal de arranque -- singleflight.Do bloquea al
 	// segundo caller ANTES de que toque el repo, nunca llega a ejecutarlo.
 	<-repo.getCandlesStarted
+	time.Sleep(50 * time.Millisecond)
 	close(repo.getCandlesGate)
 
 	for i := 0; i < 2; i++ {

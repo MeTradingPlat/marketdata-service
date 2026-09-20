@@ -19,10 +19,8 @@ type pendingFetch struct {
 // batchCoalescer evita que 2 llamadas concurrentes a GetCandlesBatch --
 // tipicamente 2 escaneres corriendo su ciclo casi al mismo tiempo, con alta
 // superposicion de universo entre si -- paguen la misma consulta a Postgres
-// para el mismo simbolo. A diferencia del cache de 60s (que solo ayuda entre
-// llamadas separadas en el tiempo), esto cubre el caso de 2 pedidos que
-// llegan literalmente a la vez y ven el cache vacio los dos. Confirmado en
-// vivo el 2026-09-12 como una fuente real de trabajo duplicado.
+// para el mismo simbolo. Confirmado en vivo el 2026-09-12 como una fuente
+// real de trabajo duplicado.
 //
 // A proposito NO usa una ventana de tiempo fija (ej. "esperar 1-2s por si
 // aparece otro pedido igual") -- eso le agregaria latencia a CUALQUIER
