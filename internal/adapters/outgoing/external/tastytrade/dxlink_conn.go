@@ -14,6 +14,7 @@ import (
 )
 
 const handshakeTimeout = 30 * time.Second
+const closeFrameTimeout = time.Second
 
 // tcpKeepAlivePeriod: DefaultDialer no habilita keepalive TCP -- sin esto,
 // un peer/ruta muerta que un dispositivo intermedio (NAT/proxy/firewall)
@@ -237,7 +238,19 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 // con cero sesiones abiertas ante TastyTrade.
 func (c *DxLinkConn) Close() {
 	c.closing.Store(true)
+	c.sendCloseFrame()
 	c.cleanup()
+}
+
+func (c *DxLinkConn) sendCloseFrame() {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	frame := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")
+	_ = conn.WriteControl(websocket.CloseMessage, frame, time.Now().Add(closeFrameTimeout))
 }
 
 func (c *DxLinkConn) cleanup() {

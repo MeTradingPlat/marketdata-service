@@ -152,18 +152,21 @@ func main() {
 		<-ctx.Done()
 		log.Info().Msg("shutdown signal received, closing down")
 
+		// Cierra las conexiones DxLink con un close frame explicito ANTES de
+		// esperar al servidor HTTP (que puede tardar los 10 s de
+		// shutdownTimeout con una peticion larga en vuelo) -- si docker
+		// agota su --stop-timeout y mata el proceso con los sockets
+		// abiertos, el servidor de TastyTrade tarda en reclamar las sesiones
+		// y un swap de contenedor deja sesiones huerfanas que saturan el
+		// limite ("number of user sessions has exceeded the configured
+		// limit", confirmado en vivo el 2026-08-18 con 5 swaps en una hora).
+		gateway.ResetLiveConnections()
+
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		if err := e.Shutdown(shutdownCtx); err != nil {
 			log.Error().Err(err).Msg("error shutting down http server")
 		}
-		// Cierra las conexiones DxLink con un FIN explicito antes de morir --
-		// si el proceso muere con los sockets abiertos, el servidor de
-		// TastyTrade tarda en reclamar las sesiones y un swap de contenedor
-		// deja sesiones huerfanas que saturan el limite ("number of user
-		// sessions has exceeded the configured limit", confirmado en vivo el
-		// 2026-08-18 con 5 swaps en una hora).
-		gateway.ResetLiveConnections()
 		dbPool.Close()
 		log.Info().Msg("shutdown complete")
 	})

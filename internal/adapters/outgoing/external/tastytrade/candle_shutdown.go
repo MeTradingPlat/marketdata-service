@@ -3,10 +3,14 @@ package tastytrade
 import (
 	"context"
 	"runtime"
+	"sync"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/rs/zerolog/log"
 )
+
+const closeAllConnectionsLimit = 5 * time.Second
 
 // StopAllLive desuscribe TODAS las suscripciones M1 en vivo del pool -- se
 // usa antes del barrido pesado de D1/H1 sobre el universo completo (en una
@@ -62,8 +66,9 @@ func (p *CandlePool) StopAllLive(ctx context.Context) {
 	log.Info().Int("symbols", len(stopped)).Msg("stopped all live M1 subscriptions for the maintenance window")
 }
 
-// CloseAllConnections desuscribe todo lo que haya ocupado en cada canal y
-// cierra las conexiones fisicas del pool sin esperar -- se usa en las
+// CloseAllConnections cierra en paralelo, con un close frame explicito, las
+// conexiones fisicas del pool (cerrar la conexion ya descarta sus
+// suscripciones, no hace falta desuscribir simbolo por simbolo) -- se usa en las
 // fronteras D1->H1->M1 del barrido nocturno para que cada fase arranque
 // con cero sesiones abiertas ante TastyTrade, en vez de arrastrar las
 // conexiones que uso la fase anterior justo cuando la siguiente intenta
@@ -72,7 +77,10 @@ func (p *CandlePool) StopAllLive(ctx context.Context) {
 // marca cada conexion como cierre intencional para que no dispare su
 // propia reconexion automatica.
 func (p *CandlePool) CloseAllConnections() {
+	start := time.Now()
 	conns := p.allocator.drainAll()
+	closeConnections(conns, closeAllConnectionsLimit)
+	closedIn := time.Since(start)
 
 	p.dispatchMu.Lock()
 	p.dispatch = make(map[string]dispatchEntry)
@@ -95,31 +103,28 @@ func (p *CandlePool) CloseAllConnections() {
 	p.current = make(map[string]domain.Candle)
 	p.currentMu.Unlock()
 
-	for _, pc := range conns {
-		pc.mu.Lock()
-		channels := append([]*pooledChannel(nil), pc.channels...)
-		pc.mu.Unlock()
-
-		for _, ch := range channels {
-			ch.mu.Lock()
-			keys := make([]string, 0, len(ch.symbols))
-			for key := range ch.symbols {
-				keys = append(keys, key)
-			}
-			ch.mu.Unlock()
-			for _, key := range keys {
-				if symbol, tf, ok := parseCandleKey(key); ok {
-					_ = ch.channel.unsubscribe(symbol, tf)
-				}
-			}
-		}
-		pc.conn.Close()
-	}
-
-	// goroutines DESPUES de cerrar: si healthCheckLoop/keepaliveLoop de las
-	// conexiones recien cerradas no se apagan solas, este numero no baja
-	// entre fronteras aunque las conexiones ya esten "cerradas" -- la unica
-	// forma de confirmarlo desde los logs sin exponer pprof.
 	log.Info().Int("connections", len(conns)).Int("goroutines", runtime.NumGoroutine()).
+		Dur("connectionsClosedIn", closedIn).Dur("total", time.Since(start)).
 		Msg("closed all dxlink connections at phase boundary")
+}
+
+func closeConnections(conns []*pooledConnection, limit time.Duration) {
+	var wg sync.WaitGroup
+	for _, pc := range conns {
+		wg.Add(1)
+		go func(pc *pooledConnection) {
+			defer wg.Done()
+			pc.conn.Close()
+		}(pc)
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		log.Warn().Int("connections", len(conns)).Dur("limit", limit).Msg("closing dxlink connections did not finish in time")
+	}
 }
