@@ -98,6 +98,10 @@ type GetMarketsService interface {
 	GetMarkets(ctx context.Context) ([]dto.Market, error)
 }
 
+type GetVolumeProfilesService interface {
+	GetVolumeProfiles(ctx context.Context, symbols []string, timeframe domain.Timeframe) (map[string]dto.VolumeProfile, error)
+}
+
 type GetTimeframesService interface {
 	GetTimeframes() []dto.TimeframeInfo
 }

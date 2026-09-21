@@ -22,11 +22,12 @@ type Router struct {
 	fundamentalsWS *handler.FundamentalsWSHandler
 	prices         *handler.CurrentPricesHandler
 	debugProbe     *handler.DebugProbeHandler
+	volumeProfile  *handler.VolumeProfileHandler
 	backfilling    *atomic.Bool
 }
 
-func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, snapshotWS *handler.SnapshotWSHandler, fundamentalsWS *handler.FundamentalsWSHandler, prices *handler.CurrentPricesHandler, debugProbe *handler.DebugProbeHandler, backfilling *atomic.Bool) *Router {
-	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, snapshotWS: snapshotWS, fundamentalsWS: fundamentalsWS, prices: prices, debugProbe: debugProbe, backfilling: backfilling}
+func NewRouter(e *echo.Echo, candles *handler.CandlesHandler, health *handler.HealthHandler, intraday *handler.IntradayHandler, fundamentals *handler.FundamentalsHandler, metadata *handler.MetadataHandler, candleWS *handler.CandleWSHandler, snapshotWS *handler.SnapshotWSHandler, fundamentalsWS *handler.FundamentalsWSHandler, prices *handler.CurrentPricesHandler, debugProbe *handler.DebugProbeHandler, volumeProfile *handler.VolumeProfileHandler, backfilling *atomic.Bool) *Router {
+	return &Router{echo: e, candles: candles, health: health, intraday: intraday, fundamentals: fundamentals, metadata: metadata, candleWS: candleWS, snapshotWS: snapshotWS, fundamentalsWS: fundamentalsWS, prices: prices, debugProbe: debugProbe, volumeProfile: volumeProfile, backfilling: backfilling}
 }
 
 // Init durante el fill/refill deja pasar siempre las lecturas livianas
@@ -62,6 +63,7 @@ func (r *Router) Init() {
 	r.echo.GET("/marketdata/historical/:symbol", r.candles.GetCandles)
 	r.echo.GET("/marketdata/candles/:symbol/current", r.candles.GetCurrentCandle)
 	r.echo.POST("/marketdata/historical/batch", r.candles.GetCandlesBatch)
+	r.echo.POST("/marketdata/volume-profile", r.volumeProfile.GetVolumeProfiles)
 	r.echo.GET("/marketdata/intraday/:symbol", r.intraday.GetSnapshot)
 	r.echo.GET("/marketdata/fundamentals/:symbol", r.fundamentals.GetFundamentals)
 	r.echo.POST("/marketdata/fundamentals/realtime", r.fundamentals.GetFundamentalsRealtime)

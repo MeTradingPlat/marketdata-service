@@ -45,6 +45,7 @@ func main() {
 		candleRepo out.CandleRepository,
 		symbols out.SymbolRepository,
 		fundamentalsRepo out.FundamentalsRepository,
+		volumeProfiles out.VolumeProfileRepository,
 		ingest in.IngestCandlesService,
 		edgar out.SharesOutstandingGateway,
 		insiders out.InsiderOwnershipGateway,
@@ -113,7 +114,7 @@ func main() {
 		// reconciler (que lo consulta antes de reintentar un simbolo nunca
 		// intentado) -- ver shouldSkipReconcileRetry.
 		var liveRolloutDone atomic.Bool
-		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, symbolsCache, &liveRolloutDone)
+		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, volumeProfiles, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, symbolsCache, &liveRolloutDone)
 		StartLiveReconcileLoop(ctx, ingest, gateway, symbols, candleRepo, &liveRolloutDone)
 		// StartSnapshotReconcileLoop (reconciliar el tracker contra Postgres
 		// cada 20 min con un ARRAY_AGG sobre el M1 del dia entero) se quita a

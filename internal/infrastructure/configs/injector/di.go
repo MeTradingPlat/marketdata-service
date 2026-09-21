@@ -18,6 +18,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/metadata"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/volumeprofile"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/router"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs/server"
@@ -42,6 +43,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideCandleRepository))
 	checkErr(container.Provide(provideSymbolRepository))
 	checkErr(container.Provide(provideFundamentalsRepository))
+	checkErr(container.Provide(provideVolumeProfileRepository))
 
 	checkErr(container.Provide(provideDiscoveryClient))
 	checkErr(container.Provide(livecandles.NewBroadcaster[domain.Candle]))
@@ -77,6 +79,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(metadata.NewGetTimeframesService))
 	checkErr(container.Provide(metadata.NewSearchSymbolsService))
 	checkErr(container.Provide(metadata.NewGetSymbolDetailsService))
+	checkErr(container.Provide(volumeprofile.NewGetVolumeProfilesService))
 
 	checkErr(container.Provide(handler.NewCandlesHandler))
 	checkErr(container.Provide(provideHealthHandler))
@@ -88,6 +91,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(handler.NewFundamentalsWSHandler))
 	checkErr(container.Provide(handler.NewCurrentPricesHandler))
 	checkErr(container.Provide(handler.NewDebugProbeHandler))
+	checkErr(container.Provide(handler.NewVolumeProfileHandler))
 
 	checkErr(container.Provide(server.NewServer))
 	checkErr(container.Provide(provideBackfillGate))
@@ -133,6 +137,10 @@ func provideCandleRepository(pool *pgxpool.Pool, writePool writePool, snapshotPo
 
 func provideSymbolRepository(pool *pgxpool.Pool) out.SymbolRepository {
 	return timescale.NewSymbolRepository(pool)
+}
+
+func provideVolumeProfileRepository(pool *pgxpool.Pool) out.VolumeProfileRepository {
+	return timescale.NewVolumeProfileRepository(pool)
 }
 
 func provideFundamentalsRepository(pool *pgxpool.Pool) out.FundamentalsRepository {

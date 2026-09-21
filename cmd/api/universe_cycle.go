@@ -61,22 +61,22 @@ func refreshWithRetry(name string, fn func() error) {
 // termine. Solo beta (D1) y prevClose/prevPostMarketVolume (M1) quedan
 // despues de su fase respectiva, porque esos si dependen de velas propias
 // recien sembradas (ver el cuerpo de runUniverseCycle).
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, volumeProfiles out.VolumeProfileRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, volumeProfiles, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, volumeProfiles, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, volumeProfiles out.VolumeProfileRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
 	// Pipeline del backfill: D1 primero, se cierran las conexiones, se calcula
 	// beta (D1), luego H1 (se cierra, backfill nativo propio), y por ultimo
 	// M1 que se queda suscrito. backfilling bloquea SOLO las rutas de
@@ -220,6 +220,9 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	})
 	refreshWithRetry("prev post market volume", func() error {
 		return catchup.RefreshPrevPostMarketVolume(ctx, candles, fundamentals, fundamentalsCache, windowStart)
+	})
+	refreshWithRetry("volume profile", func() error {
+		return catchup.RefreshVolumeProfile(ctx, volumeProfiles, windowStart, time.Now())
 	})
 	// Todo lo que este ciclo escribio ya quedo reflejado en el cache al
 	// momento de escribirse. Ya no hace falta un ReloadAll de cierre.

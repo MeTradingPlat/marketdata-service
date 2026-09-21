@@ -253,3 +253,16 @@ ALTER TABLE candles ADD COLUMN IF NOT EXISTS last_written_at TIMESTAMPTZ;
 -- ningun caller las lea mas -- puro gasto de CPU/IO en el VAIO.
 DROP MATERIALIZED VIEW IF EXISTS candles_m5 CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS candles_m15 CASCADE;
+
+-- Perfil de volumen acumulado por franja de la sesion extendida (04:00-20:00
+-- ET, 960 slots M1): promedio, sobre las ultimas N sesiones, del volumen
+-- acumulado del dia hasta el cierre de cada minuto. Un array por simbolo,
+-- recalculado una vez por ventana de mantenimiento (ver
+-- catchup.RefreshVolumeProfile); sessions=0 y array vacio marcan "se intento
+-- y no hay datos" para no recalcularlo en cada reinicio.
+CREATE TABLE IF NOT EXISTS volume_profiles (
+    symbol_id   INT PRIMARY KEY REFERENCES tracked_symbols(symbol_id),
+    sessions    SMALLINT NOT NULL,
+    cumulative  REAL[] NOT NULL,
+    computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
