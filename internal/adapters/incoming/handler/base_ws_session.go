@@ -20,9 +20,7 @@ import (
 // nunca debe bloquearse por esto (ver publish), asi que un valor generoso
 // aca solo cuesta memoria de un unico canal por sesion, no una goroutina por
 // suscripcion como antes.
-const outboundBuffer = 2048
-
-const reliablePublishTimeout = 10 * time.Second
+const outboundBuffer = 8192
 
 type baseWSSession struct {
 	conn    *websocket.Conn
@@ -40,6 +38,10 @@ type baseWSSession struct {
 	out  chan any
 	done chan struct{}
 
+	overflow       *overflowQueue
+	overflowSignal chan struct{}
+	sender         func(any)
+
 	// errContext identifica la sesion en el log de un sendJSON fallido --
 	// unico dato que de verdad difiere entre wsSession y relayWSSession[T]
 	// en esta parte compartida.
@@ -48,11 +50,13 @@ type baseWSSession struct {
 
 func newBaseWSSession(conn *websocket.Conn, errContext string) baseWSSession {
 	return baseWSSession{
-		conn:       conn,
-		subs:       make(map[string]func()),
-		out:        make(chan any, outboundBuffer),
-		done:       make(chan struct{}),
-		errContext: errContext,
+		conn:           conn,
+		subs:           make(map[string]func()),
+		out:            make(chan any, outboundBuffer),
+		done:           make(chan struct{}),
+		overflow:       newOverflowQueue(maxOverflowMessages),
+		overflowSignal: make(chan struct{}, 1),
+		errContext:     errContext,
 	}
 }
 
@@ -63,7 +67,11 @@ func (s *baseWSSession) dispatchLoop() {
 	for {
 		select {
 		case v := <-s.out:
-			s.sendJSON(v)
+			s.deliver(v)
+		case <-s.overflowSignal:
+			if !s.drainOverflow() {
+				return
+			}
 		case <-s.done:
 			return
 		}
@@ -83,23 +91,47 @@ func (s *baseWSSession) publish(v any) {
 }
 
 // publishReliable es publish para lo que NO puede perderse (una vela cerrada):
-// si la cola de la sesion esta llena, no descarta en silencio -- reintenta en
-// una goroutine acotada por reliablePublishTimeout y deja un aviso en el log.
+// si la cola de la sesion esta llena, la vela pasa a una cola de desborde
+// que el mismo dispatchLoop vacia (sin una goroutine por mensaje, que con
+// miles de cierres simultaneos era el patron que ya causo un OOM) y solo se
+// descarta, con un error en el log, si esa cola tambien se llena.
 func (s *baseWSSession) publishReliable(v any) {
 	select {
 	case s.out <- v:
 		return
 	default:
 	}
-	log.Warn().Msg("ws session outbound queue full, delaying a closed candle instead of dropping it")
-	go func() {
+	if s.overflow.push(v) {
 		select {
-		case s.out <- v:
-		case <-s.done:
-		case <-time.After(reliablePublishTimeout):
-			log.Error().Msg("ws session outbound queue stayed full, closed candle dropped")
+		case s.overflowSignal <- struct{}{}:
+		default:
 		}
-	}()
+	}
+}
+
+func (s *baseWSSession) drainOverflow() bool {
+	for {
+		batch := s.overflow.take()
+		if len(batch) == 0 {
+			return true
+		}
+		for _, v := range batch {
+			select {
+			case <-s.done:
+				return false
+			default:
+			}
+			s.deliver(v)
+		}
+	}
+}
+
+func (s *baseWSSession) deliver(v any) {
+	if s.sender != nil {
+		s.sender(v)
+		return
+	}
+	s.sendJSON(v)
 }
 
 // armKeepalive arma el deadline de lectura y el pong handler que lo

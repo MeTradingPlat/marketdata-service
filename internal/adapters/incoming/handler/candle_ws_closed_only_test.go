@@ -3,7 +3,9 @@ package handler
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,23 +107,82 @@ func TestCandleWS_SinClosedOnlyElGraficoSigueRecibiendoLasVelasEnFormacion(t *te
 	}
 }
 
-func TestBaseWSSession_UnaVelaCerradaConLaColaLlenaSeRetrasaPeroNoSePierde(t *testing.T) {
-	s := &baseWSSession{out: make(chan any, 1), done: make(chan struct{})}
-	s.publish("parcial-1")
-
-	s.publish("parcial-2")
-	s.publishReliable("cerrada")
-
-	if got := <-s.out; got != "parcial-1" {
-		t.Fatalf("primero debia salir lo ya encolado, got %v", got)
+func newTestBaseSession(outCap int, overflowMax int, sender func(any)) *baseWSSession {
+	return &baseWSSession{
+		out:            make(chan any, outCap),
+		done:           make(chan struct{}),
+		overflow:       newOverflowQueue(overflowMax),
+		overflowSignal: make(chan struct{}, 1),
+		sender:         sender,
 	}
-	select {
-	case got := <-s.out:
-		if got != "cerrada" {
-			t.Fatalf("debia llegar la cerrada (el parcial-2 se descarta), got %v", got)
+}
+
+func TestBaseWSSession_UnDesbordeDeVelasCerradasSeEntregaCompletoSinCrearGoroutinesPorMensaje(t *testing.T) {
+	const total = 5000
+	var mu sync.Mutex
+	delivered := make(map[int]int, total)
+	s := newTestBaseSession(8, 100_000, func(v any) {
+		time.Sleep(20 * time.Microsecond)
+		mu.Lock()
+		delivered[v.(int)]++
+		mu.Unlock()
+	})
+	go s.dispatchLoop()
+	defer close(s.done)
+	before := runtime.NumGoroutine()
+
+	for i := 0; i < total; i++ {
+		s.publishReliable(i)
+	}
+	during := runtime.NumGoroutine()
+
+	deadline := time.After(10 * time.Second)
+	for {
+		mu.Lock()
+		n := len(delivered)
+		mu.Unlock()
+		if n == total {
+			break
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("la vela cerrada se perdio con la cola llena")
+		select {
+		case <-deadline:
+			t.Fatalf("se entregaron %d de %d velas cerradas", n, total)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	for i, count := range delivered {
+		if count != 1 {
+			t.Fatalf("la vela %d se entrego %d veces", i, count)
+		}
+	}
+	if during-before > 20 {
+		t.Fatalf("el desborde no debe crear una goroutine por mensaje: %d -> %d", before, during)
+	}
+}
+
+func TestBaseWSSession_ElDesbordeTieneTopeYDescartaElExceso(t *testing.T) {
+	s := newTestBaseSession(1, 3, nil)
+
+	for i := 0; i < 10; i++ {
+		s.publishReliable(i)
+	}
+
+	if got := len(s.overflow.take()); got != 3 {
+		t.Fatalf("la cola de desborde debe topear en 3, got %d", got)
+	}
+	if len(s.out) != 1 {
+		t.Fatalf("out debia quedar con 1 mensaje, got %d", len(s.out))
+	}
+}
+
+func TestBaseWSSession_LasParcialesSeSiguenDescartandoConLaColaLlena(t *testing.T) {
+	s := newTestBaseSession(1, 10, nil)
+
+	s.publish("parcial-1")
+	s.publish("parcial-2")
+
+	if len(s.out) != 1 || len(s.overflow.take()) != 0 {
+		t.Fatalf("una parcial con la cola llena se descarta, no va al desborde")
 	}
 }
 
