@@ -41,19 +41,8 @@ type marketMetricsResponse struct {
 // liquidity-rating llegan como numero JSON crudo, el resto como string
 // (asi los devuelve TastyTrade, no es inconsistencia nuestra).
 func (g *Gateway) MarketMetrics(ctx context.Context, symbols []string) ([]domain.Fundamentals, error) {
-	var all []domain.Fundamentals
-	for i := 0; i < len(symbols); i += marketMetricsChunkSize {
-		if i > 0 {
-			time.Sleep(marketMetricsChunkThrottle)
-		}
-		end := min(i+marketMetricsChunkSize, len(symbols))
-		chunk, err := g.fetchMarketMetricsChunk(ctx, symbols[i:end])
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, chunk...)
-	}
-	return all, nil
+	policy := chunkPolicy{size: marketMetricsChunkSize, throttle: marketMetricsChunkThrottle, attempts: chunkFetchAttempts, backoff: chunkFetchBackoff}
+	return fetchInChunks(ctx, symbols, policy, g.fetchMarketMetricsChunk)
 }
 
 func (g *Gateway) fetchMarketMetricsChunk(ctx context.Context, symbols []string) ([]domain.Fundamentals, error) {

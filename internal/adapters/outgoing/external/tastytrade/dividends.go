@@ -17,6 +17,8 @@ const (
 	// endpoints aunque ambos devuelvan fundamentales.
 	dividendChunkSize     = 100
 	dividendChunkThrottle = 500 * time.Millisecond
+	chunkFetchAttempts    = 3
+	chunkFetchBackoff     = time.Second
 )
 
 type marketDataResponse struct {
@@ -39,19 +41,8 @@ type marketDataResponse struct {
 // confirmado con muestra real de los 6 mercados (SPACs, warrants, ETNs y
 // ETFs apalancados sin distribucion), no es un hueco de datos.
 func (g *Gateway) DividendInfo(ctx context.Context, symbols []string) ([]domain.Fundamentals, error) {
-	var all []domain.Fundamentals
-	for i := 0; i < len(symbols); i += dividendChunkSize {
-		if i > 0 {
-			time.Sleep(dividendChunkThrottle)
-		}
-		end := min(i+dividendChunkSize, len(symbols))
-		chunk, err := g.fetchDividendChunk(ctx, symbols[i:end])
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, chunk...)
-	}
-	return all, nil
+	policy := chunkPolicy{size: dividendChunkSize, throttle: dividendChunkThrottle, attempts: chunkFetchAttempts, backoff: chunkFetchBackoff}
+	return fetchInChunks(ctx, symbols, policy, g.fetchDividendChunk)
 }
 
 func (g *Gateway) fetchDividendChunk(ctx context.Context, symbols []string) ([]domain.Fundamentals, error) {
