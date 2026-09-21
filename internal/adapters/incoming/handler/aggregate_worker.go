@@ -13,15 +13,25 @@ var aggregateCloseDelay = 3 * time.Second
 
 type aggregateWorker struct {
 	mu         sync.Mutex
-	agg        *dto.CandleBar
+	cur        *periodState
+	closed     *periodState
 	tf         domain.Timeframe
 	out        *livecandles.Broadcaster[dto.CandleBar]
 	stopRaw    func()
 	refCount   int
-	minuteVols map[int64]int64
-	seedMinute int64
 	lastClosed int64
 	timer      *time.Timer
+}
+
+func newAggregateWorker(tf domain.Timeframe, seed *dto.CandleBar) *aggregateWorker {
+	w := &aggregateWorker{out: livecandles.NewBroadcaster[dto.CandleBar](), tf: tf}
+	if seed != nil {
+		w.cur = seededPeriodState(*seed, time.Now().UTC().Truncate(time.Minute).Unix())
+		w.mu.Lock()
+		w.armLocked()
+		w.mu.Unlock()
+	}
+	return w
 }
 
 func (w *aggregateWorker) onTick(c domain.Candle) {
@@ -31,60 +41,51 @@ func (w *aggregateWorker) onTick(c domain.Candle) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	period := livecandles.FormingPeriodStart(c.Timestamp, w.tf).Unix()
-	if period <= w.lastClosed || (w.agg != nil && period < w.agg.Time) {
-		return
-	}
-	if w.agg == nil || w.agg.Time != period {
+	switch {
+	case w.closed != nil && period == w.closed.bar.Time:
+		w.correctClosedLocked(c)
+	case period <= w.lastClosed || (w.cur != nil && period < w.cur.bar.Time):
+	case w.cur == nil || w.cur.bar.Time != period:
 		w.closeLocked()
-		w.agg = &dto.CandleBar{Time: period, Open: c.Open, High: c.High, Low: c.Low, Close: c.Close, Volume: c.Volume, Closed: false}
-		w.minuteVols = map[int64]int64{c.Timestamp.Unix(): c.Volume}
-		w.seedMinute = 0
+		w.cur = newPeriodState(period, c)
 		w.armLocked()
-	} else {
-		w.mergeLocked(c)
+		w.out.Publish(aggregateBroadcastKey, w.cur.bar)
+	default:
+		w.cur.apply(c)
+		w.out.Publish(aggregateBroadcastKey, w.cur.bar)
 	}
-	w.out.Publish(aggregateBroadcastKey, *w.agg)
 }
 
-func (w *aggregateWorker) mergeLocked(c domain.Candle) {
-	if c.High > w.agg.High {
-		w.agg.High = c.High
+func (w *aggregateWorker) correctClosedLocked(c domain.Candle) {
+	before := w.closed.bar
+	w.closed.apply(c)
+	if w.closed.bar == before {
+		return
 	}
-	if c.Low < w.agg.Low {
-		w.agg.Low = c.Low
-	}
-	w.agg.Close = c.Close
-	minute := c.Timestamp.Unix()
-	previous, seen := w.minuteVols[minute]
-	switch {
-	case seen:
-		w.agg.Volume += c.Volume - previous
-	case w.seedMinute != 0 && minute <= w.seedMinute:
-	default:
-		w.agg.Volume += c.Volume
-	}
-	w.minuteVols[minute] = c.Volume
+	corrected := w.closed.bar
+	corrected.Corrected = true
+	w.out.Publish(aggregateBroadcastKey, corrected)
 }
 
 func (w *aggregateWorker) closeLocked() {
 	if w.timer != nil {
 		w.timer.Stop()
 	}
-	if w.agg == nil {
+	if w.cur == nil {
 		return
 	}
-	closed := *w.agg
-	closed.Closed = true
-	w.lastClosed = w.agg.Time
-	w.agg = nil
-	w.out.Publish(aggregateBroadcastKey, closed)
+	w.cur.bar.Closed = true
+	w.closed = w.cur
+	w.lastClosed = w.cur.bar.Time
+	w.cur = nil
+	w.out.Publish(aggregateBroadcastKey, w.closed.bar)
 }
 
 func (w *aggregateWorker) armLocked() {
 	if w.timer != nil {
 		w.timer.Stop()
 	}
-	period := w.agg.Time
+	period := w.cur.bar.Time
 	end := livecandles.NextPeriodStart(time.Unix(period, 0).UTC(), w.tf)
 	w.timer = time.AfterFunc(time.Until(end)+aggregateCloseDelay, func() { w.closeElapsed(period) })
 }
@@ -92,7 +93,7 @@ func (w *aggregateWorker) armLocked() {
 func (w *aggregateWorker) closeElapsed(period int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.agg != nil && w.agg.Time == period {
+	if w.cur != nil && w.cur.bar.Time == period {
 		w.closeLocked()
 	}
 }

@@ -49,14 +49,7 @@ func (h *candleAggregateHub) Subscribe(ctx context.Context, symbol, timeframe st
 		if h.current != nil {
 			seed, _ = h.current.GetCurrentCandle(ctx, symbol, tf)
 		}
-		w = &aggregateWorker{out: livecandles.NewBroadcaster[dto.CandleBar](), tf: tf, agg: seedAggregate(seed, tf, time.Now())}
-		if w.agg != nil {
-			w.mu.Lock()
-			w.minuteVols = make(map[int64]int64)
-			w.seedMinute = time.Now().UTC().Truncate(time.Minute).Unix()
-			w.armLocked()
-			w.mu.Unlock()
-		}
+		w = newAggregateWorker(tf, seedAggregate(seed, tf, time.Now()))
 		w.stopRaw = h.raw.Subscribe(symbol, w.onTick)
 		h.workers[key] = w
 	}

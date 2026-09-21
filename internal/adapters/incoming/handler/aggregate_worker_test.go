@@ -51,7 +51,7 @@ func TestAggregateWorker_CierraLaVelaPorTiempoSinEsperarElSiguienteTick(t *testi
 	}
 }
 
-func TestAggregateWorker_UnTickTardioDeUnPeriodoCerradoSeIgnora(t *testing.T) {
+func TestAggregateWorker_UnaCorreccionTardiaDeUnPeriodoCerradoSeReenviaCorregida(t *testing.T) {
 	previous := aggregateCloseDelay
 	aggregateCloseDelay = 50 * time.Millisecond
 	defer func() { aggregateCloseDelay = previous }()
@@ -65,9 +65,77 @@ func TestAggregateWorker_UnTickTardioDeUnPeriodoCerradoSeIgnora(t *testing.T) {
 
 	raw.Publish("AAPL", m1(old, 80))
 
+	bar := mustDrain(t, ch, 1)[0]
+	if !bar.Closed || !bar.Corrected || bar.Volume != 80 || bar.Time != old.Unix() {
+		t.Fatalf("debe reenviarse la MISMA vela cerrada con el volumen corregido: %+v", bar)
+	}
+}
+
+func TestAggregateWorker_UnaCorreccionSinCambiosNoSeReenvia(t *testing.T) {
+	previous := aggregateCloseDelay
+	aggregateCloseDelay = 50 * time.Millisecond
+	defer func() { aggregateCloseDelay = previous }()
+	raw := livecandles.NewBroadcaster[domain.Candle]()
+	hub := newCandleAggregateHub(raw, nilCurrentCandleService{})
+	ch, cancel := subscribeToChan(hub, "AAPL", "M1", domain.M1)
+	defer cancel()
+	old := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	raw.Publish("AAPL", m1(old, 70))
+	mustDrain(t, ch, 2)
+
+	raw.Publish("AAPL", m1(old, 70))
+
 	select {
 	case bar := <-ch:
-		t.Fatalf("un tick tardio de un periodo ya cerrado no debe reabrirlo: %+v", bar)
+		t.Fatalf("una repeticion identica no debe reenviarse: %+v", bar)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestAggregateWorker_CorregirUnMinutoAnteriorNoCambiaElCierreDeLaVela(t *testing.T) {
+	previous := aggregateCloseDelay
+	aggregateCloseDelay = time.Hour
+	defer func() { aggregateCloseDelay = previous }()
+	raw := livecandles.NewBroadcaster[domain.Candle]()
+	hub := newCandleAggregateHub(raw, nilCurrentCandleService{})
+	ch, cancel := subscribeToChan(hub, "AAPL", "M5", domain.M5)
+	defer cancel()
+	start := livecandles.FormingPeriodStart(time.Now().UTC(), domain.M5).Add(-5 * time.Minute)
+	withClose := func(ts time.Time, closePrice float64, volume int64) domain.Candle {
+		return domain.Candle{Symbol: "AAPL", Timestamp: ts, Open: 10, High: 12, Low: 9, Close: closePrice, Volume: volume}
+	}
+	raw.Publish("AAPL", withClose(start, 10.1, 100))
+	raw.Publish("AAPL", withClose(start.Add(4*time.Minute), 10.9, 30))
+	raw.Publish("AAPL", withClose(start.Add(5*time.Minute), 11, 5))
+	mustDrain(t, ch, 4)
+
+	raw.Publish("AAPL", withClose(start, 10.2, 120))
+
+	corrected := mustDrain(t, ch, 1)[0]
+	if corrected.Close != 10.9 || corrected.Volume != 150 || !corrected.Corrected {
+		t.Fatalf("el cierre debe seguir siendo el del ultimo minuto y el volumen 120+30: %+v", corrected)
+	}
+}
+
+func TestAggregateWorker_UnaCorreccionMasVieja_QueElUltimoPeriodoCerradoSeIgnora(t *testing.T) {
+	previous := aggregateCloseDelay
+	aggregateCloseDelay = time.Hour
+	defer func() { aggregateCloseDelay = previous }()
+	raw := livecandles.NewBroadcaster[domain.Candle]()
+	hub := newCandleAggregateHub(raw, nilCurrentCandleService{})
+	ch, cancel := subscribeToChan(hub, "AAPL", "M5", domain.M5)
+	defer cancel()
+	start := livecandles.FormingPeriodStart(time.Now().UTC(), domain.M5).Add(-10 * time.Minute)
+	raw.Publish("AAPL", m1(start, 100))
+	raw.Publish("AAPL", m1(start.Add(5*time.Minute), 10))
+	raw.Publish("AAPL", m1(start.Add(10*time.Minute), 10))
+	mustDrain(t, ch, 5)
+
+	raw.Publish("AAPL", m1(start, 999))
+
+	select {
+	case bar := <-ch:
+		t.Fatalf("solo se corrige el ultimo periodo cerrado, no uno anterior: %+v", bar)
 	case <-time.After(300 * time.Millisecond):
 	}
 }

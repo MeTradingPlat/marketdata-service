@@ -13,6 +13,10 @@ type CandleBar struct {
 	Close  float64 `json:"close"`
 	Volume int64   `json:"volume"`
 	Closed bool    `json:"closed"`
+	// Corrected marca una vela ya cerrada que se vuelve a enviar con datos
+	// corregidos (un tick tardio de dxFeed) -- el consumidor debe reemplazar
+	// la que ya tenia con el mismo time, no agregar otra.
+	Corrected bool `json:"corrected,omitempty"`
 }
 
 type CandleHistoryMessage struct {
