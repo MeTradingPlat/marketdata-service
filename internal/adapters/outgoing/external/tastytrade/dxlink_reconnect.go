@@ -56,7 +56,7 @@ func (c *DxLinkConn) ForceReconnect(ctx context.Context) {
 
 func (c *DxLinkConn) handleDisconnect(ctx context.Context) {
 	c.mu.Lock()
-	c.authenticated = false
+	c.setAuthenticated(false)
 	c.mu.Unlock()
 	c.scheduleReconnect(ctx)
 }

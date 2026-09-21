@@ -56,7 +56,7 @@ func (c *DxLinkConn) notifyHandshakeFailure(err error) {
 		// sola observacion) si vale la pena cancelar dials en vuelo cuando
 		// el breaker se activa, antes de tocar codigo historicamente fragil
 		// (ver docs/dxlink-session-incidents.md).
-		log.Warn().Msg("dxlink session saturation detected during handshake (new connection rejected)")
+		log.Warn().Int64("openSessions", openDxLinkSessions.Load()).Msg("dxlink session saturation detected during handshake (new connection rejected)")
 		c.markSessionSaturated()
 	}
 
@@ -71,7 +71,7 @@ func (c *DxLinkConn) notifyHandshakeFailure(err error) {
 
 func (c *DxLinkConn) markAuthenticated() {
 	c.mu.Lock()
-	c.authenticated = true
+	c.setAuthenticated(true)
 	done := c.handshakeDone
 	c.handshakeDone = nil
 	c.mu.Unlock()
@@ -139,7 +139,7 @@ func (c *DxLinkConn) handleError(ctx context.Context, env inboundEnvelope) {
 			c.markSessionSaturated()
 		}
 		c.mu.Lock()
-		c.authenticated = false
+		c.setAuthenticated(false)
 		c.mu.Unlock()
 		c.scheduleReconnect(ctx)
 	case "INVALID_MESSAGE":
@@ -154,7 +154,7 @@ func (c *DxLinkConn) handleError(ctx context.Context, env inboundEnvelope) {
 		// suscripcion especifica lo causo.
 		log.Error().Str("error", env.Error).Str("message", env.Message).Msg("dxlink INVALID_MESSAGE, forcing reconnect")
 		c.mu.Lock()
-		c.authenticated = false
+		c.setAuthenticated(false)
 		c.mu.Unlock()
 		c.scheduleReconnect(ctx)
 	default:

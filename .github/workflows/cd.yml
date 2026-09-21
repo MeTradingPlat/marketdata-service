@@ -5,15 +5,36 @@ on:
     workflows: ["CI Metradingplat MarketData Service"]
     types:
       - completed
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Desplegar aunque el mercado este abierto"
+        type: boolean
+        default: false
 
 jobs:
   deploy:
     runs-on: self-hosted
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Block deploys during US market hours
+        env:
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          dow=$(TZ=America/New_York date +%u)
+          hour=$(TZ=America/New_York date +%-H)
+          if [ "$dow" -le 5 ] && [ "$hour" -ge 4 ] && [ "$hour" -lt 20 ]; then
+            if [ "$FORCE" = "true" ]; then
+              echo "::warning::Despliegue forzado en horario de mercado"
+            else
+              echo "::error::Un reinicio de marketdata con el mercado abierto deja el M1 en vivo degradado ~40 min (barrido + limite de sesiones DxLink). Vuelve a ejecutar este workflow despues de las 20:00 ET o lanzalo a mano con force=true."
+              exit 1
+            fi
+          fi
 
       - name: Acquire exclusive deploy lock (avoid overwhelming the shared host)
         run: |
@@ -245,6 +266,12 @@ jobs:
       - name: Delete Old Application Container
         run: |
           docker stop marketdata-service 2>/dev/null || true
+          mkdir -p "$HOME/deploy-logs"
+          log_file="$HOME/deploy-logs/marketdata-service-$(date -u +%Y%m%dT%H%M%SZ).log"
+          docker logs --tail 5000 marketdata-service > "$log_file" 2>&1 || true
+          find "$HOME/deploy-logs" -name 'marketdata-service-*.log' -mtime +14 -delete 2>/dev/null || true
+          echo "Apagado del contenedor anterior (archivado en $log_file):"
+          grep -E '"message":"(shutdown|closed all dxlink|dxlink session)' "$log_file" | tail -20 || true
           docker rm -f marketdata-service || true
 
       - name: Run Application Container

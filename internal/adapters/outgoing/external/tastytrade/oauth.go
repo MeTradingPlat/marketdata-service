@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -130,52 +129,11 @@ func (o *OAuth) RefreshAccessToken(ctx context.Context) (string, error) {
 	return o.accessToken, nil
 }
 
-// LogoutAllSessions cierra las sesiones de TastyTrade del access token
-// actual (incluidas las conexiones dxlink de contenedores anteriores que
-// quedaron vivas server-side tras un kill y saturan el limite de sesiones
-// del usuario). El access token usado queda invalidado: hay que refrescarlo
-// antes del proximo AUTH.
-func (o *OAuth) LogoutAllSessions(ctx context.Context) error {
-	o.mu.RLock()
-	token := o.accessToken
-	o.mu.RUnlock()
-	if token == "" {
-		return nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, o.cfg.BaseURL+"/sessions", nil)
-	if err != nil {
-		return fmt.Errorf("building sessions logout request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := o.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("calling sessions logout: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
-		return nil
-	}
-	return fmt.Errorf("sessions logout returned status %d", resp.StatusCode)
-}
-
-// ResetSessions cierra todas las sesiones de TastyTrade y rota el access
-// token -- la limpieza ordenada que el reconnect reactivo necesita para no
-// quedarse atrapado en "sessions exceeded". El logout va primero porque
-// DELETE /sessions invalida el token con el que se llama; si falla (403
-// tipico cuando el access token ya vencio), se refresca igual y se reintenta
-// una vez con el token fresco -- sin ese reintento un token vencido deja las
-// sesiones huerfanas saturando el limite indefinidamente (confirmado en vivo
-// el 2026-08-25: logout 403 + refill cayendo de 250k a 3k velas/hora).
-//
-// singleflight.Do colapsa llamadas concurrentes (ver el comentario de
-// resetGroup): sin esto, cada DxLinkConn del pool que detecta su sesion
-// saturada casi al mismo tiempo manda su propio DELETE /sessions, y cada
-// uno invalida la sesion recien creada por el anterior -- confirmado en
-// vivo el 2026-08-28: silencio total de DxLink por horas en pleno mercado
-// abierto, sin recuperarse solo.
+// ResetSessions rota el access token, colapsando llamadas concurrentes en
+// una sola (ver el comentario de resetGroup). DELETE /sessions ya no se
+// llama: TastyTrade retiro las sesiones legacy (feb-2026), siempre da 403, y
+// las sesiones huerfanas de DxLink solo se liberan por expiracion del lado
+// servidor (docs/dxlink-session-incidents.md).
 func (o *OAuth) ResetSessions(ctx context.Context) error {
 	_, err, _ := o.resetGroup.Do("reset", func() (interface{}, error) {
 		return nil, o.resetSessionsOnce(ctx)
@@ -184,15 +142,6 @@ func (o *OAuth) ResetSessions(ctx context.Context) error {
 }
 
 func (o *OAuth) resetSessionsOnce(ctx context.Context) error {
-	if err := o.LogoutAllSessions(ctx); err != nil {
-		log.Warn().Err(err).Msg("dxlink: logout de sesiones falló, refrescando token y reintentando")
-		if _, rerr := o.RefreshAccessToken(ctx); rerr != nil {
-			return rerr
-		}
-		if rerr := o.LogoutAllSessions(ctx); rerr != nil {
-			log.Warn().Err(rerr).Msg("dxlink: segundo logout también falló, siguiendo con token fresco")
-		}
-	}
 	_, err := o.RefreshAccessToken(ctx)
 	return err
 }

@@ -161,6 +161,20 @@ func (c *DxLinkConn) markSessionSaturated() {
 	}
 }
 
+var openDxLinkSessions atomic.Int64
+
+func (c *DxLinkConn) setAuthenticated(authenticated bool) {
+	if c.authenticated == authenticated {
+		return
+	}
+	c.authenticated = authenticated
+	if authenticated {
+		log.Info().Int64("openSessions", openDxLinkSessions.Add(1)).Msg("dxlink session opened")
+		return
+	}
+	log.Info().Int64("openSessions", openDxLinkSessions.Add(-1)).Msg("dxlink session closed")
+}
+
 func (c *DxLinkConn) Connected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -190,7 +204,7 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 	handshakeDone := make(chan error, 1)
 	c.mu.Lock()
 	c.conn = conn
-	c.authenticated = false
+	c.setAuthenticated(false)
 	c.handshakeDone = handshakeDone
 	c.channels = make(map[int]*dxLinkChannel)
 	c.connDone = make(chan struct{})
@@ -256,7 +270,7 @@ func (c *DxLinkConn) sendCloseFrame() {
 func (c *DxLinkConn) cleanup() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.authenticated = false
+	c.setAuthenticated(false)
 	if c.conn != nil {
 		_ = c.conn.Close()
 	}
