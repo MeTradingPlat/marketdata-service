@@ -244,15 +244,7 @@ func seriesLookbackWindow(bars int, duration time.Duration) time.Duration {
 	return max(window, minLookback)
 }
 
-func getSeriesFrom(ctx context.Context, pool *pgxpool.Pool, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
-	if len(symbols) == 0 {
-		return map[string][]domain.Candle{}, nil
-	}
-	duration, err := timeframe.Duration()
-	if err != nil {
-		return nil, fmt.Errorf("resolving duration for %s: %w", timeframe, err)
-	}
-	from := time.Now().Add(-seriesLookbackWindow(bars, duration))
+func getSeriesSince(ctx context.Context, pool *pgxpool.Pool, symbols []string, timeframe domain.Timeframe, bars int, from time.Time) (map[string][]domain.Candle, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT s.symbol, ts, open, high, low, close, volume, source
 		FROM (
