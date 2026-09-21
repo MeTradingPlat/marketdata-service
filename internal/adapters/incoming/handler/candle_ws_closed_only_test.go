@@ -124,3 +124,53 @@ func TestBaseWSSession_UnaVelaCerradaConLaColaLlenaSeRetrasaPeroNoSePierde(t *te
 		t.Fatal("la vela cerrada se perdio con la cola llena")
 	}
 }
+
+func TestCandleWS_LasVelasCerradasNuevasLlevanNumeroDeSecuenciaConsecutivo(t *testing.T) {
+	previous := aggregateCloseDelay
+	aggregateCloseDelay = time.Hour
+	defer func() { aggregateCloseDelay = previous }()
+	wsURL, feed := startCandleWSServerWithFeed(t)
+	conn := subscribeAndAwaitHistory(t, wsURL,
+		candleSubscribeRequest{Action: "subscribe", Symbols: []string{"AAPL"}, Timeframe: "M1", ClosedOnly: true})
+	time.Sleep(100 * time.Millisecond)
+	base := time.Now().UTC().Truncate(time.Minute)
+	candle := func(ts time.Time, volume int64) domain.Candle {
+		return domain.Candle{Symbol: "AAPL", Timestamp: ts, Open: 10, High: 11, Low: 9, Close: 10, Volume: volume}
+	}
+
+	feed.Publish("AAPL", candle(base, 10))
+	feed.Publish("AAPL", candle(base.Add(time.Minute), 20))
+	feed.Publish("AAPL", candle(base.Add(2*time.Minute), 30))
+	feed.Publish("AAPL", candle(base.Add(time.Minute), 25))
+
+	var seqs []int64
+	var correctedSeq int64 = -1
+	for {
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		var env struct {
+			Type string `json:"type"`
+			Bar  struct {
+				Seq       int64 `json:"seq"`
+				Corrected bool  `json:"corrected"`
+			} `json:"bar"`
+		}
+		if json.Unmarshal(msg, &env) == nil && env.Type == "bar" {
+			if env.Bar.Corrected {
+				correctedSeq = env.Bar.Seq
+			} else {
+				seqs = append(seqs, env.Bar.Seq)
+			}
+		}
+	}
+
+	if len(seqs) != 2 || seqs[0] != 1 || seqs[1] != 2 {
+		t.Fatalf("secuencias de las cerradas nuevas = %v, want [1 2]", seqs)
+	}
+	if correctedSeq != 0 {
+		t.Fatalf("una vela corregida no consume secuencia, got seq=%d", correctedSeq)
+	}
+}

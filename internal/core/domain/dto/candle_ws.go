@@ -17,6 +17,10 @@ type CandleBar struct {
 	// corregidos (un tick tardio de dxFeed) -- el consumidor debe reemplazar
 	// la que ya tenia con el mismo time, no agregar otra.
 	Corrected bool `json:"corrected,omitempty"`
+	// Seq numera las velas cerradas nuevas (no las corregidas) de UNA
+	// suscripcion, desde 1: un salto le dice al consumidor que se perdio
+	// una y debe pedir el historial de nuevo.
+	Seq int64 `json:"seq,omitempty"`
 }
 
 type CandleHistoryMessage struct {

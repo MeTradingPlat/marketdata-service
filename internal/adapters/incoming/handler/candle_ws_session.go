@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -199,9 +200,13 @@ func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe stri
 	// el mensaje "history" (otra sesion pudo pedir su propio historial en un
 	// instante levemente distinto). Corre en la goroutine que publica el
 	// tick, no en la de esta sesion -- debe ser rapido y no bloqueante.
+	var closedSeq atomic.Int64
 	cancel := s.hub.Subscribe(ctx, symbol, timeframe, tf, func(bar dto.CandleBar) {
 		if bar.Time < lastTime || (closedOnly && !bar.Closed) {
 			return
+		}
+		if bar.Closed && !bar.Corrected {
+			bar.Seq = closedSeq.Add(1)
 		}
 		message := dto.CandleBarMessage{Type: "bar", Symbol: symbol, Timeframe: timeframe, Bar: bar}
 		if bar.Closed {
