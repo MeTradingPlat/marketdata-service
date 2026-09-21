@@ -98,3 +98,25 @@ func TestAggregateWorker_ElArranqueSembradoNoSumaDeNuevoElVolumenParcialDelMinut
 		t.Fatalf("volumenes = %d, %d; want 500 (adopta el primer tick como base) y 530", bars[0].Volume, bars[1].Volume)
 	}
 }
+
+func TestAggregateWorker_UnaCorreccionTardiaDentroDelPeriodoAbiertoReemplazaSuMinuto(t *testing.T) {
+	previous := aggregateCloseDelay
+	aggregateCloseDelay = time.Hour
+	defer func() { aggregateCloseDelay = previous }()
+	raw := livecandles.NewBroadcaster[domain.Candle]()
+	hub := newCandleAggregateHub(raw, nilCurrentCandleService{})
+	ch, cancel := subscribeToChan(hub, "AAPL", "M5", domain.M5)
+	defer cancel()
+	start := livecandles.FormingPeriodStart(time.Now().UTC(), domain.M5)
+
+	raw.Publish("AAPL", m1(start, 100))
+	raw.Publish("AAPL", m1(start.Add(time.Minute), 30))
+	raw.Publish("AAPL", m1(start, 120))
+	raw.Publish("AAPL", m1(start.Add(time.Minute), 45))
+
+	bars := mustDrain(t, ch, 4)
+
+	if bars[2].Volume != 150 || bars[3].Volume != 165 {
+		t.Fatalf("volumenes = %d, %d; want 150 (120+30 tras corregir el primer minuto) y 165 (120+45)", bars[2].Volume, bars[3].Volume)
+	}
+}

@@ -18,8 +18,8 @@ type aggregateWorker struct {
 	out        *livecandles.Broadcaster[dto.CandleBar]
 	stopRaw    func()
 	refCount   int
-	m1Time     int64
-	m1Volume   int64
+	minuteVols map[int64]int64
+	seedMinute int64
 	lastClosed int64
 	timer      *time.Timer
 }
@@ -37,7 +37,8 @@ func (w *aggregateWorker) onTick(c domain.Candle) {
 	if w.agg == nil || w.agg.Time != period {
 		w.closeLocked()
 		w.agg = &dto.CandleBar{Time: period, Open: c.Open, High: c.High, Low: c.Low, Close: c.Close, Volume: c.Volume, Closed: false}
-		w.m1Time, w.m1Volume = c.Timestamp.Unix(), c.Volume
+		w.minuteVols = map[int64]int64{c.Timestamp.Unix(): c.Volume}
+		w.seedMinute = 0
 		w.armLocked()
 	} else {
 		w.mergeLocked(c)
@@ -53,15 +54,16 @@ func (w *aggregateWorker) mergeLocked(c domain.Candle) {
 		w.agg.Low = c.Low
 	}
 	w.agg.Close = c.Close
-	if c.Timestamp.Unix() == w.m1Time {
-		if w.m1Volume >= 0 {
-			w.agg.Volume += c.Volume - w.m1Volume
-		}
-	} else {
+	minute := c.Timestamp.Unix()
+	previous, seen := w.minuteVols[minute]
+	switch {
+	case seen:
+		w.agg.Volume += c.Volume - previous
+	case w.seedMinute != 0 && minute <= w.seedMinute:
+	default:
 		w.agg.Volume += c.Volume
-		w.m1Time = c.Timestamp.Unix()
 	}
-	w.m1Volume = c.Volume
+	w.minuteVols[minute] = c.Volume
 }
 
 func (w *aggregateWorker) closeLocked() {
