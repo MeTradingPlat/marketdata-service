@@ -22,6 +22,8 @@ import (
 // suscripcion como antes.
 const outboundBuffer = 2048
 
+const reliablePublishTimeout = 10 * time.Second
+
 type baseWSSession struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
@@ -78,6 +80,26 @@ func (s *baseWSSession) publish(v any) {
 	case s.out <- v:
 	default:
 	}
+}
+
+// publishReliable es publish para lo que NO puede perderse (una vela cerrada):
+// si la cola de la sesion esta llena, no descarta en silencio -- reintenta en
+// una goroutine acotada por reliablePublishTimeout y deja un aviso en el log.
+func (s *baseWSSession) publishReliable(v any) {
+	select {
+	case s.out <- v:
+		return
+	default:
+	}
+	log.Warn().Msg("ws session outbound queue full, delaying a closed candle instead of dropping it")
+	go func() {
+		select {
+		case s.out <- v:
+		case <-s.done:
+		case <-time.After(reliablePublishTimeout):
+			log.Error().Msg("ws session outbound queue stayed full, closed candle dropped")
+		}
+	}()
 }
 
 // armKeepalive arma el deadline de lectura y el pong handler que lo

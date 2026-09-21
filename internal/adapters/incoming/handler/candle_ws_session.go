@@ -26,11 +26,12 @@ const (
 )
 
 type candleSubscribeRequest struct {
-	Action    string   `json:"action"`
-	Symbol    string   `json:"symbol"`
-	Symbols   []string `json:"symbols"`
-	Timeframe string   `json:"timeframe"`
-	Bars      int      `json:"bars"`
+	Action     string   `json:"action"`
+	Symbol     string   `json:"symbol"`
+	Symbols    []string `json:"symbols"`
+	Timeframe  string   `json:"timeframe"`
+	Bars       int      `json:"bars"`
+	ClosedOnly bool     `json:"closedOnly"`
 }
 
 // wsSession es una conexion WS de /ws/candles -- multiplexa varias
@@ -76,12 +77,12 @@ func (s *wsSession) run(ctx context.Context) {
 			// keepalive, que terminaban venciendo su propio timeout y
 			// tumbando la conexion antes de que la suscripcion llegara a
 			// completarse. Confirmado en vivo 2026-09-16.
-			symbols, timeframe, bars := req.Symbols, req.Timeframe, historyBars(req.Bars)
+			symbols, timeframe, bars, closedOnly := req.Symbols, req.Timeframe, historyBars(req.Bars), req.ClosedOnly
 			if len(symbols) > 0 {
-				go s.handleSubscribeBatch(ctx, symbols, timeframe, bars)
+				go s.handleSubscribeBatch(ctx, symbols, timeframe, bars, closedOnly)
 			} else {
 				symbol := req.Symbol
-				go s.handleSubscribe(ctx, symbol, timeframe, bars)
+				go s.handleSubscribe(ctx, symbol, timeframe, bars, closedOnly)
 			}
 		case "unsubscribe":
 			if len(req.Symbols) > 0 {
@@ -102,7 +103,7 @@ func (s *wsSession) run(ctx context.Context) {
 // validos tienen vela en formacion en el grafico, no solo M1. Cualquier
 // otro timeframe (los no soportados) responde error en vez de fallar en
 // silencio, mismo criterio que /marketdata/timeframes.
-func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe string, bars int) {
+func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe string, bars int, closedOnly bool) {
 	if !domain.ValidSymbolFormat(symbol) {
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "simbolo invalido"})
 		return
@@ -122,7 +123,7 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Symbol: symbol, Timeframe: timeframe, Message: "no se pudo cargar el historial"})
 		return
 	}
-	s.seedAndSubscribe(ctx, symbol, timeframe, tf, candles)
+	s.seedAndSubscribe(ctx, symbol, timeframe, tf, candles, closedOnly)
 }
 
 // handleSubscribeBatch es handleSubscribe para varios simbolos del MISMO
@@ -134,7 +135,7 @@ func (s *wsSession) handleSubscribe(ctx context.Context, symbol, timeframe strin
 // fila -- con miles de simbolos de golpe eso tardaba un buen rato en
 // ponerse al dia. GetCandlesBatch trae el historial de todos en una sola
 // consulta, igual que ya hace /marketdata/historical/batch por REST.
-func (s *wsSession) handleSubscribeBatch(ctx context.Context, symbols []string, timeframe string, bars int) {
+func (s *wsSession) handleSubscribeBatch(ctx context.Context, symbols []string, timeframe string, bars int, closedOnly bool) {
 	tf := domain.Timeframe(timeframe)
 	if !tf.Valid() {
 		s.sendJSON(dto.CandleControlMessage{Type: "error", Timeframe: timeframe, Message: "timeframe no soportado todavia"})
@@ -157,7 +158,7 @@ func (s *wsSession) handleSubscribeBatch(ctx context.Context, symbols []string, 
 
 	candlesBatch := s.getCandles.GetCandlesBatch(ctx, pending, tf, bars)
 	for _, symbol := range pending {
-		s.seedAndSubscribe(ctx, symbol, timeframe, tf, candlesBatch[symbol])
+		s.seedAndSubscribe(ctx, symbol, timeframe, tf, candlesBatch[symbol], closedOnly)
 	}
 }
 
@@ -173,7 +174,7 @@ func (s *wsSession) alreadySubscribed(symbol, timeframe string) bool {
 // no espera un mensaje aparte para tenerla) y engancha la sesion al hub
 // compartido -- ultimo paso comun entre una suscripcion individual y una
 // en lote.
-func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe string, tf domain.Timeframe, candles []domain.Candle) {
+func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe string, tf domain.Timeframe, candles []domain.Candle, closedOnly bool) {
 	var lastTime int64
 	if len(candles) > 0 {
 		lastTime = candles[len(candles)-1].Timestamp.Unix()
@@ -181,7 +182,7 @@ func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe stri
 
 	bars := toBars(candles)
 	var seed *dto.CandleBar
-	if s.current != nil {
+	if s.current != nil && !closedOnly {
 		var err error
 		seed, err = s.current.GetCurrentCandle(ctx, symbol, tf)
 		if err != nil {
@@ -199,10 +200,15 @@ func (s *wsSession) seedAndSubscribe(ctx context.Context, symbol, timeframe stri
 	// instante levemente distinto). Corre en la goroutine que publica el
 	// tick, no en la de esta sesion -- debe ser rapido y no bloqueante.
 	cancel := s.hub.Subscribe(ctx, symbol, timeframe, tf, func(bar dto.CandleBar) {
-		if bar.Time < lastTime {
+		if bar.Time < lastTime || (closedOnly && !bar.Closed) {
 			return
 		}
-		s.publish(dto.CandleBarMessage{Type: "bar", Symbol: symbol, Timeframe: timeframe, Bar: bar})
+		message := dto.CandleBarMessage{Type: "bar", Symbol: symbol, Timeframe: timeframe, Bar: bar}
+		if bar.Closed {
+			s.publishReliable(message)
+			return
+		}
+		s.publish(message)
 	})
 	s.mu.Lock()
 	if s.subs == nil {
