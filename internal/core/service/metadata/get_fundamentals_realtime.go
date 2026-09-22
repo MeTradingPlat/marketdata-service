@@ -7,20 +7,22 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 )
 
 type getFundamentalsRealtimeService struct {
 	fundamentals *fundamentalscache.FundamentalsCache
 	symbols      *SymbolsCache
 	intraday     in.GetIntradaySnapshotService
+	dayVolumes   *intraday.DayVolumeTracker
 }
 
 // Vive en metadata, no en fundamentals, para poder depender de *SymbolsCache
 // directo (mismo paquete) sin crear un ciclo de imports -- fundamentals ya
 // no puede importar metadata porque metadata.get_symbol_details.go importa
 // fundamentals para *FundamentalsCache.
-func NewGetFundamentalsRealtimeService(fundamentals *fundamentalscache.FundamentalsCache, symbols *SymbolsCache, intraday in.GetIntradaySnapshotService) in.GetFundamentalsRealtimeService {
-	return &getFundamentalsRealtimeService{fundamentals: fundamentals, symbols: symbols, intraday: intraday}
+func NewGetFundamentalsRealtimeService(fundamentals *fundamentalscache.FundamentalsCache, symbols *SymbolsCache, snapshots in.GetIntradaySnapshotService, dayVolumes *intraday.DayVolumeTracker) in.GetFundamentalsRealtimeService {
+	return &getFundamentalsRealtimeService{fundamentals: fundamentals, symbols: symbols, intraday: snapshots, dayVolumes: dayVolumes}
 }
 
 // GetFundamentalsRealtime junta tres fuentes por lote, cada una en un
@@ -60,7 +62,20 @@ func (s *getFundamentalsRealtimeService) GetFundamentalsRealtime(ctx context.Con
 		if !hasEquity && !hasFund {
 			continue
 		}
-		result[symbol] = toRealtime(symbol, equity, fund, snapshotsBySymbol[symbol])
+		snapshot := withRealDayVolume(s.dayVolumes, symbol, snapshotsBySymbol[symbol])
+		result[symbol] = toRealtime(symbol, equity, fund, snapshot)
 	}
 	return result
+}
+
+// withRealDayVolume pisa la suma de Candle.volume de SnapshotTracker con el
+// volumen real del dia (Trade.dayVolume, consolidado) cuando ya se resolvio
+// -- confirmado en vivo el 2026-09-22: esa suma solo trae 40-60% del volumen
+// real. Sin dato todavia (simbolo recien rastreado, o el refresco de 5 min
+// aun no corrio), sigue el fallback de siempre.
+func withRealDayVolume(dayVolumes *intraday.DayVolumeTracker, symbol string, snapshot domain.IntradaySnapshot) domain.IntradaySnapshot {
+	if real, ok := dayVolumes.Get(symbol); ok {
+		snapshot.DayVolume = real
+	}
+	return snapshot
 }

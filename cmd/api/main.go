@@ -52,6 +52,8 @@ func main() {
 		beneficialOwners out.BeneficialOwnersGateway,
 		finra out.ShortInterestGateway,
 		profileShares out.ProfileSharesGateway,
+		dayVolumeGateway out.DayVolumeGateway,
+		dayVolumeTracker *intraday.DayVolumeTracker,
 		discoveryClient *discovery.Client,
 		e *echo.Echo,
 		r *router.Router,
@@ -135,6 +137,7 @@ func main() {
 		StartSaveRetryLoop(ctx, ingest)
 		StartRecentCacheEvictLoop(ctx, recentCache)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)
+		StartDayVolumeRefreshLoop(ctx, dayVolumeGateway, symbols, dayVolumeTracker)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo, fundamentalsCache)
 		StartSessionResetLoop(ctx, cfg, oauth, gateway)
 		StartRuntimeStatsLoop(ctx)

@@ -51,6 +51,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(livecandles.NewBroadcaster[domain.Fundamentals]))
 	checkErr(container.Provide(livecandles.NewDefaultRecentCache))
 	checkErr(container.Provide(intraday.NewSnapshotTracker))
+	checkErr(container.Provide(intraday.NewDayVolumeTracker))
 
 	checkErr(container.Provide(provideTickerCikLookup))
 	checkErr(container.Provide(provideSharesOutstandingGateway))
@@ -58,6 +59,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideBeneficialOwnersGateway))
 	checkErr(container.Provide(provideShortInterestGateway))
 	checkErr(container.Provide(provideProfileSharesGateway))
+	checkErr(container.Provide(provideDayVolumeGateway))
 	checkErr(container.Provide(provideOpenInterestGateway))
 
 	checkErr(container.Provide(provideOAuth))
@@ -222,6 +224,13 @@ func provideShortInterestGateway() out.ShortInterestGateway {
 }
 
 func provideProfileSharesGateway(pool *tastytrade.CandlePool) out.ProfileSharesGateway {
+	return pool
+}
+
+// provideDayVolumeGateway expone el mismo pool bajo el puerto de volumen
+// real del dia -- un solo objeto, dos puertos (mismo patron que
+// provideOpenInterestGateway).
+func provideDayVolumeGateway(pool *tastytrade.CandlePool) out.DayVolumeGateway {
 	return pool
 }
 

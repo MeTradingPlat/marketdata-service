@@ -51,6 +51,13 @@ type ProfileSharesGateway interface {
 	FetchProfileShares(ctx context.Context, symbols []string) map[string]int64
 }
 
+// DayVolumeGateway resuelve el volumen real del dia en vivo via el evento
+// Trade de DxLink ("dayVolume") -- mismo patron que ProfileSharesGateway,
+// reusa las conexiones ya abiertas del pool de velas.
+type DayVolumeGateway interface {
+	FetchDayVolumes(ctx context.Context, symbols []string) map[string]int64
+}
+
 // OpenInterestGateway trae el open interest del vencimiento mensual mas
 // cercano via las cadenas de opciones de TastyTrade (REST, cacheado por el
 // adaptador) -- devuelve (0, false) cuando el simbolo no tiene opciones,

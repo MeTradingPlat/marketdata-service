@@ -44,6 +44,7 @@ type dxLinkChannel struct {
 	mu        sync.RWMutex
 	onCandle  func(rawCandleEvent)
 	onProfile func(rawProfileEvent)
+	onTrade   func(rawTradeEvent)
 }
 
 func newDxLinkChannel(id int, client *DxLinkConn) *dxLinkChannel {
@@ -75,7 +76,7 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 func (c *dxLinkChannel) handleOpened() error {
 	return c.client.send(feedSetupMessage{
 		Type: "FEED_SETUP", Channel: c.id, AcceptAggregationPeriod: 0.1, AcceptDataFormat: "COMPACT",
-		AcceptEventFields: map[string][]string{"Candle": candleEventFields, "Profile": profileEventFields},
+		AcceptEventFields: map[string][]string{"Candle": candleEventFields, "Profile": profileEventFields, "Trade": tradeEventFields},
 	})
 }
 
@@ -108,6 +109,12 @@ func (c *dxLinkChannel) handleData(data []interface{}) {
 					c.dispatchProfile(ev)
 				}
 			}
+		case "Trade":
+			if batch, ok := data[i+1].([]interface{}); ok {
+				for _, ev := range parseTradeBatch(batch) {
+					c.dispatchTrade(ev)
+				}
+			}
 		}
 		i += 2
 	}
@@ -137,6 +144,21 @@ func (c *dxLinkChannel) setOnProfile(fn func(rawProfileEvent)) {
 func (c *dxLinkChannel) dispatchProfile(ev rawProfileEvent) {
 	c.mu.RLock()
 	fn := c.onProfile
+	c.mu.RUnlock()
+	if fn != nil {
+		fn(ev)
+	}
+}
+
+func (c *dxLinkChannel) setOnTrade(fn func(rawTradeEvent)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onTrade = fn
+}
+
+func (c *dxLinkChannel) dispatchTrade(ev rawTradeEvent) {
+	c.mu.RLock()
+	fn := c.onTrade
 	c.mu.RUnlock()
 	if fn != nil {
 		fn(ev)
@@ -336,6 +358,25 @@ func (c *dxLinkChannel) unsubscribeProfile(symbols []string) error {
 	items := make([]feedSubscriptionItem, len(symbols))
 	for i, s := range symbols {
 		items[i] = feedSubscriptionItem{Symbol: s, Type: "Profile"}
+	}
+	return c.client.send(feedSubscriptionMessage{Type: "FEED_SUBSCRIPTION", Channel: c.id, Remove: items})
+}
+
+// subscribeTrade/unsubscribeTrade: mismo patron de lote entero en un solo
+// mensaje que subscribeProfile/unsubscribeProfile -- pedido puntual de
+// snapshot, no una suscripcion viva por simbolo.
+func (c *dxLinkChannel) subscribeTrade(symbols []string) error {
+	items := make([]feedSubscriptionItem, len(symbols))
+	for i, s := range symbols {
+		items[i] = feedSubscriptionItem{Symbol: s, Type: "Trade"}
+	}
+	return c.client.send(feedSubscriptionMessage{Type: "FEED_SUBSCRIPTION", Channel: c.id, Add: items})
+}
+
+func (c *dxLinkChannel) unsubscribeTrade(symbols []string) error {
+	items := make([]feedSubscriptionItem, len(symbols))
+	for i, s := range symbols {
+		items[i] = feedSubscriptionItem{Symbol: s, Type: "Trade"}
 	}
 	return c.client.send(feedSubscriptionMessage{Type: "FEED_SUBSCRIPTION", Channel: c.id, Remove: items})
 }
