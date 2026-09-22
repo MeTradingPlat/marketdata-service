@@ -266,3 +266,15 @@ CREATE TABLE IF NOT EXISTS volume_profiles (
     cumulative  REAL[] NOT NULL,
     computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- day_volumes: volumen real del dia por simbolo, resuelto via el evento
+-- Trade de DxLink (dayVolume) -- reemplaza la suma de Candle.volume, que
+-- solo trae 40-60% del consolidado real (confirmado en vivo 2026-09-22).
+-- Se pisa entero en cada refresco (StartDayVolumeRefreshLoop, cada 5 min);
+-- day filtra un valor de ayer que quedo sin refrescar todavia hoy.
+CREATE TABLE IF NOT EXISTS day_volumes (
+    symbol_id  INT PRIMARY KEY REFERENCES tracked_symbols(symbol_id),
+    day        DATE NOT NULL,
+    volume     BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

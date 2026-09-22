@@ -44,6 +44,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideSymbolRepository))
 	checkErr(container.Provide(provideFundamentalsRepository))
 	checkErr(container.Provide(provideVolumeProfileRepository))
+	checkErr(container.Provide(provideDayVolumeRepository))
 
 	checkErr(container.Provide(provideDiscoveryClient))
 	checkErr(container.Provide(livecandles.NewBroadcaster[domain.Candle]))
@@ -143,6 +144,10 @@ func provideSymbolRepository(pool *pgxpool.Pool) out.SymbolRepository {
 
 func provideVolumeProfileRepository(pool *pgxpool.Pool) out.VolumeProfileRepository {
 	return timescale.NewVolumeProfileRepository(pool)
+}
+
+func provideDayVolumeRepository(pool *pgxpool.Pool) out.DayVolumeRepository {
+	return timescale.NewDayVolumeRepository(pool)
 }
 
 func provideFundamentalsRepository(pool *pgxpool.Pool) out.FundamentalsRepository {

@@ -11,12 +11,16 @@ import (
 
 const dayVolumeRefreshInterval = 5 * time.Minute
 
-// StartDayVolumeRefreshLoop mantiene DayVolumeTracker al dia con el volumen
-// real (Trade.dayVolume) del universo rastreado -- solo mientras el mercado
-// puede estar activo (4am-8pm ET, dias habiles), igual que
-// StartTradingStatusLoop: fuera de esa ventana el volumen no cambia y no
-// vale la pena gastar sesiones DxLink por las dudas.
-func StartDayVolumeRefreshLoop(ctx context.Context, gateway out.DayVolumeGateway, symbols out.SymbolRepository, tracker *intraday.DayVolumeTracker) {
+// StartDayVolumeRefreshLoop siembra DayVolumeTracker desde Postgres al
+// arrancar (sobrevive un reinicio: sin esto, el filtro VOLUME cae al
+// fallback de siempre -- la suma de velas, solo 40-60% del real -- durante
+// hasta 5 min en cada deploy) y despues lo mantiene al dia con el volumen
+// real (Trade.dayVolume) del universo rastreado, guardando cada ronda en
+// Postgres -- solo mientras el mercado puede estar activo (4am-8pm ET, dias
+// habiles), igual que StartTradingStatusLoop: fuera de esa ventana el
+// volumen no cambia y no vale la pena gastar sesiones DxLink por las dudas.
+func StartDayVolumeRefreshLoop(ctx context.Context, gateway out.DayVolumeGateway, repo out.DayVolumeRepository, symbols out.SymbolRepository, tracker *intraday.DayVolumeTracker) {
+	seedDayVolumesFromDB(ctx, repo, symbols, tracker)
 	go func() {
 		ticker := time.NewTicker(dayVolumeRefreshInterval)
 		defer ticker.Stop()
@@ -28,17 +32,48 @@ func StartDayVolumeRefreshLoop(ctx context.Context, gateway out.DayVolumeGateway
 				if !isDayVolumeRefreshWindow(time.Now()) {
 					continue
 				}
-				refreshDayVolumes(ctx, gateway, symbols, tracker)
+				refreshDayVolumes(ctx, gateway, repo, symbols, tracker)
 			}
 		}
 	}()
 }
 
-func refreshDayVolumes(ctx context.Context, gateway out.DayVolumeGateway, symbols out.SymbolRepository, tracker *intraday.DayVolumeTracker) {
-	tracked, err := symbols.Tracked(ctx)
+func seedDayVolumesFromDB(ctx context.Context, repo out.DayVolumeRepository, symbols out.SymbolRepository, tracker *intraday.DayVolumeTracker) {
+	syms, day, err := trackedSymbolsAndDayET(ctx, symbols)
+	if err != nil {
+		log.Error().Err(err).Msg("day volume seed: failed to list tracked symbols")
+		return
+	}
+	volumes, err := repo.GetBatch(ctx, syms, day)
+	if err != nil {
+		log.Error().Err(err).Msg("day volume seed: failed to load from db")
+		return
+	}
+	tracker.Update(day, volumes)
+	log.Info().Int("symbols", len(volumes)).Msg("day volume tracker seeded from db")
+}
+
+func refreshDayVolumes(ctx context.Context, gateway out.DayVolumeGateway, repo out.DayVolumeRepository, symbols out.SymbolRepository, tracker *intraday.DayVolumeTracker) {
+	syms, day, err := trackedSymbolsAndDayET(ctx, symbols)
 	if err != nil {
 		log.Error().Err(err).Msg("day volume refresh: failed to list tracked symbols")
 		return
+	}
+
+	start := time.Now()
+	volumes := gateway.FetchDayVolumes(ctx, syms)
+	tracker.Update(day, volumes)
+	if err := repo.SaveBatch(ctx, day, volumes); err != nil {
+		log.Error().Err(err).Msg("day volume refresh: failed to save to db")
+	}
+	log.Info().Int("requested", len(syms)).Int("resolved", len(volumes)).Dur("elapsed", time.Since(start)).
+		Msg("day volume refresh finished")
+}
+
+func trackedSymbolsAndDayET(ctx context.Context, symbols out.SymbolRepository) ([]string, time.Time, error) {
+	tracked, err := symbols.Tracked(ctx)
+	if err != nil {
+		return nil, time.Time{}, err
 	}
 	syms := make([]string, len(tracked))
 	for i, s := range tracked {
@@ -47,17 +82,11 @@ func refreshDayVolumes(ctx context.Context, gateway out.DayVolumeGateway, symbol
 
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
-		log.Error().Err(err).Msg("day volume refresh: loading America/New_York failed")
-		return
+		return nil, time.Time{}, err
 	}
 	nowET := time.Now().In(loc)
 	day := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 0, 0, 0, 0, loc)
-
-	start := time.Now()
-	volumes := gateway.FetchDayVolumes(ctx, syms)
-	tracker.Update(day, volumes)
-	log.Info().Int("requested", len(syms)).Int("resolved", len(volumes)).Dur("elapsed", time.Since(start)).
-		Msg("day volume refresh finished")
+	return syms, day, nil
 }
 
 func isDayVolumeRefreshWindow(now time.Time) bool {
