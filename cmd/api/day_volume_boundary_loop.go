@@ -48,7 +48,7 @@ func dueDayBoundary(now time.Time) (intraday.DayBoundary, bool) {
 	}
 	seconds := et.Hour()*3600 + et.Minute()*60 + et.Second()
 	switch {
-	case seconds >= 9*3600+28*60+40 && seconds < 9*3600+29*60+30:
+	case seconds >= 9*3600+27*60+30 && seconds < 9*3600+29*60:
 		return intraday.PreMarketEnd, true
 	case seconds >= 16*3600+60 && seconds < 16*3600+4*60:
 		return intraday.RegularEnd, true
@@ -67,6 +67,11 @@ func captureDayBoundary(ctx context.Context, gateway out.DayVolumeGateway, repo 
 	volumes := gateway.FetchDayVolumes(ctx, syms)
 	dayVolumeFetchMu.Unlock()
 
+	if isBoundaryCaptureTooLate(kind, time.Now()) {
+		log.Warn().Int("kind", int(kind)).Dur("elapsed", time.Since(start)).
+			Msg("day volume boundary discarded: the capture ended after the session boundary, its values include the next session")
+		return
+	}
 	tracker.SetBoundary(day, kind, volumes)
 	save := repo.SavePreMarketEnd
 	if kind == intraday.RegularEnd {
@@ -85,4 +90,12 @@ func easternTime() *time.Location {
 		return time.FixedZone("EST", -5*3600)
 	}
 	return loc
+}
+
+func isBoundaryCaptureTooLate(kind intraday.DayBoundary, now time.Time) bool {
+	if kind != intraday.PreMarketEnd {
+		return false
+	}
+	et := now.In(easternTime())
+	return et.Hour()*3600+et.Minute()*60+et.Second() >= 9*3600+30*60
 }
