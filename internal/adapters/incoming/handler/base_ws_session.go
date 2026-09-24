@@ -2,6 +2,7 @@ package handler
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -46,6 +47,10 @@ type baseWSSession struct {
 	// unico dato que de verdad difiere entre wsSession y relayWSSession[T]
 	// en esta parte compartida.
 	errContext string
+
+	client        string
+	startedAt     time.Time
+	writeFailures atomic.Int64
 }
 
 func newBaseWSSession(conn *websocket.Conn, errContext string) baseWSSession {
@@ -57,6 +62,7 @@ func newBaseWSSession(conn *websocket.Conn, errContext string) baseWSSession {
 		overflow:       newOverflowQueue(maxOverflowMessages),
 		overflowSignal: make(chan struct{}, 1),
 		errContext:     errContext,
+		startedAt:      time.Now(),
 	}
 }
 
@@ -165,6 +171,7 @@ func (s *baseWSSession) closeAll() {
 	subs := s.subs
 	s.subs = nil
 	s.mu.Unlock()
+	s.logClosed(len(subs))
 	for _, cancel := range subs {
 		cancel()
 	}
@@ -179,6 +186,7 @@ func (s *baseWSSession) sendJSON(v any) {
 	switch {
 	case err == nil:
 	case isPeerDisconnect(err):
+		s.writeFailures.Add(1)
 		log.Debug().Err(err).Msg(s.errContext)
 	default:
 		log.Error().Err(err).Msg(s.errContext)

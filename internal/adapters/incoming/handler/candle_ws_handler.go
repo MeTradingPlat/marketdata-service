@@ -40,6 +40,7 @@ func (h *CandleWSHandler) Handle(c echo.Context) error {
 		return err
 	}
 	session := newWSSession(conn, h.getCandles, h.current, h.hub)
+	session.client = c.QueryParam("client")
 	session.run(c.Request().Context())
 	return nil
 }
