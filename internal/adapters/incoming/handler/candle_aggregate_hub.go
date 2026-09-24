@@ -46,10 +46,12 @@ func (h *candleAggregateHub) Subscribe(ctx context.Context, symbol, timeframe st
 	w, exists := h.workers[key]
 	if !exists {
 		var seed *dto.CandleBar
+		var seedMinuteVolume int64
 		if h.current != nil {
 			seed, _ = h.current.GetCurrentCandle(ctx, symbol, tf)
+			seedMinuteVolume = h.formingMinuteVolume(ctx, symbol)
 		}
-		w = newAggregateWorker(tf, seedAggregate(seed, tf, time.Now()))
+		w = newAggregateWorker(tf, seedAggregate(seed, tf, time.Now()), seedMinuteVolume)
 		w.stopRaw = h.raw.Subscribe(symbol, w.onTick)
 		h.workers[key] = w
 	}
@@ -69,4 +71,12 @@ func (h *candleAggregateHub) Subscribe(ctx context.Context, symbol, timeframe st
 		h.mu.Unlock()
 	}
 	return cancel
+}
+
+func (h *candleAggregateHub) formingMinuteVolume(ctx context.Context, symbol string) int64 {
+	minute, err := h.current.GetCurrentCandle(ctx, symbol, domain.M1)
+	if err != nil || minute == nil || minute.Time != time.Now().UTC().Truncate(time.Minute).Unix() {
+		return 0
+	}
+	return minute.Volume
 }

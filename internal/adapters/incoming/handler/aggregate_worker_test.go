@@ -188,3 +188,39 @@ func TestAggregateWorker_UnaCorreccionTardiaDentroDelPeriodoAbiertoReemplazaSuMi
 		t.Fatalf("volumenes = %d, %d; want 150 (120+30 tras corregir el primer minuto) y 165 (120+45)", bars[2].Volume, bars[3].Volume)
 	}
 }
+
+type minuteAwareCurrentCandleService struct {
+	aggregate dto.CandleBar
+	minute    dto.CandleBar
+}
+
+func (s minuteAwareCurrentCandleService) GetCurrentCandle(_ context.Context, _ string, tf domain.Timeframe) (*dto.CandleBar, error) {
+	bar := s.aggregate
+	if tf == domain.M1 {
+		bar = s.minute
+	}
+	return &bar, nil
+}
+
+func TestAggregateWorker_ElArranqueSembradoNoPierdeElVolumenQueLlegoEntreLaSiembraYElPrimerTick(t *testing.T) {
+	now := time.Now().UTC()
+	minute := now.Truncate(time.Minute)
+	period := livecandles.FormingPeriodStart(now, domain.M5).Unix()
+	current := minuteAwareCurrentCandleService{
+		aggregate: dto.CandleBar{Time: period, Open: 10, High: 11, Low: 9, Close: 10, Volume: 500},
+		minute:    dto.CandleBar{Time: minute.Unix(), Open: 10, High: 11, Low: 9, Close: 10, Volume: 40},
+	}
+	raw := livecandles.NewBroadcaster[domain.Candle]()
+	hub := newCandleAggregateHub(raw, current)
+	ch, cancel := subscribeToChan(hub, "AAPL", "M5", domain.M5)
+	defer cancel()
+
+	raw.Publish("AAPL", m1(minute, 100))
+	raw.Publish("AAPL", m1(minute, 130))
+
+	bars := mustDrain(t, ch, 2)
+
+	if bars[0].Volume != 560 || bars[1].Volume != 590 {
+		t.Fatalf("volumenes = %d, %d; want 560 (500 sembrado + 60 acumulados desde la siembra) y 590", bars[0].Volume, bars[1].Volume)
+	}
+}

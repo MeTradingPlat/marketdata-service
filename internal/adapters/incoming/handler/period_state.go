@@ -6,10 +6,11 @@ import (
 )
 
 type periodState struct {
-	bar            dto.CandleBar
-	minuteVols     map[int64]int64
-	closeMinute    int64
-	skipUnseenUpTo int64
+	bar              dto.CandleBar
+	minuteVols       map[int64]int64
+	closeMinute      int64
+	skipUnseenUpTo   int64
+	seedMinuteVolume int64
 }
 
 func newPeriodState(period int64, c domain.Candle) *periodState {
@@ -21,8 +22,8 @@ func newPeriodState(period int64, c domain.Candle) *periodState {
 	}
 }
 
-func seededPeriodState(seed dto.CandleBar, seedMinute int64) *periodState {
-	return &periodState{bar: seed, minuteVols: make(map[int64]int64), skipUnseenUpTo: seedMinute}
+func seededPeriodState(seed dto.CandleBar, seedMinute, seedMinuteVolume int64) *periodState {
+	return &periodState{bar: seed, minuteVols: make(map[int64]int64), skipUnseenUpTo: seedMinute, seedMinuteVolume: seedMinuteVolume}
 }
 
 func (p *periodState) apply(c domain.Candle) {
@@ -41,6 +42,8 @@ func (p *periodState) apply(c domain.Candle) {
 	switch {
 	case seen:
 		p.bar.Volume += c.Volume - previous
+	case p.seedMinuteVolume > 0 && minute == p.skipUnseenUpTo:
+		p.bar.Volume += max(c.Volume-p.seedMinuteVolume, 0)
 	case p.skipUnseenUpTo != 0 && minute <= p.skipUnseenUpTo:
 	default:
 		p.bar.Volume += c.Volume
