@@ -175,7 +175,12 @@ func (s *baseWSSession) closeAll() {
 func (s *baseWSSession) sendJSON(v any) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.conn.WriteJSON(v); err != nil {
+	err := s.conn.WriteJSON(v)
+	switch {
+	case err == nil:
+	case isPeerDisconnect(err):
+		log.Debug().Err(err).Msg(s.errContext)
+	default:
 		log.Error().Err(err).Msg(s.errContext)
 	}
 }
