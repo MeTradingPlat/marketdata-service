@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -68,6 +69,7 @@ func startFakeDxLinkServerWithTrade(t *testing.T, dayVolumes map[string]float64)
 }
 
 func TestFetchDayVolumes_ReturnsTheDayVolumeOfEachSymbolThatHasOne(t *testing.T) {
+	useFastTradePasses(t)
 	wsURL := startFakeDxLinkServerWithTrade(t, map[string]float64{"SPY": 5_468_232, "AAPL": 9_491_383})
 	connFactory := func(ctx context.Context) (*DxLinkConn, error) {
 		c := NewDxLinkConn(func() string { return wsURL }, func() string { return "token" })
@@ -106,5 +108,20 @@ func TestFetchDayVolumes_EmptyInputReturnsEmptyWithoutDialing(t *testing.T) {
 	}
 	if dialed {
 		t.Fatal("should not open any connection for an empty symbol list")
+	}
+}
+
+func useFastTradePasses(t *testing.T) {
+	t.Helper()
+	previous := tradePasses
+	tradePasses = []tradePass{{quiet: 150 * time.Millisecond, maxWait: 500 * time.Millisecond}, {quiet: 150 * time.Millisecond, maxWait: 500 * time.Millisecond}}
+	t.Cleanup(func() { tradePasses = previous })
+}
+
+func TestUnresolvedSymbols_ReturnsOnlyTheOnesWithoutAVolume(t *testing.T) {
+	got := unresolvedSymbols([]string{"SPY", "AAPL", "MDXH"}, map[string]int64{"SPY": 1})
+
+	if len(got) != 2 || got[0] != "AAPL" || got[1] != "MDXH" {
+		t.Fatalf("unresolved = %v, want [AAPL MDXH]", got)
 	}
 }

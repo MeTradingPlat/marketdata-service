@@ -8,27 +8,60 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// tradeBatchSize/tradeQuietPeriod/tradeMaxWait: mismos valores que
-// FetchProfileShares (ver ese comentario para el limite de 65536 bytes por
-// mensaje) -- misma forma de pedido puntual de snapshot, distinto evento.
+// tradeBatchSize: mismo valor que FetchProfileShares (ver ese comentario
+// para el limite de 65536 bytes por mensaje) -- misma forma de pedido
+// puntual de snapshot, distinto evento.
 const (
-	tradeBatchSize   = 1500
-	tradeQuietPeriod = 12 * time.Second
-	tradeMaxWait     = 30 * time.Second
+	tradeBatchSize = 1500
 	// tradeFetchConcurrency: lotes en paralelo, cada uno en su propio canal
 	// -- con 13k simbolos, 9 lotes en serie tardaban ~7 min por ronda.
 	tradeFetchConcurrency = 3
 )
+
+type tradePass struct {
+	quiet   time.Duration
+	maxWait time.Duration
+}
+
+// tradePasses: la primera pasada es rapida y trae a casi todos; la segunda
+// reintenta SOLO a los que faltaron con mas paciencia -- una sola pasada
+// rapida dejaba ~2900 simbolos (algunos muy activos) sin refrescar, y una
+// sola pasada paciente tardaba ~7 min (confirmado en vivo el 2026-09-24).
+var tradePasses = []tradePass{
+	{quiet: 12 * time.Second, maxWait: 30 * time.Second},
+	{quiet: 20 * time.Second, maxWait: 60 * time.Second},
+}
 
 // FetchDayVolumes resuelve el volumen real del dia (consolidado, no el
 // 40-60% que trae la suma de Candle.volume) via el evento Trade de DxLink
 // -- snapshot puntual como FetchProfileShares, reusa canales de las
 // conexiones ya abiertas del pool de velas.
 func (p *CandlePool) FetchDayVolumes(ctx context.Context, symbols []string) map[string]int64 {
-	if len(symbols) == 0 {
-		return map[string]int64{}
+	result := make(map[string]int64)
+	pending := symbols
+	for _, pass := range tradePasses {
+		if len(pending) == 0 || ctx.Err() != nil {
+			break
+		}
+		for symbol, volume := range p.fetchTradeBatches(ctx, pending, pass) {
+			result[symbol] = volume
+		}
+		pending = unresolvedSymbols(pending, result)
 	}
+	return result
+}
 
+func unresolvedSymbols(symbols []string, resolved map[string]int64) []string {
+	var missing []string
+	for _, symbol := range symbols {
+		if _, ok := resolved[symbol]; !ok {
+			missing = append(missing, symbol)
+		}
+	}
+	return missing
+}
+
+func (p *CandlePool) fetchTradeBatches(ctx context.Context, symbols []string, pass tradePass) map[string]int64 {
 	result := make(map[string]int64)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -39,7 +72,7 @@ func (p *CandlePool) FetchDayVolumes(ctx context.Context, symbols []string) map[
 		wg.Add(1)
 		go func() {
 			defer func() { <-slots; wg.Done() }()
-			volumes := p.fetchTradeChunk(ctx, chunk)
+			volumes := p.fetchTradeChunk(ctx, chunk, pass)
 			mu.Lock()
 			for symbol, volume := range volumes {
 				result[symbol] = volume
@@ -51,7 +84,7 @@ func (p *CandlePool) FetchDayVolumes(ctx context.Context, symbols []string) map[
 	return result
 }
 
-func (p *CandlePool) fetchTradeChunk(ctx context.Context, symbols []string) map[string]int64 {
+func (p *CandlePool) fetchTradeChunk(ctx context.Context, symbols []string, pass tradePass) map[string]int64 {
 	ch, err := p.allocator.allocate(ctx)
 	if err != nil {
 		log.Error().Err(err).Int("symbols", len(symbols)).Msg("dxlink day volume fetch: failed to allocate channel")
@@ -67,7 +100,7 @@ func (p *CandlePool) fetchTradeChunk(ctx context.Context, symbols []string) map[
 		log.Error().Err(err).Int("symbols", len(symbols)).Msg("dxlink day volume fetch: failed to subscribe")
 		return map[string]int64{}
 	}
-	_ = waitForData(ctx, func() bool { return collector.settled(len(symbols), tradeQuietPeriod) }, tradeMaxWait)
+	_ = waitForData(ctx, func() bool { return collector.settled(len(symbols), pass.quiet) }, pass.maxWait)
 	_ = ch.channel.unsubscribeTrade(symbols)
 	return collector.result()
 }
