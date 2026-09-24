@@ -21,7 +21,9 @@ const upsertDayVolumeSQL = `
 	INSERT INTO day_volumes (symbol_id, day, volume, updated_at)
 	SELECT symbol_id, $2, $3, now() FROM tracked_symbols WHERE symbol = $1
 	ON CONFLICT (symbol_id) DO UPDATE
-	SET day = EXCLUDED.day, volume = EXCLUDED.volume, updated_at = now()`
+	SET day = EXCLUDED.day, volume = EXCLUDED.volume, updated_at = now(),
+		pre_market_end_volume = CASE WHEN day_volumes.day = EXCLUDED.day THEN day_volumes.pre_market_end_volume END,
+		regular_end_volume = CASE WHEN day_volumes.day = EXCLUDED.day THEN day_volumes.regular_end_volume END`
 
 // SaveBatch pisa el volumen de cada simbolo del lote -- un simbolo sin dato
 // esta ronda (illiquido, sin trades hoy) simplemente no se toca, conserva

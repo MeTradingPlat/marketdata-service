@@ -14,13 +14,19 @@ import (
 // vela a vela -- Trade.dayVolume ya llega acumulado desde dxFeed, no hace
 // falta reconstruirlo tick a tick.
 type DayVolumeTracker struct {
-	mu      sync.RWMutex
-	day     time.Time
-	volumes map[string]int64
+	mu           sync.RWMutex
+	day          time.Time
+	volumes      map[string]int64
+	preMarketEnd map[string]int64
+	regularEnd   map[string]int64
 }
 
 func NewDayVolumeTracker() *DayVolumeTracker {
-	return &DayVolumeTracker{volumes: make(map[string]int64)}
+	return &DayVolumeTracker{
+		volumes:      make(map[string]int64),
+		preMarketEnd: make(map[string]int64),
+		regularEnd:   make(map[string]int64),
+	}
 }
 
 // Update reemplaza el volumen de cada simbolo del lote -- un simbolo que
@@ -30,10 +36,7 @@ func NewDayVolumeTracker() *DayVolumeTracker {
 func (t *DayVolumeTracker) Update(day time.Time, volumes map[string]int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.day.Equal(day) {
-		t.day = day
-		t.volumes = make(map[string]int64, len(volumes))
-	}
+	t.resetForDayLocked(day)
 	for symbol, volume := range volumes {
 		t.volumes[symbol] = volume
 	}

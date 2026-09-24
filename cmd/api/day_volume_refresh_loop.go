@@ -21,6 +21,7 @@ const dayVolumeRefreshInterval = 5 * time.Minute
 // volumen no cambia y no vale la pena gastar sesiones DxLink por las dudas.
 func StartDayVolumeRefreshLoop(ctx context.Context, gateway out.DayVolumeGateway, repo out.DayVolumeRepository, symbols out.SymbolRepository, tracker *intraday.DayVolumeTracker) {
 	seedDayVolumesFromDB(ctx, repo, symbols, tracker)
+	StartDayVolumeBoundaryLoop(ctx, gateway, repo, symbols, tracker)
 	go func() {
 		ticker := time.NewTicker(dayVolumeRefreshInterval)
 		defer ticker.Stop()
@@ -50,6 +51,12 @@ func seedDayVolumesFromDB(ctx context.Context, repo out.DayVolumeRepository, sym
 		return
 	}
 	tracker.Update(day, volumes)
+	if boundaries, err := repo.GetBoundaries(ctx, syms, day); err != nil {
+		log.Error().Err(err).Msg("day volume seed: failed to load boundaries from db")
+	} else {
+		tracker.SetBoundary(day, intraday.PreMarketEnd, boundaries.PreMarketEnd)
+		tracker.SetBoundary(day, intraday.RegularEnd, boundaries.RegularEnd)
+	}
 	log.Info().Int("symbols", len(volumes)).Msg("day volume tracker seeded from db")
 }
 
@@ -61,7 +68,9 @@ func refreshDayVolumes(ctx context.Context, gateway out.DayVolumeGateway, repo o
 	}
 
 	start := time.Now()
+	dayVolumeFetchMu.Lock()
 	volumes := gateway.FetchDayVolumes(ctx, syms)
+	dayVolumeFetchMu.Unlock()
 	tracker.Update(day, volumes)
 	if err := repo.SaveBatch(ctx, day, volumes); err != nil {
 		log.Error().Err(err).Msg("day volume refresh: failed to save to db")

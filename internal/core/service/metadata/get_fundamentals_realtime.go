@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
@@ -63,6 +64,7 @@ func (s *getFundamentalsRealtimeService) GetFundamentalsRealtime(ctx context.Con
 			continue
 		}
 		snapshot := withRealDayVolume(s.dayVolumes, symbol, snapshotsBySymbol[symbol])
+		snapshot = withRealSessionVolumes(s.dayVolumes, symbol, snapshot, time.Now())
 		result[symbol] = toRealtime(symbol, equity, fund, snapshot)
 	}
 	return result

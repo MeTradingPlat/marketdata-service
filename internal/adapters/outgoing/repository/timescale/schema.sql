@@ -278,3 +278,8 @@ CREATE TABLE IF NOT EXISTS day_volumes (
     volume     BIGINT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Volumen acumulado (Trade.dayVolume) al cierre del pre-market (~9:29 ET) y de
+-- la sesion regular (~16:01 ET): pre-market = pre_market_end_volume, post-
+-- market = volumen actual - regular_end_volume (ver real_session_volumes.go).
+ALTER TABLE day_volumes ADD COLUMN IF NOT EXISTS pre_market_end_volume BIGINT;
+ALTER TABLE day_volumes ADD COLUMN IF NOT EXISTS regular_end_volume BIGINT;
