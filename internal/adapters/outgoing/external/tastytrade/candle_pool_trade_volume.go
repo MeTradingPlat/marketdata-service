@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -12,8 +13,11 @@ import (
 // mensaje) -- misma forma de pedido puntual de snapshot, distinto evento.
 const (
 	tradeBatchSize   = 1500
-	tradeQuietPeriod = 3 * time.Second
-	tradeMaxWait     = 60 * time.Second
+	tradeQuietPeriod = 12 * time.Second
+	tradeMaxWait     = 30 * time.Second
+	// tradeFetchConcurrency: lotes en paralelo, cada uno en su propio canal
+	// -- con 13k simbolos, 9 lotes en serie tardaban ~7 min por ronda.
+	tradeFetchConcurrency = 3
 )
 
 // FetchDayVolumes resuelve el volumen real del dia (consolidado, no el
@@ -26,12 +30,24 @@ func (p *CandlePool) FetchDayVolumes(ctx context.Context, symbols []string) map[
 	}
 
 	result := make(map[string]int64)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, tradeFetchConcurrency)
 	for i := 0; i < len(symbols); i += tradeBatchSize {
-		end := min(i+tradeBatchSize, len(symbols))
-		for symbol, volume := range p.fetchTradeChunk(ctx, symbols[i:end]) {
-			result[symbol] = volume
-		}
+		chunk := symbols[i:min(i+tradeBatchSize, len(symbols))]
+		slots <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			volumes := p.fetchTradeChunk(ctx, chunk)
+			mu.Lock()
+			for symbol, volume := range volumes {
+				result[symbol] = volume
+			}
+			mu.Unlock()
+		}()
 	}
+	wg.Wait()
 	return result
 }
 
