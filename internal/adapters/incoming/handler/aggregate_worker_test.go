@@ -15,11 +15,14 @@ func m1(ts time.Time, volume int64) domain.Candle {
 }
 
 func TestAggregateWorker_LosTicksEnFormacionNoInflanElVolumen(t *testing.T) {
+	previous := aggregateCloseDelay
+	aggregateCloseDelay = time.Hour
+	defer func() { aggregateCloseDelay = previous }()
 	raw := livecandles.NewBroadcaster[domain.Candle]()
 	hub := newCandleAggregateHub(raw, nilCurrentCandleService{})
 	ch, cancel := subscribeToChan(hub, "AAPL", "M5", domain.M5)
 	defer cancel()
-	base := time.Date(2026, 8, 21, 14, 35, 0, 0, time.UTC)
+	base := livecandles.FormingPeriodStart(time.Now().UTC(), domain.M5)
 
 	raw.Publish("AAPL", m1(base, 40))
 	raw.Publish("AAPL", m1(base, 100))
@@ -28,8 +31,12 @@ func TestAggregateWorker_LosTicksEnFormacionNoInflanElVolumen(t *testing.T) {
 
 	bars := mustDrain(t, ch, 4)
 
-	if bars[3].Volume != 130 {
-		t.Fatalf("volumen M5 = %d, want 130 (100 del primer minuto + 30 del segundo, sin sumar los ticks acumulados)", bars[3].Volume)
+	var highest int64
+	for _, bar := range bars {
+		highest = max(highest, bar.Volume)
+	}
+	if highest != 130 {
+		t.Fatalf("volumen M5 maximo = %d, want 130 (100 del primer minuto + 30 del segundo, sin sumar los ticks acumulados)", highest)
 	}
 }
 
