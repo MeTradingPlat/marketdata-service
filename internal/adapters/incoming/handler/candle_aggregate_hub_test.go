@@ -122,3 +122,14 @@ func TestCandleAggregateHub_ApagaElWorkerCuandoSeVaElUltimoSuscriptor(t *testing
 		t.Fatalf("el worker debe apagarse cuando se va el ultimo suscriptor, workers=%d", afterLast)
 	}
 }
+
+func subscribeToChanSized(hub *candleAggregateHub, symbol, timeframe string, tf domain.Timeframe, size int) (chan dto.CandleBar, func()) {
+	ch := make(chan dto.CandleBar, size)
+	cancel := hub.Subscribe(context.Background(), symbol, timeframe, tf, func(bar dto.CandleBar) {
+		select {
+		case ch <- bar:
+		default:
+		}
+	})
+	return ch, cancel
+}
