@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/rs/zerolog/log"
 )
 
@@ -39,7 +40,11 @@ var tradePasses = []tradePass{
 func (p *CandlePool) FetchDayVolumes(ctx context.Context, symbols []string) map[string]int64 {
 	result := make(map[string]int64)
 	pending := symbols
-	for _, pass := range tradePasses {
+	passes := tradePasses
+	if out.IsFastFetch(ctx) {
+		passes = passes[:1]
+	}
+	for _, pass := range passes {
 		if len(pending) == 0 || ctx.Err() != nil {
 			break
 		}

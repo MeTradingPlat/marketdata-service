@@ -52,6 +52,14 @@ type GetCurrentCandleService interface {
 	GetCurrentCandle(ctx context.Context, symbol string, timeframe domain.Timeframe) (*dto.CandleBar, error)
 }
 
+// CurrentCandleWithMinutesService ademas del bar en formacion devuelve el
+// volumen de cada minuto que lo compone (clave: inicio del minuto, unix),
+// para que un agregado recien arrancado pueda aplicar como reemplazo las
+// correcciones tardias de minutos que ya estaban en la siembra.
+type CurrentCandleWithMinutesService interface {
+	GetCurrentCandleWithMinutes(ctx context.Context, symbol string, timeframe domain.Timeframe) (*dto.CandleBar, map[int64]int64, error)
+}
+
 type GetIntradaySnapshotService interface {
 	GetSnapshot(ctx context.Context, symbol string) (domain.IntradaySnapshot, error)
 	// GetSnapshotsBatch es GetSnapshot para un lote -- ver

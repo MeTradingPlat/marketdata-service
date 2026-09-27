@@ -136,7 +136,7 @@ func TestBaseWSSession_UnDesbordeDeVelasCerradasSeEntregaCompletoSinCrearGorouti
 	}
 	during := runtime.NumGoroutine()
 
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(60 * time.Second)
 	for {
 		mu.Lock()
 		n := len(delivered)

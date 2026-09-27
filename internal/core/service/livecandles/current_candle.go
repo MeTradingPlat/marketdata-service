@@ -32,8 +32,14 @@ func NewCurrentCandleService(candles in.GetCandlesService, gateway out.MarketDat
 }
 
 var _ in.GetCurrentCandleService = (*CurrentCandleService)(nil)
+var _ in.CurrentCandleWithMinutesService = (*CurrentCandleService)(nil)
 
 func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol string, tf domain.Timeframe) (*dto.CandleBar, error) {
+	bar, _, err := s.GetCurrentCandleWithMinutes(ctx, symbol, tf)
+	return bar, err
+}
+
+func (s *CurrentCandleService) GetCurrentCandleWithMinutes(ctx context.Context, symbol string, tf domain.Timeframe) (*dto.CandleBar, map[int64]int64, error) {
 	period := FormingPeriodStart(time.Now(), tf)
 	end := FormingPeriodEnd(period, tf)
 
@@ -46,7 +52,10 @@ func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol stri
 	}
 
 	if tf == domain.M1 {
-		return liveBar, nil
+		if liveBar == nil {
+			return nil, nil, nil
+		}
+		return liveBar, map[int64]int64{live.Timestamp.Unix(): live.Volume}, nil
 	}
 
 	// Timeframes derivados: agregar las M1 REALES del periodo guardadas en
@@ -56,18 +65,21 @@ func (s *CurrentCandleService) GetCurrentCandle(ctx context.Context, symbol stri
 	// en formacion hasta que llegue el primer dato real.
 	m1s, err := s.candles.GetCandles(ctx, symbol, domain.M1, 2000, nil)
 	if err != nil {
-		return nil, fmt.Errorf("loading M1 bars for forming %s %s: %w", symbol, tf, err)
+		return nil, nil, fmt.Errorf("loading M1 bars for forming %s %s: %w", symbol, tf, err)
 	}
 	var bar *dto.CandleBar
+	minutes := make(map[int64]int64)
 	for _, c := range m1s {
 		if !c.Timestamp.Before(period) && c.Timestamp.Before(end) {
 			bar = foldM1Bar(bar, c, period)
+			minutes[c.Timestamp.Unix()] += c.Volume
 		}
 	}
 	if liveBar != nil {
 		bar = foldBar(bar, liveBar, period)
+		minutes[live.Timestamp.Unix()] += live.Volume
 	}
-	return bar, nil
+	return bar, minutes, nil
 }
 
 func toFormingBar(c domain.Candle) *dto.CandleBar {

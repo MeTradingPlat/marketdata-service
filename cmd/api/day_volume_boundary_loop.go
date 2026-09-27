@@ -48,7 +48,7 @@ func dueDayBoundary(now time.Time) (intraday.DayBoundary, bool) {
 	}
 	seconds := et.Hour()*3600 + et.Minute()*60 + et.Second()
 	switch {
-	case seconds >= 9*3600+27*60+30 && seconds < 9*3600+29*60:
+	case seconds >= 9*3600+26*60 && seconds < 9*3600+28*60:
 		return intraday.PreMarketEnd, true
 	case seconds >= 16*3600+60 && seconds < 16*3600+4*60:
 		return intraday.RegularEnd, true
@@ -64,7 +64,7 @@ func captureDayBoundary(ctx context.Context, gateway out.DayVolumeGateway, repo 
 	}
 	dayVolumeFetchMu.Lock()
 	start := time.Now()
-	volumes := gateway.FetchDayVolumes(ctx, syms)
+	volumes := gateway.FetchDayVolumes(out.WithFastFetch(ctx), syms)
 	dayVolumeFetchMu.Unlock()
 
 	if isBoundaryCaptureTooLate(kind, time.Now()) {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"time"
+
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 )
@@ -26,6 +28,14 @@ func seededPeriodState(seed dto.CandleBar, seedMinute, seedMinuteVolume int64) *
 	return &periodState{bar: seed, minuteVols: make(map[int64]int64), skipUnseenUpTo: seedMinute, seedMinuteVolume: seedMinuteVolume}
 }
 
+func seededPeriodStateWithMinutes(seed dto.CandleBar, minutes map[int64]int64) *periodState {
+	vols := make(map[int64]int64, len(minutes))
+	for minute, volume := range minutes {
+		vols[minute] = volume
+	}
+	return &periodState{bar: seed, minuteVols: vols}
+}
+
 func (p *periodState) apply(c domain.Candle) {
 	minute := c.Timestamp.Unix()
 	if c.High > p.bar.High {
@@ -49,4 +59,11 @@ func (p *periodState) apply(c domain.Candle) {
 		p.bar.Volume += c.Volume
 	}
 	p.minuteVols[minute] = c.Volume
+}
+
+func (a *aggregateSeed) periodState() *periodState {
+	if len(a.minutes) > 0 {
+		return seededPeriodStateWithMinutes(*a.bar, a.minutes)
+	}
+	return seededPeriodState(*a.bar, time.Now().UTC().Truncate(time.Minute).Unix(), a.formingMinuteVolume)
 }

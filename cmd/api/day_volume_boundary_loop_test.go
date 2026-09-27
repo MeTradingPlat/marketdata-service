@@ -17,10 +17,10 @@ func TestDueDayBoundary(t *testing.T) {
 		wantKind intraday.DayBoundary
 		wantDue  bool
 	}{
-		"too early for pre-market end": {at(23, 9, 27, 0), 0, false},
-		"start of pre-market end":      {at(23, 9, 27, 30), intraday.PreMarketEnd, true},
-		"end of pre-market window":     {at(23, 9, 28, 59), intraday.PreMarketEnd, true},
-		"too late for pre-market end":  {at(23, 9, 29, 0), 0, false},
+		"too early for pre-market end": {at(23, 9, 25, 0), 0, false},
+		"start of pre-market end":      {at(23, 9, 26, 0), intraday.PreMarketEnd, true},
+		"end of pre-market window":     {at(23, 9, 27, 59), intraday.PreMarketEnd, true},
+		"too late for pre-market end":  {at(23, 9, 28, 0), 0, false},
 		"before the closing cross":     {at(23, 16, 0, 30), 0, false},
 		"start of regular end":         {at(23, 16, 1, 0), intraday.RegularEnd, true},
 		"end of regular window":        {at(23, 16, 3, 59), intraday.RegularEnd, true},

@@ -23,10 +23,16 @@ type aggregateWorker struct {
 	timer      *time.Timer
 }
 
-func newAggregateWorker(tf domain.Timeframe, seed *dto.CandleBar, seedMinuteVolume int64) *aggregateWorker {
+type aggregateSeed struct {
+	bar                 *dto.CandleBar
+	minutes             map[int64]int64
+	formingMinuteVolume int64
+}
+
+func newAggregateWorker(tf domain.Timeframe, seed *aggregateSeed) *aggregateWorker {
 	w := &aggregateWorker{out: livecandles.NewBroadcaster[dto.CandleBar](), tf: tf}
-	if seed != nil {
-		w.cur = seededPeriodState(*seed, time.Now().UTC().Truncate(time.Minute).Unix(), seedMinuteVolume)
+	if seed != nil && seed.bar != nil {
+		w.cur = seed.periodState()
 		w.mu.Lock()
 		w.armLocked()
 		w.mu.Unlock()

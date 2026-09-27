@@ -3,6 +3,7 @@ package tastytrade
 import (
 	"context"
 	"encoding/json"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,5 +124,30 @@ func TestUnresolvedSymbols_ReturnsOnlyTheOnesWithoutAVolume(t *testing.T) {
 
 	if len(got) != 2 || got[0] != "AAPL" || got[1] != "MDXH" {
 		t.Fatalf("unresolved = %v, want [AAPL MDXH]", got)
+	}
+}
+
+func TestFetchDayVolumes_AFastFetchStopsAfterTheFirstPass(t *testing.T) {
+	previous := tradePasses
+	tradePasses = []tradePass{{quiet: 100 * time.Millisecond, maxWait: 300 * time.Millisecond}, {quiet: 100 * time.Millisecond, maxWait: 2 * time.Second}}
+	t.Cleanup(func() { tradePasses = previous })
+	wsURL := startFakeDxLinkServerWithTrade(t, map[string]float64{"SPY": 100})
+	connFactory := func(ctx context.Context) (*DxLinkConn, error) {
+		c := NewDxLinkConn(func() string { return wsURL }, func() string { return "token" })
+		if err := c.Connect(ctx); err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+	pool := NewCandlePool(connFactory, defaultMaxConnections)
+
+	start := time.Now()
+	got := pool.FetchDayVolumes(out.WithFastFetch(context.Background()), []string{"SPY", "MDXH"})
+
+	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
+		t.Fatalf("a fast fetch took %v, it must not run the patient second pass", elapsed)
+	}
+	if got["SPY"] != 100 {
+		t.Fatalf("SPY = %d, want 100", got["SPY"])
 	}
 }
