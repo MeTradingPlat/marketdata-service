@@ -17,8 +17,17 @@ func withRealSessionVolumes(tracker *intraday.DayVolumeTracker, symbol string, s
 		snapshot.PreMarketVolume = current
 		return snapshot
 	}
-	if preMarket, ok := tracker.Boundary(symbol, intraday.PreMarketEnd); ok && phase != intraday.PhaseClosed {
-		snapshot.PreMarketVolume = preMarket
+	// Extended (TradeETH.dayVolumeAsDouble en vivo) reemplaza la foto puntual
+	// de preMarketEnd cuando ya esta disponible -- no se mueve durante sesion
+	// regular, asi que sirve igual sin depender de haberla capturado en la
+	// ventana exacta 9:26-9:28. preMarketEnd sigue de respaldo para un
+	// simbolo que arranco a operar recien y todavia no tiene Extended.
+	if phase != intraday.PhaseClosed {
+		if extended, ok := tracker.Extended(symbol); ok {
+			snapshot.PreMarketVolume = extended
+		} else if preMarket, ok := tracker.Boundary(symbol, intraday.PreMarketEnd); ok {
+			snapshot.PreMarketVolume = preMarket
+		}
 	}
 	if regularEnd, ok := tracker.Boundary(symbol, intraday.RegularEnd); ok && phase == intraday.PhasePostMarket {
 		snapshot.PostMarketVolume = max(current-regularEnd, 0)

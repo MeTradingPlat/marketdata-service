@@ -94,6 +94,50 @@ func TestFetchDayVolumes_ReturnsTheDayVolumeOfEachSymbolThatHasOne(t *testing.T)
 	}
 }
 
+func TestFetchDayVolumes_UsesTheLiveValueWithoutDialingWhenEveryoneHasOne(t *testing.T) {
+	dialed := false
+	connFactory := func(ctx context.Context) (*DxLinkConn, error) {
+		dialed = true
+		return nil, nil
+	}
+	pool := NewCandlePool(connFactory, defaultMaxConnections)
+	spyVolume := 100.0
+	pool.handleLiveTradeVolume(rawTradeEvent{Symbol: "SPY", DayVolume: &spyVolume})
+
+	got := pool.FetchDayVolumes(context.Background(), []string{"SPY"})
+
+	if got["SPY"] != 100 {
+		t.Fatalf("SPY = %d, want 100 from the live value", got["SPY"])
+	}
+	if dialed {
+		t.Fatal("a symbol already resolved live must not fall back to the batch fetch")
+	}
+}
+
+func TestFetchDayVolumes_OnlyBatchFetchesSymbolsMissingALiveValue(t *testing.T) {
+	useFastTradePasses(t)
+	wsURL := startFakeDxLinkServerWithTrade(t, map[string]float64{"AAPL": 9_491_383})
+	connFactory := func(ctx context.Context) (*DxLinkConn, error) {
+		c := NewDxLinkConn(func() string { return wsURL }, func() string { return "token" })
+		if err := c.Connect(ctx); err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+	pool := NewCandlePool(connFactory, defaultMaxConnections)
+	spyVolume := 5_468_232.0
+	pool.handleLiveTradeVolume(rawTradeEvent{Symbol: "SPY", DayVolume: &spyVolume})
+
+	got := pool.FetchDayVolumes(context.Background(), []string{"SPY", "AAPL"})
+
+	if got["SPY"] != 5_468_232 {
+		t.Errorf("SPY = %d, want the live value 5468232", got["SPY"])
+	}
+	if got["AAPL"] != 9_491_383 {
+		t.Errorf("AAPL = %d, want the batch-fetched value 9491383", got["AAPL"])
+	}
+}
+
 func TestFetchDayVolumes_EmptyInputReturnsEmptyWithoutDialing(t *testing.T) {
 	dialed := false
 	connFactory := func(ctx context.Context) (*DxLinkConn, error) {

@@ -139,6 +139,7 @@ func main() {
 		StartRecentCacheEvictLoop(ctx, recentCache)
 		StartTradingStatusLoop(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)
 		StartDayVolumeRefreshLoop(ctx, dayVolumeGateway, dayVolumeRepo, symbols, dayVolumeTracker)
+		StartDayVolumeExtendedLoop(ctx, dayVolumeGateway, symbols, dayVolumeTracker)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo, fundamentalsCache)
 		StartSessionResetLoop(ctx, cfg, oauth, gateway)
 		StartRuntimeStatsLoop(ctx)

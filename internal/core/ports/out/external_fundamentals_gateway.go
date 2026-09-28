@@ -56,6 +56,11 @@ type ProfileSharesGateway interface {
 // reusa las conexiones ya abiertas del pool de velas.
 type DayVolumeGateway interface {
 	FetchDayVolumes(ctx context.Context, symbols []string) map[string]int64
+
+	// LiveExtendedDayVolumes lee lo que ya esta en memoria de la suscripcion
+	// TradeETH persistente (sin red, sin bloquear) -- un simbolo ausente del
+	// mapa devuelto es uno sin ningun trade de horario extendido todavia hoy.
+	LiveExtendedDayVolumes(symbols []string) map[string]int64
 }
 
 // OpenInterestGateway trae el open interest del vencimiento mensual mas

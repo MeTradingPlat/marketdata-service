@@ -63,6 +63,25 @@ func TestRealSessionVolumes_WithoutABoundaryTheCandleBasedValueStays(t *testing.
 	}
 }
 
+func TestRealSessionVolumes_ExtendedTakesPriorityOverTheFrozenBoundary(t *testing.T) {
+	tracker := trackerWith(9_000_000, 480_000, 0)
+	tracker.SetExtended(sessionDay, map[string]int64{"AAPL": 512_000})
+
+	got := withRealSessionVolumes(tracker, "AAPL", candleBased(), etTime(11, 0))
+
+	if got.PreMarketVolume != 512_000 {
+		t.Fatalf("pre = %d, want the live Extended value 512000, not the frozen boundary 480000", got.PreMarketVolume)
+	}
+}
+
+func TestRealSessionVolumes_FallsBackToTheFrozenBoundaryWithoutExtended(t *testing.T) {
+	got := withRealSessionVolumes(trackerWith(9_000_000, 480_000, 0), "AAPL", candleBased(), etTime(11, 0))
+
+	if got.PreMarketVolume != 480_000 {
+		t.Fatalf("pre = %d, want the boundary fallback 480000 since Extended is unknown", got.PreMarketVolume)
+	}
+}
+
 func TestRealSessionVolumes_AnUnknownSymbolKeepsTheCandleBasedSnapshot(t *testing.T) {
 	got := withRealSessionVolumes(intraday.NewDayVolumeTracker(), "AAPL", candleBased(), etTime(17, 0))
 

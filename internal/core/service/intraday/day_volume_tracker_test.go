@@ -75,6 +75,20 @@ func TestDayVolumeTracker_BoundariesAreKeptPerDayAndResetOnANewDay(t *testing.T)
 	}
 }
 
+func TestDayVolumeTracker_ExtendedIsKeptPerDayAndResetOnANewDay(t *testing.T) {
+	tracker := NewDayVolumeTracker()
+	day := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
+	tracker.SetExtended(day, map[string]int64{"AAPL": 512_000})
+
+	before, okBefore := tracker.Extended("AAPL")
+	tracker.Update(day.AddDate(0, 0, 1), map[string]int64{"AAPL": 10})
+	_, okAfter := tracker.Extended("AAPL")
+
+	if !okBefore || before != 512_000 || okAfter {
+		t.Fatalf("before=%d/%v after ok=%v, want 512000/true and false", before, okBefore, okAfter)
+	}
+}
+
 func TestPhaseAt(t *testing.T) {
 	loc, _ := time.LoadLocation("America/New_York")
 	at := func(day, hour, minute int) time.Time { return time.Date(2026, 9, day, hour, minute, 0, 0, loc) }

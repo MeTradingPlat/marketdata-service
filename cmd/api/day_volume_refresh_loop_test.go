@@ -112,6 +112,10 @@ func (f fakeDayVolumeGateway) FetchDayVolumes(ctx context.Context, symbols []str
 	return f(ctx, symbols)
 }
 
+func (f fakeDayVolumeGateway) LiveExtendedDayVolumes(symbols []string) map[string]int64 {
+	return nil
+}
+
 func TestSeedDayVolumesFromDB_AlsoRestoresTheSessionBoundaries(t *testing.T) {
 	symbols := &fakeTrackedSymbols{tracked: []domain.Symbol{{Symbol: "SPY"}}}
 	repo := &fakeDayVolumeRepo{

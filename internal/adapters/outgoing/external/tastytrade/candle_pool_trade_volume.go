@@ -34,12 +34,23 @@ var tradePasses = []tradePass{
 }
 
 // FetchDayVolumes resuelve el volumen real del dia (consolidado, no el
-// 40-60% que trae la suma de Candle.volume) via el evento Trade de DxLink
-// -- snapshot puntual como FetchProfileShares, reusa canales de las
-// conexiones ya abiertas del pool de velas.
+// 40-60% que trae la suma de Candle.volume) via el evento Trade de DxLink.
+// Primero toma lo que ya esta en memoria por la suscripcion Trade/TradeETH
+// persistente de subscribeLiveDayVolume (ver day_volume_live.go) -- sin
+// pedir nada por red -- y solo hace el snapshot puntual de siempre
+// (fetchTradeBatches, reusa canales del pool de velas) para los simbolos
+// que todavia no tienen valor en vivo (recien suscritos, o sin ningun
+// trade todavia en la sesion).
 func (p *CandlePool) FetchDayVolumes(ctx context.Context, symbols []string) map[string]int64 {
 	result := make(map[string]int64)
-	pending := symbols
+	pending := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		if entry, ok := p.LiveDayVolume(symbol); ok && entry.Regular != nil {
+			result[symbol] = int64(*entry.Regular)
+			continue
+		}
+		pending = append(pending, symbol)
+	}
 	passes := tradePasses
 	if out.IsFastFetch(ctx) {
 		passes = passes[:1]

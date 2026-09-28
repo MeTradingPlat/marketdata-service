@@ -19,6 +19,12 @@ type DayVolumeTracker struct {
 	volumes      map[string]int64
 	preMarketEnd map[string]int64
 	regularEnd   map[string]int64
+	// extended: ver day_volume_extended.go -- TradeETH.dayVolumeAsDouble en
+	// vivo, solo horario extendido. A diferencia de preMarketEnd (una foto
+	// puntual de Trade.dayVolume tomada en la ventana 9:26-9:28), este valor
+	// se actualiza continuamente y no necesita capturarse en un segundo
+	// exacto -- se queda quieto por si solo durante la sesion regular.
+	extended map[string]int64
 }
 
 func NewDayVolumeTracker() *DayVolumeTracker {
@@ -26,6 +32,7 @@ func NewDayVolumeTracker() *DayVolumeTracker {
 		volumes:      make(map[string]int64),
 		preMarketEnd: make(map[string]int64),
 		regularEnd:   make(map[string]int64),
+		extended:     make(map[string]int64),
 	}
 }
 

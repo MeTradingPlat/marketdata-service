@@ -41,10 +41,11 @@ type dxLinkChannel struct {
 	readyOnce sync.Once
 	ready     chan struct{}
 
-	mu        sync.RWMutex
-	onCandle  func(rawCandleEvent)
-	onProfile func(rawProfileEvent)
-	onTrade   func(rawTradeEvent)
+	mu         sync.RWMutex
+	onCandle   func(rawCandleEvent)
+	onProfile  func(rawProfileEvent)
+	onTrade    func(rawTradeEvent)
+	onTradeETH func(rawTradeETHEvent)
 }
 
 func newDxLinkChannel(id int, client *DxLinkConn) *dxLinkChannel {
@@ -76,7 +77,10 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 func (c *dxLinkChannel) handleOpened() error {
 	return c.client.send(feedSetupMessage{
 		Type: "FEED_SETUP", Channel: c.id, AcceptAggregationPeriod: 0.1, AcceptDataFormat: "COMPACT",
-		AcceptEventFields: map[string][]string{"Candle": candleEventFields, "Profile": profileEventFields, "Trade": tradeEventFields},
+		AcceptEventFields: map[string][]string{
+			"Candle": candleEventFields, "Profile": profileEventFields,
+			"Trade": tradeEventFields, "TradeETH": tradeETHEventFields,
+		},
 	})
 }
 
@@ -113,6 +117,12 @@ func (c *dxLinkChannel) handleData(data []interface{}) {
 			if batch, ok := data[i+1].([]interface{}); ok {
 				for _, ev := range parseTradeBatch(batch) {
 					c.dispatchTrade(ev)
+				}
+			}
+		case "TradeETH":
+			if batch, ok := data[i+1].([]interface{}); ok {
+				for _, ev := range parseTradeETHBatch(batch) {
+					c.dispatchTradeETH(ev)
 				}
 			}
 		}
@@ -159,6 +169,21 @@ func (c *dxLinkChannel) setOnTrade(fn func(rawTradeEvent)) {
 func (c *dxLinkChannel) dispatchTrade(ev rawTradeEvent) {
 	c.mu.RLock()
 	fn := c.onTrade
+	c.mu.RUnlock()
+	if fn != nil {
+		fn(ev)
+	}
+}
+
+func (c *dxLinkChannel) setOnTradeETH(fn func(rawTradeETHEvent)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onTradeETH = fn
+}
+
+func (c *dxLinkChannel) dispatchTradeETH(ev rawTradeETHEvent) {
+	c.mu.RLock()
+	fn := c.onTradeETH
 	c.mu.RUnlock()
 	if fn != nil {
 		fn(ev)
@@ -379,4 +404,28 @@ func (c *dxLinkChannel) unsubscribeTrade(symbols []string) error {
 		items[i] = feedSubscriptionItem{Symbol: s, Type: "Trade"}
 	}
 	return c.client.send(feedSubscriptionMessage{Type: "FEED_SUBSCRIPTION", Channel: c.id, Remove: items})
+}
+
+// subscribeLiveDayVolume agrega Trade+TradeETH de un simbolo al MISMO canal
+// que ya tiene su Candle en vivo (mismo mensaje FEED_SUBSCRIPTION, sin abrir
+// canal ni conexion nueva) -- se queda viva para siempre igual que
+// subscribeLive, no es un snapshot puntual como subscribeTrade.
+func (c *dxLinkChannel) subscribeLiveDayVolume(symbol string) error {
+	return c.client.send(feedSubscriptionMessage{
+		Type: "FEED_SUBSCRIPTION", Channel: c.id,
+		Add: []feedSubscriptionItem{
+			{Symbol: symbol, Type: "Trade"},
+			{Symbol: symbol, Type: "TradeETH"},
+		},
+	})
+}
+
+func (c *dxLinkChannel) unsubscribeLiveDayVolume(symbol string) error {
+	return c.client.send(feedSubscriptionMessage{
+		Type: "FEED_SUBSCRIPTION", Channel: c.id,
+		Remove: []feedSubscriptionItem{
+			{Symbol: symbol, Type: "Trade"},
+			{Symbol: symbol, Type: "TradeETH"},
+		},
+	})
 }

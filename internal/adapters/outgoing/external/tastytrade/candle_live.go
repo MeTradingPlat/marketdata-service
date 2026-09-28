@@ -31,6 +31,13 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 	if err := ch.channel.subscribeLive(symbol, domain.M1, from); err != nil {
 		return fmt.Errorf("subscribing live M1 for %s: %w", symbol, err)
 	}
+	// subscribeLiveDayVolume va sobre el MISMO canal, sin ocupar un slot de
+	// cupo nuevo (ver day_volume_live.go) -- un fallo aca no debe tumbar la
+	// suscripcion M1 que ya quedo activa, solo loguea y sigue: el volumen
+	// del dia tiene el batch FetchDayVolumes como respaldo.
+	if err := ch.channel.subscribeLiveDayVolume(symbol); err != nil {
+		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to subscribe live day volume (Trade/TradeETH), falling back to batch fetch")
+	}
 	return nil
 }
 

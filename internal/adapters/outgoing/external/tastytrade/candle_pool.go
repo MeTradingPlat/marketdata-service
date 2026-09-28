@@ -81,6 +81,12 @@ type CandlePool struct {
 	// que partir el barrido en dos grupos que se turnan reduce a la mitad
 	// los mensajes de suscripcion por minuto.
 	refreshCycle atomic.Uint64
+
+	// liveDayVolume: ver day_volume_live.go -- volumen del dia mantenido en
+	// memoria por Trade/TradeETH en vivo, sobre el mismo canal que el M1 de
+	// cada simbolo.
+	liveDayVolumeMu sync.RWMutex
+	liveDayVolume   map[string]liveDayVolumeEntry
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
@@ -88,8 +94,9 @@ func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), m
 		dispatch:   make(map[string]dispatchEntry),
 		liveSubs:   make(map[string]func(domain.Candle)),
 		liveTicks:  make(map[string]func(domain.Candle)),
-		current:    make(map[string]domain.Candle),
-		lastClosed: make(map[string]domain.Candle),
+		current:       make(map[string]domain.Candle),
+		lastClosed:    make(map[string]domain.Candle),
+		liveDayVolume: make(map[string]liveDayVolumeEntry),
 	}
 	p.allocator = newChannelAllocator(connFactory, p.wireChannel, p.handleConnectionReconnect, maxConnections)
 	return p

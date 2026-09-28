@@ -14,6 +14,8 @@ type dispatchEntry struct {
 
 func (p *CandlePool) wireChannel(ch *dxLinkChannel) {
 	ch.setOnCandle(p.routeEvent)
+	ch.setOnTrade(p.handleLiveTradeVolume)
+	ch.setOnTradeETH(p.handleLiveTradeETHVolume)
 }
 
 func (p *CandlePool) routeEvent(ev rawCandleEvent) {
