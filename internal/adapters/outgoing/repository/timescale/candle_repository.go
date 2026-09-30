@@ -343,7 +343,18 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 		// la ventana base) igual repetian la misma consulta sobre un rango
 		// que ya cubria toda la historia real, costando 14s en vez de una
 		// sola consulta que ya tenia la respuesta correcta.
-		if len(candles) >= bars || attempt >= maxWindowWidenAttempts || len(candles) == prevCount {
+		//
+		// "len(candles) == prevCount" SOLO corta si ya se encontro algo (> 0):
+		// contando 0 en dos vueltas seguidas NO prueba que no hay mas historia,
+		// solo que la ventana todavia no llego lo bastante atras -- un simbolo
+		// MUY iliquido (ej. CCRP, un ETF de bonos con literal 1 trade real en
+		// todo el dia) puede tener su unica vela real justo pasado el segundo
+		// ensanche y adentro del tercero. Confirmado en vivo el 2026-09-30:
+		// bars=10 (ventana base 50min, primer ensanche 200min) volvia "[]" para
+		// CCRP con antelacion de antes de que un attempt=2 (800min) SI hubiera
+		// encontrado la vela real a 251min de "anchor" -- se rendia despues de
+		// solo 1 ensanche sin haber agotado los 4 permitidos.
+		if len(candles) >= bars || attempt >= maxWindowWidenAttempts || (len(candles) > 0 && len(candles) == prevCount) {
 			return candles, nil
 		}
 		prevCount = len(candles)
