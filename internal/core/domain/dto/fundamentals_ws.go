@@ -1,16 +1,19 @@
 package dto
 
-import "github.com/MeTradingPlat/marketdata-service/internal/core/domain"
-
-// FundamentalsMessage lleva domain.Fundamentals crudo -- se manda solo
-// cuando FundamentalsCache.ReloadAll corre de verdad (barrido nocturno o el
-// loop de trading status cada 15 min), nunca por tick. Es baja frecuencia a
-// proposito: estos campos no cambian mas seguido que eso (ver
+// FundamentalsMessage lleva el mismo FundamentalRealtime que ya sirve
+// /marketdata/fundamentals/realtime (sharesOutstanding/floatShares/
+// shortInterest/shortRatio/daysUntilEarnings incluidos) -- domain.Fundamentals
+// crudo se probo primero, pero varios de esos campos son internos
+// (json:"-", nunca viajaban) y dejaban a un cliente de /ws/fundamentals sin
+// los datos que de verdad necesita. Se manda cuando cualquier refresco puntual
+// de FundamentalsCache corre para ese simbolo (beta/market metrics/earnings/
+// dividendos/externo/prevClose), no solo en ReloadAll -- sigue siendo baja
+// frecuencia porque estos campos no cambian mas seguido que eso (ver
 // project_marketdata_fundamentals_known_limits).
 type FundamentalsMessage struct {
 	Type         string              `json:"type"`
 	Symbol       string              `json:"symbol"`
-	Fundamentals domain.Fundamentals `json:"fundamentals"`
+	Fundamentals FundamentalRealtime `json:"fundamentals"`
 }
 
 type FundamentalsControlMessage struct {
