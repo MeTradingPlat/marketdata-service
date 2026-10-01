@@ -25,14 +25,19 @@ type DayVolumeTracker struct {
 	// se actualiza continuamente y no necesita capturarse en un segundo
 	// exacto -- se queda quieto por si solo durante la sesion regular.
 	extended map[string]int64
+	// extendedBaseline: Extended congelado al cierre de regular -- mismo
+	// mecanismo que extended (se pisa solo mientras no es post-market, ver
+	// day_volume_extended_loop.go), reemplaza la foto puntual de regularEnd.
+	extendedBaseline map[string]int64
 }
 
 func NewDayVolumeTracker() *DayVolumeTracker {
 	return &DayVolumeTracker{
-		volumes:      make(map[string]int64),
-		preMarketEnd: make(map[string]int64),
-		regularEnd:   make(map[string]int64),
-		extended:     make(map[string]int64),
+		volumes:          make(map[string]int64),
+		preMarketEnd:     make(map[string]int64),
+		regularEnd:       make(map[string]int64),
+		extended:         make(map[string]int64),
+		extendedBaseline: make(map[string]int64),
 	}
 }
 

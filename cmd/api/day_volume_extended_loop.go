@@ -49,4 +49,12 @@ func refreshExtendedDayVolumes(ctx context.Context, gateway out.DayVolumeGateway
 	}
 	volumes := gateway.LiveExtendedDayVolumes(syms)
 	tracker.SetExtended(day, volumes)
+	// Mismo truco para post-market: seguir pisando el baseline mientras no
+	// es post-market (TradeETH no se mueve en regular, da igual cual sea
+	// "la ultima" escritura) y dejar de llamarlo apenas empieza -- el ultimo
+	// valor escrito queda congelado solo, sin ventana de segundos que
+	// acertar (ver withRealSessionVolumes).
+	if intraday.PhaseAt(time.Now()) != intraday.PhasePostMarket {
+		tracker.SetExtendedBaseline(day, volumes)
+	}
 }

@@ -42,4 +42,5 @@ func (t *DayVolumeTracker) resetForDayLocked(day time.Time) {
 	t.preMarketEnd = make(map[string]int64)
 	t.regularEnd = make(map[string]int64)
 	t.extended = make(map[string]int64)
+	t.extendedBaseline = make(map[string]int64)
 }

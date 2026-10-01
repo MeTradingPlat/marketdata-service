@@ -82,6 +82,29 @@ func TestRealSessionVolumes_FallsBackToTheFrozenBoundaryWithoutExtended(t *testi
 	}
 }
 
+func TestRealSessionVolumes_ExtendedBaselineTakesPriorityOverTheFrozenRegularEnd(t *testing.T) {
+	tracker := trackerWith(9_000_000, 0, 20_000_000)
+	tracker.SetExtended(sessionDay, map[string]int64{"AAPL": 512_000})
+	tracker.SetExtendedBaseline(sessionDay, map[string]int64{"AAPL": 480_000})
+
+	got := withRealSessionVolumes(tracker, "AAPL", candleBased(), etTime(17, 0))
+
+	if got.PostMarketVolume != 32_000 {
+		t.Fatalf("post = %d, want the live Extended delta 32000 (512000-480000), not the frozen RegularEnd path", got.PostMarketVolume)
+	}
+}
+
+func TestRealSessionVolumes_FallsBackToRegularEndWithoutExtendedBaseline(t *testing.T) {
+	tracker := trackerWith(20_300_000, 0, 20_000_000)
+	tracker.SetExtended(sessionDay, map[string]int64{"AAPL": 512_000})
+
+	got := withRealSessionVolumes(tracker, "AAPL", candleBased(), etTime(17, 0))
+
+	if got.PostMarketVolume != 300_000 {
+		t.Fatalf("post = %d, want the regularEnd fallback 300000 since ExtendedBaseline is unknown", got.PostMarketVolume)
+	}
+}
+
 func TestRealSessionVolumes_AnUnknownSymbolKeepsTheCandleBasedSnapshot(t *testing.T) {
 	got := withRealSessionVolumes(intraday.NewDayVolumeTracker(), "AAPL", candleBased(), etTime(17, 0))
 

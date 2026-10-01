@@ -29,8 +29,20 @@ func withRealSessionVolumes(tracker *intraday.DayVolumeTracker, symbol string, s
 			snapshot.PreMarketVolume = preMarket
 		}
 	}
-	if regularEnd, ok := tracker.Boundary(symbol, intraday.RegularEnd); ok && phase == intraday.PhasePostMarket {
-		snapshot.PostMarketVolume = max(current-regularEnd, 0)
+	// extendedBaseline (Extended congelado al cierre de regular) reemplaza la
+	// foto puntual de RegularEnd cuando ya esta disponible, mismo patron que
+	// preMarketVolume arriba -- RegularEnd sigue de respaldo para un simbolo
+	// que arranco a operar recien y todavia no tiene baseline.
+	if phase == intraday.PhasePostMarket {
+		if baseline, ok := tracker.ExtendedBaseline(symbol); ok {
+			if extended, ok := tracker.Extended(symbol); ok {
+				snapshot.PostMarketVolume = max(extended-baseline, 0)
+				return snapshot
+			}
+		}
+		if regularEnd, ok := tracker.Boundary(symbol, intraday.RegularEnd); ok {
+			snapshot.PostMarketVolume = max(current-regularEnd, 0)
+		}
 	}
 	return snapshot
 }
