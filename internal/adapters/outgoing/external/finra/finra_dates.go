@@ -41,9 +41,6 @@ func recentSettlementDates(count int) []time.Time {
 	}
 
 	sort.Slice(dates, func(i, j int) bool { return dates[i].After(dates[j]) })
-	if len(dates) > count {
-		dates = dates[:count]
-	}
 	return dates
 }
 
