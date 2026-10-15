@@ -75,7 +75,7 @@ type DxLinkConn struct {
 	// llaman en TODA conexion (en vivo o efimera del barrido), no solo en
 	// la que detecto el rechazo.
 	onSessionSaturated     func()
-	waitForSessionCooldown func(ctx context.Context) error
+	waitForSessionCooldown func(ctx context.Context) (func(), error)
 
 	closing atomic.Bool
 
@@ -150,7 +150,7 @@ func (c *DxLinkConn) OnSessionSaturated(fn func()) {
 
 // OnWaitForSessionCooldown registra el hook que bloquea antes de dialear si
 // la ventana compartida sigue activa.
-func (c *DxLinkConn) OnWaitForSessionCooldown(fn func(ctx context.Context) error) {
+func (c *DxLinkConn) OnWaitForSessionCooldown(fn func(ctx context.Context) (func(), error)) {
 	c.waitForSessionCooldown = fn
 }
 
@@ -183,9 +183,11 @@ func (c *DxLinkConn) Connected() bool {
 
 func (c *DxLinkConn) Connect(ctx context.Context) error {
 	if c.waitForSessionCooldown != nil {
-		if err := c.waitForSessionCooldown(ctx); err != nil {
+		release, err := c.waitForSessionCooldown(ctx)
+		if err != nil {
 			return fmt.Errorf("waiting for session cooldown: %w", err)
 		}
+		defer release()
 	}
 
 	conn, _, err := dxLinkDialer.DialContext(ctx, c.urlFunc(), nil)

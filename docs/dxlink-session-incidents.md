@@ -31,6 +31,10 @@ cuando una tanda de reconexiones se dispara junta. Confirmado en vivo:
   parado ~2h -- causa distinta (ver más abajo), coincidió con un storm real.
 - **2026-08-30/31**: storm sostenido 30+ min, 500-1000 errores/min sin bajar,
   mientras el barrido seguía pidiendo conexiones nuevas cada pocos segundos.
+- **2026-10-15**: storm sostenido 44+ horas desde 2026-10-13 19:18Z sin
+  resolverse solo (a diferencia de los incidentes de agosto). Causa: el
+  SessionBreaker liberaba a TODOS los que esperaban en el mismo instante en vez
+  de serializar el primer intento, re-saturando el límite de inmediato.
 
 ## Fixes aplicados, en orden (no repetir los descartados)
 
@@ -43,6 +47,7 @@ cuando una tanda de reconexiones se dispara junta. Confirmado en vivo:
 | -- | -- | `sessionSaturatedDelay = 15min` en `dxlink_reconnect.go`: cuando una conexión YA AUTENTICADA recibe `ERROR:UNAUTHORIZED` con "sessions" en el mensaje, espera 15 min antes de reintentar (en vez del backoff normal de segundos) | Sigue vigente, pero **solo cubre conexiones que llegaron a autenticarse alguna vez**. Ver el gap de abajo. |
 | 2026-08-29 | `dd3197f` | `connDone` channel para desbloquear `dxLinkChannel.open()` cuando la conexión muere a mitad del handshake (deadlock de goroutines, no el storm en sí) | Bug relacionado pero distinto: sin esto, un storm de reconexión podía dejar workers del barrido colgados para siempre (sin error en el log, CPU en reposo) en vez de solo reintentar. |
 | **2026-08-31** | **`0109c18`** | **`SessionBreaker` compartido por todo el proceso** (`session_breaker.go`) | **Fix actual, ver abajo.** |
+| **2026-10-15** | -- | **`SessionBreaker.Guard`: gate serializado tras cooldown activo** (`session_breaker.go`, `dxlink_conn.go`) | **Fix actual, ver abajo.** |
 
 ## El gap que quedaba sin cubrir (fix del 2026-08-31)
 
@@ -71,6 +76,22 @@ como las conexiones efímeras del barrido, porque ambas pasan por el mismo
 
 Verificado en vivo: de 500-1000 errores/min a 0 tras el deploy, sweep H1
 avanzando sin fallos de conexión.
+
+## El gap de serialización tras cooldown (fix del 2026-10-15)
+
+Confirmado en vivo el 2026-10-15: un storm sostenido de 44+ horas desde
+2026-10-13 19:18Z no se resolvía solo. La causa: cuando la ventana de cooldown
+compartida vencía, `SessionBreaker.Wait` liberaba a TODAS las conexiones en cola
+en el mismo instante (salvo un jitter menor), provocando que disquen a la vez
+y re-saturen de inmediato el límite antes de que la primera conexión termine de
+establecerse.
+
+**Fix**: `SessionBreaker.Guard` (`dxlink_conn.go`, `oauth.go`). Implementa un gate
+(`sync.Mutex`) que serializa el primer intento de dial únicamente tras haber
+atravesado una ventana de cooldown activa. Las demás conexiones en cola esperan
+en el gate hasta que el dial en curso resuelve (éxito o re-saturación); si el
+primer intento vuelve a saturar, el siguiente re-bloquea por la nueva ventana.
+Cuando no hubo cooldown activo, `Guard` opera sin serialización añadida (no-op).
 
 ## Incidente relacionado pero DISTINTO: OOM del contenedor ("se satura, solo arregla el reinicio")
 

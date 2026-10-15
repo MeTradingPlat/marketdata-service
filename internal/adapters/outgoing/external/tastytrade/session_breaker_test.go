@@ -3,6 +3,7 @@ package tastytrade
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -84,5 +85,127 @@ func TestSessionBreaker_WaitRespectsContextCancellation(t *testing.T) {
 
 	if err := b.Wait(ctx); err == nil {
 		t.Error("expected Wait to return the context error instead of blocking for the full cooldown")
+	}
+}
+
+func TestSessionBreaker_GuardReturnsImmediatelyWithoutCooldown(t *testing.T) {
+	var b SessionBreaker
+	start := time.Now()
+	release, err := b.Guard(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if release == nil {
+		t.Fatal("expected non-nil release func")
+	}
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Errorf("Guard blocked for %v with no active cooldown", elapsed)
+	}
+	release()
+}
+
+func TestSessionBreaker_GuardSerializesConcurrentWaitersAfterActiveCooldown(t *testing.T) {
+	var b SessionBreaker
+	b.cooldownUntilUnixNano.Store(time.Now().Add(100 * time.Millisecond).UnixNano())
+
+	firstAcquired := make(chan struct{})
+	secondAcquired := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstReleased := make(chan struct{})
+
+	runGuard := func() {
+		release, err := b.Guard(context.Background())
+		if err != nil {
+			t.Errorf("Guard failed: %v", err)
+			return
+		}
+		select {
+		case <-firstAcquired:
+			select {
+			case <-firstReleased:
+			default:
+				t.Error("second Guard acquired gate before first release was called")
+			}
+			release()
+			close(secondAcquired)
+		default:
+			close(firstAcquired)
+			<-releaseFirst
+			release()
+			close(firstReleased)
+		}
+	}
+
+	go runGuard()
+	go runGuard()
+
+	select {
+	case <-firstAcquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first Guard timed out waiting for active cooldown")
+	}
+
+	select {
+	case <-secondAcquired:
+		t.Fatal("second Guard acquired gate before first release was called")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+
+	select {
+	case <-secondAcquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second Guard timed out after first release was called")
+	}
+}
+
+func TestSessionBreaker_GuardReblocksIfSaturatedAgainBeforeRelease(t *testing.T) {
+	var b SessionBreaker
+	b.cooldownUntilUnixNano.Store(time.Now().Add(500 * time.Millisecond).UnixNano())
+
+	var holderClaimed atomic.Bool
+	holderAcquired := make(chan struct{})
+	releaseHolder := make(chan struct{})
+	waiterAcquired := make(chan struct{})
+
+	runGuard := func() {
+		release, err := b.Guard(context.Background())
+		if err != nil {
+			t.Errorf("Guard failed: %v", err)
+			return
+		}
+		if holderClaimed.CompareAndSwap(false, true) {
+			close(holderAcquired)
+			<-releaseHolder
+			b.MarkSaturated()
+			release()
+			return
+		}
+		release()
+		close(waiterAcquired)
+	}
+
+	go runGuard()
+	go runGuard()
+
+	select {
+	case <-holderAcquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no Guard call acquired the gate in time")
+	}
+
+	select {
+	case <-waiterAcquired:
+		t.Fatal("second Guard acquired the gate before the holder released it")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseHolder)
+
+	select {
+	case <-waiterAcquired:
+		t.Fatal("waiter proceeded immediately after a fresh MarkSaturated instead of re-blocking for the new window")
+	case <-time.After(200 * time.Millisecond):
 	}
 }

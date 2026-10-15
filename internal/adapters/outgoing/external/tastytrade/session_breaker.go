@@ -3,6 +3,7 @@ package tastytrade
 import (
 	"context"
 	"math/rand"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -36,6 +37,7 @@ const sessionCooldownJitter = 3 * time.Second
 // pocos segundos en paralelo con los reconnects del pool en vivo.
 type SessionBreaker struct {
 	cooldownUntilUnixNano atomic.Int64
+	gate                  sync.Mutex
 }
 
 // MarkSaturated abre la ventana compartida -- se llama tanto desde un
@@ -82,5 +84,26 @@ func (b *SessionBreaker) Wait(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (b *SessionBreaker) Guard(ctx context.Context) (func(), error) {
+	hadActiveWindow := b.cooldownUntilUnixNano.Load() > time.Now().UnixNano()
+	if err := b.Wait(ctx); err != nil {
+		return nil, err
+	}
+	if !hadActiveWindow {
+		return func() {}, nil
+	}
+	for {
+		b.gate.Lock()
+		if b.cooldownUntilUnixNano.Load() > time.Now().UnixNano() {
+			b.gate.Unlock()
+			if err := b.Wait(ctx); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		return b.gate.Unlock, nil
 	}
 }

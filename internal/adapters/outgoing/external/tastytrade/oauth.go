@@ -55,8 +55,8 @@ func (o *OAuth) MarkSessionsSaturated() {
 
 // WaitForSessionCooldown bloquea hasta que la ventana compartida termine, si
 // esta activa -- llamado antes de CUALQUIER intento de dial nuevo.
-func (o *OAuth) WaitForSessionCooldown(ctx context.Context) error {
-	return o.breaker.Wait(ctx)
+func (o *OAuth) WaitForSessionCooldown(ctx context.Context) (func(), error) {
+	return o.breaker.Guard(ctx)
 }
 
 func NewOAuth(cfg OAuthConfig) *OAuth {
