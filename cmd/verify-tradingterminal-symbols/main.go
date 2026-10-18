@@ -49,15 +49,12 @@ func isNonAlnum(s string) bool {
 	return false
 }
 
-// convertSymbol traduce sufijos .WS -> /WS y .U -> /U que TastyTrade maneja con barra (ver security_type.go).
+// convertSymbol traduce TODO separador de punto a slash -- confirmado en vivo que
+// DxLink no devuelve velas con punto ni siquiera para clases de accion liquidas
+// (BRK.A/BRK.B dieron 0 velas con punto, 2507 con BRK/A), no solo para warrants/units.
 func convertSymbol(sym string) (string, bool) {
-	if strings.HasSuffix(sym, ".WS") {
-		return strings.TrimSuffix(sym, ".WS") + "/WS", true
-	}
-	if strings.HasSuffix(sym, ".U") {
-		return strings.TrimSuffix(sym, ".U") + "/U", true
-	}
-	return sym, false
+	converted := strings.ReplaceAll(sym, ".", "/")
+	return converted, converted != sym
 }
 
 // cmd/verify-tradingterminal-symbols descarga el catalogo estatico de TradingTerminal
