@@ -25,8 +25,10 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 	p.currentMu.Lock()
 	resumeFrom := make(map[string]time.Time, len(symbols))
 	for _, symbol := range symbols {
-		if prev, ok := p.current[symbol]; ok {
+		if prev, ok := p.current[symbol]; ok && !prev.Timestamp.IsZero() {
 			resumeFrom[symbol] = prev.Timestamp
+		} else if last, ok := p.lastClosed[symbol]; ok && !last.Timestamp.IsZero() {
+			resumeFrom[symbol] = last.Timestamp
 		}
 		delete(p.current, symbol)
 	}

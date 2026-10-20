@@ -15,6 +15,9 @@ import (
 // separado antes ni un remove/add de por medio -- ver el comentario de
 // subscribeLive sobre por que esa secuencia dejaba el streaming mudo.
 func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time.Time, onClosed func(domain.Candle), onTick func(domain.Candle)) error {
+	if from.IsZero() {
+		from = time.Now().Add(-5 * time.Minute)
+	}
 	ch, err := p.allocator.allocate(ctx)
 	if err != nil {
 		return fmt.Errorf("allocating channel for %s live M1: %w", symbol, err)
