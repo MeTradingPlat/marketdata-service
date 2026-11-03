@@ -65,6 +65,7 @@ const upsertCandleSQL = `
 		open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
 		volume = EXCLUDED.volume, trade_count = EXCLUDED.trade_count, vwap = EXCLUDED.vwap,
 		verified = candles.verified OR EXCLUDED.verified, last_written_at = now()
+	WHERE EXCLUDED.verified OR NOT candles.verified
 `
 
 const upsertWatermarkSQL = `
