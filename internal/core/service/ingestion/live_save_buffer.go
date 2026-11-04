@@ -31,6 +31,12 @@ func (b *liveSaveBuffer) add(c domain.Candle) {
 	b.pending = append(b.pending, c)
 }
 
+func (b *liveSaveBuffer) size() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.pending)
+}
+
 func (b *liveSaveBuffer) drain() []domain.Candle {
 	b.mu.Lock()
 	defer b.mu.Unlock()

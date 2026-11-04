@@ -204,3 +204,92 @@ func TestFlushLiveSaves_NothingPendingDoesNotCallSave(t *testing.T) {
 		t.Fatalf("expected no Save call, got %d", len(repo.saved))
 	}
 }
+
+func TestFlushLiveSaves_Chunking(t *testing.T) {
+	gw := &fakeGateway{}
+	repo := &fakeRepo{}
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+
+	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for i := 0; i < 12001; i++ {
+		gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: float64(i), Close: float64(i)})
+	}
+
+	if ok := svc.FlushLiveSaves(context.Background()); !ok {
+		t.Fatal("FlushLiveSaves failed")
+	}
+
+	if len(repo.saved) != 3 {
+		t.Fatalf("expected 3 Save calls, got %d", len(repo.saved))
+	}
+	if len(repo.saved[0]) != 5000 {
+		t.Fatalf("expected chunk 0 size 5000, got %d", len(repo.saved[0]))
+	}
+	if len(repo.saved[1]) != 5000 {
+		t.Fatalf("expected chunk 1 size 5000, got %d", len(repo.saved[1]))
+	}
+	if len(repo.saved[2]) != 2001 {
+		t.Fatalf("expected chunk 2 size 2001, got %d", len(repo.saved[2]))
+	}
+}
+
+func TestFlushLiveSaves_FailsOnSecondChunk(t *testing.T) {
+	gw := &fakeGateway{}
+	repo := &fakeRepo{failOnCall: 2}
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+
+	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for i := 0; i < 12001; i++ {
+		gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: float64(i), Close: float64(i)})
+	}
+
+	if ok := svc.FlushLiveSaves(context.Background()); ok {
+		t.Fatal("expected FlushLiveSaves to fail on second chunk")
+	}
+
+	if len(repo.saved) != 1 {
+		t.Fatalf("expected 1 successful Save call before failure, got %d", len(repo.saved))
+	}
+	if len(repo.saved[0]) != 5000 {
+		t.Fatalf("expected first chunk size 5000, got %d", len(repo.saved[0]))
+	}
+
+	if pending := svc.PendingSaves(); pending != 7001 {
+		t.Fatalf("expected PendingSaves == 7001, got %d", pending)
+	}
+}
+
+func TestPendingSaves_CountsLiveAndRetry(t *testing.T) {
+	gw := &fakeGateway{}
+	repo := &fakeRepo{saveErr: errors.New("db down")}
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+
+	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: 1, Close: 1})
+	gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: 2, Close: 2})
+
+	if svc.PendingSaves() != 2 {
+		t.Fatalf("expected PendingSaves == 2 in live buffer, got %d", svc.PendingSaves())
+	}
+
+	svc.FlushLiveSaves(context.Background())
+
+	if svc.PendingSaves() != 2 {
+		t.Fatalf("expected PendingSaves == 2 in retry buffer, got %d", svc.PendingSaves())
+	}
+
+	gw.onCandle(domain.Candle{Symbol: "AAPL", Timeframe: domain.M1, Open: 3, Close: 3})
+	if svc.PendingSaves() != 3 {
+		t.Fatalf("expected PendingSaves == 3 (1 live + 2 retry), got %d", svc.PendingSaves())
+	}
+}
+

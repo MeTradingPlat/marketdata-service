@@ -10,7 +10,7 @@ import (
 // esto se descartan velas nuevas en vez de crecer sin limite (un apagon tan
 // largo ya se resuelve solo en la siguiente ventana de mantenimiento, via
 // resuscripcion desde watermark).
-const saveRetryBufferLimit = 5000
+const saveRetryBufferLimit = 100000
 
 // saveRetryBuffer guarda las velas en vivo que fallaron al guardarse -- la
 // suscripcion DxLink en si nunca se entera de un fallo de Postgres (sigue
@@ -45,6 +45,12 @@ func (b *saveRetryBuffer) requeue(candles []domain.Candle) {
 		room = len(candles)
 	}
 	b.pending = append(b.pending, candles[:room]...)
+}
+
+func (b *saveRetryBuffer) size() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.pending)
 }
 
 func (b *saveRetryBuffer) drain() []domain.Candle {

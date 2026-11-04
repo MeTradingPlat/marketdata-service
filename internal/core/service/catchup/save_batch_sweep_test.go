@@ -71,6 +71,7 @@ func (f *fakeSweepIngest) IsLive(string) bool                       { return fal
 func (f *fakeSweepIngest) IsAttempted(string) bool                  { return false }
 func (f *fakeSweepIngest) FlushLiveSaves(context.Context) bool      { return true }
 func (f *fakeSweepIngest) RetryPendingSaves(context.Context) bool   { return true }
+func (f *fakeSweepIngest) PendingSaves() int                        { return 0 }
 func (f *fakeSweepIngest) RecordTodaysClosedCandles(candles []domain.Candle) {
 	f.recordedTodays = append(f.recordedTodays, candles...)
 }

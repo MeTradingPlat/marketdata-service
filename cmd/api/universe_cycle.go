@@ -269,6 +269,7 @@ func startLiveUniverse(ctx context.Context, ingest in.IngestCandlesService, trac
 	for i := 0; i < liveRolloutWorkers; i++ {
 		go func() {
 			for symbol := range jobs {
+				waitForSaveBacklog(ctx, ingest)
 				startLiveWithRetry(ctx, ingest, symbol)
 			}
 			done <- struct{}{}

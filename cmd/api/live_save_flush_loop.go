@@ -19,6 +19,8 @@ import (
 // es cuando queda escrito en Postgres, y el barrido nocturno cubre cualquier
 // hueco por watermark si el proceso se reinicia antes del proximo flush.
 const liveSaveFlushInterval = 60 * time.Second
+const liveSaveCheckInterval = 2 * time.Second
+const liveSaveFlushThreshold = 20000
 
 // StartLiveSaveFlushLoop guarda por lote las velas en vivo recien cerradas
 // de TODOS los simbolos una vez por minuto, en vez de un Save() individual
@@ -29,14 +31,18 @@ const liveSaveFlushInterval = 60 * time.Second
 // RetryPendingSaves reintenta por su cuenta.
 func StartLiveSaveFlushLoop(ctx context.Context, ingest in.IngestCandlesService) {
 	go func() {
-		ticker := time.NewTicker(liveSaveFlushInterval)
+		ticker := time.NewTicker(liveSaveCheckInterval)
 		defer ticker.Stop()
+		lastFlush := time.Now()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				ingest.FlushLiveSaves(ctx)
+				if ingest.PendingSaves() >= liveSaveFlushThreshold || time.Since(lastFlush) >= liveSaveFlushInterval {
+					ingest.FlushLiveSaves(ctx)
+					lastFlush = time.Now()
+				}
 			}
 		}
 	}()

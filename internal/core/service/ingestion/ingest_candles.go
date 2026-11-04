@@ -210,9 +210,9 @@ func (s *ingestCandlesService) FlushLiveSaves(ctx context.Context) bool {
 	if len(pending) == 0 {
 		return true
 	}
-	if err := s.repo.Save(ctx, pending, false); err != nil {
+	if remainder, err := s.saveInChunks(ctx, pending); err != nil {
 		log.Error().Err(err).Int("candles", len(pending)).Msg("flushing live save batch failed, buffering for retry")
-		for _, c := range pending {
+		for _, c := range remainder {
 			s.retryBuffer.add(c)
 		}
 		return false
@@ -231,11 +231,15 @@ func (s *ingestCandlesService) RetryPendingSaves(ctx context.Context) bool {
 	if len(pending) == 0 {
 		return true
 	}
-	if err := s.repo.Save(ctx, pending, false); err != nil {
+	if remainder, err := s.saveInChunks(ctx, pending); err != nil {
 		log.Error().Err(err).Int("candles", len(pending)).Msg("retrying pending candle saves failed, will retry again")
-		s.retryBuffer.requeue(pending)
+		s.retryBuffer.requeue(remainder)
 		return false
 	}
 	log.Info().Int("candles", len(pending)).Msg("recovered pending candle saves")
 	return true
+}
+
+func (s *ingestCandlesService) PendingSaves() int {
+	return s.liveSaveBuffer.size() + s.retryBuffer.size()
 }

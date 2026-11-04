@@ -2,6 +2,7 @@ package ingestion_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -61,10 +62,12 @@ func (f *fakeGateway) ResetLiveConnections()                        {}
 func (f *fakeGateway) RefreshLiveSubscriptions(ctx context.Context) {}
 
 type fakeRepo struct {
-	saved     [][]domain.Candle
-	saveErr   error
-	getResult []domain.Candle
-	watermark *time.Time
+	saved       [][]domain.Candle
+	saveErr     error
+	failOnCall  int
+	saveCalls   int
+	getResult   []domain.Candle
+	watermark   *time.Time
 
 	seriesResult    map[string][]domain.Candle
 	seriesErr       error
@@ -87,6 +90,10 @@ type fakeRepo struct {
 }
 
 func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
+	f.saveCalls++
+	if f.failOnCall > 0 && f.saveCalls == f.failOnCall {
+		return errors.New("save call failed")
+	}
 	if f.saveErr != nil {
 		return f.saveErr
 	}
