@@ -124,7 +124,7 @@ func waitForData(ctx context.Context, settled func() bool, timeout time.Duration
 		case <-ticker.C:
 			continue
 		case <-deadline:
-			return nil
+			return domain.ErrPartialHistory
 		case <-ctx.Done():
 			return ctx.Err()
 		}

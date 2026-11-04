@@ -47,6 +47,19 @@ const IncrementalMargin = 1
 func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error {
 	candles, requested, err := s.fetchForBackfill(ctx, symbol, timeframe)
 	if err != nil {
+		if errors.Is(err, domain.ErrPartialHistory) {
+			closed, cerr := closedCandles(candles, timeframe)
+			if cerr != nil {
+				return cerr
+			}
+			if len(closed) > 0 {
+				if serr := s.repo.Save(ctx, closed, false); serr != nil {
+					return fmt.Errorf("saving backfilled candles for %s %s: %w", symbol, timeframe, serr)
+				}
+				s.RecordTodaysClosedCandles(closed)
+			}
+			return fmt.Errorf("backfill for %s %s: %w", symbol, timeframe, err)
+		}
 		return err
 	}
 	if requested && len(candles) == 0 {
@@ -92,6 +105,9 @@ func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol stri
 		}
 		return candles, true, nil
 	}
+	if timeframe == domain.M1 && s.gateway.LiveSubscribed(symbol) {
+		return nil, false, nil
+	}
 	duration, err := timeframe.Duration()
 	if err != nil {
 		return nil, false, fmt.Errorf("getting duration for %s: %w", timeframe, err)
@@ -102,6 +118,9 @@ func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol stri
 	from := newest.Add(-IncrementalMargin * duration)
 	candles, err := s.gateway.GetCandles(ctx, symbol, timeframe, from)
 	if err != nil {
+		if errors.Is(err, domain.ErrPartialHistory) {
+			return candles, true, fmt.Errorf("fetching incremental candles for %s %s: %w", symbol, timeframe, err)
+		}
 		return nil, false, fmt.Errorf("fetching incremental candles for %s %s: %w", symbol, timeframe, err)
 	}
 	return candles, true, nil

@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -39,7 +40,11 @@ func (g *Gateway) GetCandlesBatch(ctx context.Context, timeframe domain.Timefram
 // simbolo profundo puede superar la espera del fetch incremental (ver
 // historyDeepWait en candle_pool.go) y quedar truncada para siempre.
 func (g *Gateway) ProbeMaxDepth(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error) {
-	return g.pool.FetchHistoryDeep(ctx, symbol, timeframe, ProbeFromTime)
+	candles, err := g.pool.FetchHistoryDeep(ctx, symbol, timeframe, ProbeFromTime)
+	if errors.Is(err, domain.ErrPartialHistory) {
+		return candles, nil
+	}
+	return candles, err
 }
 
 // ProbeMaxDepthWithWait es ProbeMaxDepth con un wait a eleccion -- solo para
@@ -48,7 +53,11 @@ func (g *Gateway) ProbeMaxDepth(ctx context.Context, symbol string, timeframe do
 // implementarla en cada fake de test de ese puerto para una funcion que
 // ningun flujo de produccion real necesita, solo este diagnostico puntual.
 func (g *Gateway) ProbeMaxDepthWithWait(ctx context.Context, symbol string, timeframe domain.Timeframe, wait time.Duration) ([]domain.Candle, error) {
-	return g.pool.FetchHistoryWithWait(ctx, symbol, timeframe, ProbeFromTime, wait)
+	candles, err := g.pool.FetchHistoryWithWait(ctx, symbol, timeframe, ProbeFromTime, wait)
+	if errors.Is(err, domain.ErrPartialHistory) {
+		return candles, nil
+	}
+	return candles, err
 }
 
 // SubscribeLiveCandles trata "from" en cero (sin watermark todavia, simbolo

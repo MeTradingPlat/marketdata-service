@@ -10,16 +10,21 @@ import (
 )
 
 type fakeGateway struct {
-	probeResult    []domain.Candle
-	probeErr       error
-	subscribed     string
-	subscribedFrom time.Time
-	onCandle       func(domain.Candle)
-	onTickCandle   func(domain.Candle)
+	probeResult     []domain.Candle
+	probeErr        error
+	subscribed      string
+	subscribedFrom  time.Time
+	onCandle        func(domain.Candle)
+	onTickCandle    func(domain.Candle)
+	live            map[string]bool
+	getCandlesRes   []domain.Candle
+	getCandlesErr   error
+	getCandlesCalls int
 }
 
 func (f *fakeGateway) GetCandles(ctx context.Context, symbol string, tf domain.Timeframe, from time.Time) ([]domain.Candle, error) {
-	return nil, nil
+	f.getCandlesCalls++
+	return f.getCandlesRes, f.getCandlesErr
 }
 
 func (f *fakeGateway) ProbeMaxDepth(ctx context.Context, symbol string, tf domain.Timeframe) ([]domain.Candle, error) {
@@ -43,6 +48,9 @@ func (f *fakeGateway) CurrentCandle(symbol string) (domain.Candle, bool) {
 }
 
 func (f *fakeGateway) LiveSubscribed(symbol string) bool {
+	if f.live != nil {
+		return f.live[symbol]
+	}
 	return false
 }
 
@@ -62,12 +70,13 @@ func (f *fakeGateway) ResetLiveConnections()                        {}
 func (f *fakeGateway) RefreshLiveSubscriptions(ctx context.Context) {}
 
 type fakeRepo struct {
-	saved       [][]domain.Candle
-	saveErr     error
-	failOnCall  int
-	saveCalls   int
-	getResult   []domain.Candle
-	watermark   *time.Time
+	saved              [][]domain.Candle
+	savedWithWatermark []bool
+	saveErr            error
+	failOnCall         int
+	saveCalls          int
+	getResult          []domain.Candle
+	watermark          *time.Time
 
 	seriesResult    map[string][]domain.Candle
 	seriesErr       error
@@ -91,6 +100,7 @@ type fakeRepo struct {
 
 func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
 	f.saveCalls++
+	f.savedWithWatermark = append(f.savedWithWatermark, withWatermark)
 	if f.failOnCall > 0 && f.saveCalls == f.failOnCall {
 		return errors.New("save call failed")
 	}

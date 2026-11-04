@@ -298,3 +298,44 @@ func TestPendingSaves_CountsLiveAndRetry(t *testing.T) {
 	}
 }
 
+func TestBackfill_M1LiveSubscribedSkipsFetch(t *testing.T) {
+	watermark := time.Now().Add(-2 * time.Hour)
+	gw := &fakeGateway{
+		live: map[string]bool{"AAPL": true},
+	}
+	repo := &fakeRepo{watermark: &watermark}
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+
+	if err := svc.Backfill(context.Background(), "AAPL", domain.M1); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if gw.getCandlesCalls != 0 {
+		t.Fatalf("expected GetCandles not called, got %d calls", gw.getCandlesCalls)
+	}
+	if len(repo.saved) != 0 {
+		t.Fatalf("expected Save not called, got %d calls", len(repo.saved))
+	}
+}
+
+func TestBackfill_PartialHistorySavesWithoutWatermark(t *testing.T) {
+	watermark := time.Now().Add(-2 * time.Hour)
+	candle := domain.Candle{Symbol: "AAPL", Timeframe: domain.H1, Timestamp: time.Now().Add(-90 * time.Minute), Open: 10, High: 12, Low: 9, Close: 11, Volume: 500}
+	gw := &fakeGateway{
+		getCandlesRes: []domain.Candle{candle},
+		getCandlesErr: domain.ErrPartialHistory,
+	}
+	repo := &fakeRepo{watermark: &watermark}
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+
+	err := svc.Backfill(context.Background(), "AAPL", domain.H1)
+	if !errors.Is(err, domain.ErrPartialHistory) {
+		t.Fatalf("expected error wrapping domain.ErrPartialHistory, got %v", err)
+	}
+	if len(repo.saved) != 1 {
+		t.Fatalf("expected 1 Save call, got %d", len(repo.saved))
+	}
+	if len(repo.savedWithWatermark) != 1 || repo.savedWithWatermark[0] != false {
+		t.Fatalf("expected Save with withWatermark=false, got %v", repo.savedWithWatermark)
+	}
+}
+

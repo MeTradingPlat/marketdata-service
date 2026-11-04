@@ -315,6 +315,18 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 
 	result, err := gateway.GetCandlesBatch(ctx, tf, froms)
 	if err != nil {
+		if errors.Is(err, domain.ErrPartialHistory) {
+			log.Warn().Str("timeframe", string(tf)).Int("symbols", len(froms)).
+				Msg("universe sweep batch cut by timeout, saving without watermark")
+			var empty []string
+			for symbol := range froms {
+				if len(result[symbol]) == 0 {
+					empty = append(empty, symbol)
+				}
+			}
+			saveBatchSweep(ctx, candles, ingest, result, tf, false)
+			return empty
+		}
 		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(froms)).
 			Msg("universe sweep batch fetch failed, falling back to per-symbol backfill")
 		for symbol := range froms {
@@ -330,7 +342,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		}
 	}
 
-	saveBatchSweep(ctx, candles, ingest, result, tf)
+	saveBatchSweep(ctx, candles, ingest, result, tf, true)
 	return empty
 }
 
@@ -341,7 +353,11 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 // (ver candle_repository.go), asi que mezclar simbolos en el mismo llamado
 // es gratis. Si el guardado combinado falla, se cae al backfill individual
 // por simbolo (mismo camino de siempre) en vez de perder el lote entero.
-func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in.IngestCandlesService, result map[string][]domain.Candle, tf domain.Timeframe) {
+func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in.IngestCandlesService, result map[string][]domain.Candle, tf domain.Timeframe, withWatermark ...bool) {
+	wm := true
+	if len(withWatermark) > 0 {
+		wm = withWatermark[0]
+	}
 	merged := make([]domain.Candle, 0, len(result))
 	bySymbol := make(map[string]struct{}, len(result))
 	for symbol, candlesFetched := range result {
@@ -355,7 +371,7 @@ func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in
 	if len(merged) == 0 {
 		return
 	}
-	if err := candles.Save(ctx, merged, true); err != nil {
+	if err := candles.Save(ctx, merged, wm); err != nil {
 		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(bySymbol)).
 			Msg("universe sweep batch save failed, falling back to per-symbol backfill")
 		for symbol := range bySymbol {

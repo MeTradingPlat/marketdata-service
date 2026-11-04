@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -128,6 +129,9 @@ func (p *CandlePool) FetchHistoryBatch(ctx context.Context, tf domain.Timeframe,
 	if err := waitForData(ctx, collector.settled, batchHistoryWait(froms)); err != nil {
 		cleanup()
 		unlockAll()
+		if errors.Is(err, domain.ErrPartialHistory) {
+			return collector.complete(), err
+		}
 		return nil, err
 	}
 	result := collector.complete()
@@ -206,6 +210,9 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	}
 	if err := waitForData(ctx, collector.settled, wait); err != nil {
 		cleanup()
+		if errors.Is(err, domain.ErrPartialHistory) {
+			return collector.complete(), err
+		}
 		return nil, err
 	}
 	result := collector.complete()
