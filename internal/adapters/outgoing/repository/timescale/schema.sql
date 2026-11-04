@@ -104,6 +104,29 @@ ALTER TABLE candles SET (
     autovacuum_vacuum_cost_limit = 1000
 );
 
+-- D1/H1 en hypertable propia con chunks de 30 dias: 26 anos de D1 en chunks de 1 dia eran ~6750 chunks (planes y locks gigantes).
+CREATE TABLE IF NOT EXISTS candles_history (
+    symbol_id INT NOT NULL REFERENCES tracked_symbols(symbol_id),
+    timeframe VARCHAR(6) NOT NULL,
+    ts TIMESTAMPTZ NOT NULL,
+    open DOUBLE PRECISION NOT NULL,
+    high DOUBLE PRECISION NOT NULL,
+    low DOUBLE PRECISION NOT NULL,
+    close DOUBLE PRECISION NOT NULL,
+    volume BIGINT NOT NULL DEFAULT 0,
+    trade_count INT,
+    vwap DOUBLE PRECISION,
+    source VARCHAR(16) NOT NULL DEFAULT 'tastytrade',
+    verified BOOLEAN NOT NULL DEFAULT FALSE,
+    last_written_at TIMESTAMPTZ,
+    PRIMARY KEY (symbol_id, timeframe, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_candles_history_symbol_tf ON candles_history (symbol_id, timeframe);
+SELECT create_hypertable('candles_history', 'ts', chunk_time_interval => INTERVAL '30 days', if_not_exists => TRUE);
+ALTER TABLE candles_history SET (timescaledb.compress, timescaledb.compress_segmentby = 'symbol_id, timeframe', timescaledb.compress_orderby = 'ts DESC');
+SELECT add_compression_policy('candles_history', INTERVAL '35 days', if_not_exists => TRUE, initial_start => '2026-01-01 02:30:00+00'::timestamptz);
+ALTER TABLE candles_history SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02, autovacuum_vacuum_cost_limit = 1000);
+
 -- last_ts refleja hasta donde llega la data real por simbolo+temporalidad,
 -- actualizado en cada Save() (incluye M1 en vivo) y en cada agregacion
 -- H1/D1 de medianoche -- consulta barata sin escanear candles.

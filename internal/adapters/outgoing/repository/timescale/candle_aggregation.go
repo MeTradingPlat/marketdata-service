@@ -28,7 +28,7 @@ const getAggregatedCandlesSQL = `
 			(ARRAY_AGG(c.close ORDER BY c.ts DESC))[1] AS close,
 			SUM(c.volume) AS volume,
 			SUM(c.trade_count) AS trade_count
-		FROM candles c
+		FROM %[1]s c
 		WHERE c.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
 			AND c.timeframe = $2 AND c.ts >= $4
 			AND ($5::timestamptz IS NULL OR c.ts < $5)
@@ -73,7 +73,7 @@ const seriesAggregatedBatchSQL = `
 				(ARRAY_AGG(c.close ORDER BY c.ts DESC))[1] AS close,
 				SUM(c.volume) AS volume,
 				SUM(c.trade_count) AS trade_count
-			FROM candles c
+			FROM %[1]s c
 			WHERE c.symbol_id = s.symbol_id AND c.timeframe = $3 AND c.ts >= $5
 			GROUP BY bucket
 			ORDER BY bucket DESC
@@ -98,7 +98,7 @@ const seriesRawBatchSQL = `
 	FROM tracked_symbols s
 	JOIN LATERAL (
 		SELECT c.ts, c.open, c.high, c.low, c.close, c.volume, c.trade_count
-		FROM candles c
+		FROM %[1]s c
 		WHERE c.symbol_id = s.symbol_id AND c.timeframe = $3 AND c.ts >= $4
 		ORDER BY c.ts DESC
 		LIMIT $2
@@ -148,7 +148,8 @@ func (r *CandleRepository) GetSeriesAggregatedBatch(ctx context.Context, symbols
 	}
 
 	since := time.Now().Add(-time.Duration(bars*batchWindowMargin+60) * approxPeriod)
-	rows, err := r.pool.Query(ctx, seriesAggregatedBatchSQL, symbols, bars, string(source), bucket, since)
+	query := fmt.Sprintf(seriesAggregatedBatchSQL, candleTable(source))
+	rows, err := r.pool.Query(ctx, query, symbols, bars, string(source), bucket, since)
 	if err != nil {
 		return nil, fmt.Errorf("querying aggregated series batch for %d symbols: %w", len(symbols), err)
 	}
@@ -174,7 +175,8 @@ func (r *CandleRepository) getSeriesAggregatedBatchRaw(ctx context.Context, symb
 	}
 	rawLimit := bars*ratio*rawFetchMargin + 60
 
-	rows, err := r.pool.Query(ctx, seriesRawBatchSQL, symbols, rawLimit, string(source), since)
+	query := fmt.Sprintf(seriesRawBatchSQL, candleTable(source))
+	rows, err := r.pool.Query(ctx, query, symbols, rawLimit, string(source), since)
 	if err != nil {
 		return nil, fmt.Errorf("querying raw series batch for %d symbols: %w", len(symbols), err)
 	}
@@ -209,7 +211,7 @@ func (r *CandleRepository) getSeriesAggregatedBatchRaw(ctx context.Context, symb
 // hacen falta las columnas OHLCV, no vwap/source.
 const rawCandlesForBucketingSQL = `
 	SELECT c.ts, c.open, c.high, c.low, c.close, c.volume, c.trade_count
-	FROM candles c
+	FROM %[1]s c
 	WHERE c.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
 		AND c.timeframe = $2 AND c.ts >= $3
 		AND ($4::timestamptz IS NULL OR c.ts < $4)
@@ -217,7 +219,8 @@ const rawCandlesForBucketingSQL = `
 `
 
 func (r *CandleRepository) queryRawCandles(ctx context.Context, symbol string, source domain.Timeframe, from time.Time, before *time.Time, limit int) ([]domain.Candle, error) {
-	rows, err := r.pool.Query(ctx, rawCandlesForBucketingSQL, symbol, string(source), from, before, limit)
+	query := fmt.Sprintf(rawCandlesForBucketingSQL, candleTable(source))
+	rows, err := r.pool.Query(ctx, query, symbol, string(source), from, before, limit)
 	if err != nil {
 		return nil, fmt.Errorf("querying raw candles for bucketing %s %s: %w", symbol, source, err)
 	}
@@ -235,7 +238,8 @@ func (r *CandleRepository) queryRawCandles(ctx context.Context, symbol string, s
 }
 
 func (r *CandleRepository) queryGroupedCandles(ctx context.Context, symbol string, timeframe, source domain.Timeframe, bucket string, from time.Time, before *time.Time, bars int) ([]domain.Candle, error) {
-	rows, err := r.pool.Query(ctx, getAggregatedCandlesSQL, symbol, string(source), bucket, from, before, bars)
+	query := fmt.Sprintf(getAggregatedCandlesSQL, candleTable(source))
+	rows, err := r.pool.Query(ctx, query, symbol, string(source), bucket, from, before, bars)
 	if err != nil {
 		return nil, fmt.Errorf("querying aggregated candles for %s %s: %w", symbol, timeframe, err)
 	}
@@ -329,7 +333,7 @@ func (r *CandleRepository) getAggregatedCandles(ctx context.Context, symbol stri
 // hasDataAtOrAfterSQL: existencia acotada, no MAX(ts)
 const hasDataAtOrAfterSQL = `
 	SELECT EXISTS (
-		SELECT 1 FROM candles c
+		SELECT 1 FROM %[1]s c
 		WHERE c.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
 			AND c.timeframe = $2 AND c.ts >= $3
 		LIMIT 1
@@ -345,7 +349,8 @@ func (r *CandleRepository) dropUnsettledLastBucket(ctx context.Context, symbol s
 		return candles[1:]
 	}
 	var settled bool
-	err := r.pool.QueryRow(ctx, hasDataAtOrAfterSQL, symbol, string(source), bucketEnd).Scan(&settled)
+	query := fmt.Sprintf(hasDataAtOrAfterSQL, candleTable(source))
+	err := r.pool.QueryRow(ctx, query, symbol, string(source), bucketEnd).Scan(&settled)
 	if err != nil || settled {
 		return candles
 	}

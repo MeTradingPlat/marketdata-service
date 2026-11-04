@@ -5,7 +5,7 @@ import (
 )
 
 func (r *CandleRepository) SetCompressionScheduled(ctx context.Context, scheduled bool) error {
-	_, err := r.pool.Exec(ctx, `SELECT alter_job(job_id, scheduled => $1) FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression' AND hypertable_name = 'candles'`, scheduled)
+	_, err := r.pool.Exec(ctx, `SELECT alter_job(job_id, scheduled => $1) FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression' AND hypertable_name IN ('candles', 'candles_history')`, scheduled)
 	if err != nil {
 		return err
 	}

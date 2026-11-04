@@ -59,14 +59,19 @@ func execWithDeadlockRetry(ctx context.Context, exec func(context.Context) error
 // un valor mas viejo de la misma barra; y viceversa, el live jamas pisa una
 // verificada con su provisional.
 const upsertCandleSQL = `
-	INSERT INTO candles (symbol_id, timeframe, ts, open, high, low, close, volume, trade_count, vwap, source, verified, last_written_at)
+	INSERT INTO %[1]s (symbol_id, timeframe, ts, open, high, low, close, volume, trade_count, vwap, source, verified, last_written_at)
 	SELECT symbol_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now() FROM tracked_symbols WHERE symbol = $1
 	ON CONFLICT (symbol_id, timeframe, ts) DO UPDATE SET
 		open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
 		volume = EXCLUDED.volume, trade_count = EXCLUDED.trade_count, vwap = EXCLUDED.vwap,
-		verified = candles.verified OR EXCLUDED.verified, last_written_at = now()
-	WHERE EXCLUDED.verified OR NOT candles.verified
+		verified = %[1]s.verified OR EXCLUDED.verified, last_written_at = now()
+	WHERE EXCLUDED.verified OR NOT %[1]s.verified
 `
+
+var (
+	upsertCandleSQLCandles        = fmt.Sprintf(upsertCandleSQL, "candles")
+	upsertCandleSQLCandlesHistory = fmt.Sprintf(upsertCandleSQL, "candles_history")
+)
 
 const upsertWatermarkSQL = `
 	INSERT INTO watermarks (symbol_id, timeframe, last_ts, updated_at)
@@ -102,7 +107,11 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 	return execWithDeadlockRetry(ctx, func(ctx context.Context) error {
 		batch := &pgx.Batch{}
 		for _, c := range candles {
-			batch.Queue(upsertCandleSQL, c.Symbol, string(c.Timeframe), c.Timestamp,
+			query := upsertCandleSQLCandles
+			if candleTable(c.Timeframe) == "candles_history" {
+				query = upsertCandleSQLCandlesHistory
+			}
+			batch.Queue(query, c.Symbol, string(c.Timeframe), c.Timestamp,
 				c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source, withWatermark)
 			if withWatermark {
 				batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
@@ -139,7 +148,7 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 const getCandlesSQL = `
 	SELECT ts, open, high, low, close, volume, trade_count, vwap, source FROM (
 		SELECT c.ts, c.open, c.high, c.low, c.close, c.volume, c.trade_count, c.vwap, c.source
-		FROM candles c
+		FROM %[1]s c
 		WHERE c.symbol_id = (SELECT symbol_id FROM tracked_symbols WHERE symbol = $1)
 			AND c.timeframe = $2 AND c.ts >= $3
 			AND ($4::timestamptz IS NULL OR c.ts < $4)
@@ -246,19 +255,22 @@ func seriesLookbackWindow(bars int, duration time.Duration) time.Duration {
 	return max(window, minLookback)
 }
 
-func getSeriesSince(ctx context.Context, pool *pgxpool.Pool, symbols []string, timeframe domain.Timeframe, bars int, from time.Time) (map[string][]domain.Candle, error) {
-	rows, err := pool.Query(ctx, `
+const getSeriesSinceSQL = `
 		SELECT s.symbol, ts, open, high, low, close, volume, source
 		FROM (
 			SELECT c.symbol_id, c.ts, c.open, c.high, c.low, c.close, c.volume, c.source,
 			       row_number() OVER (PARTITION BY c.symbol_id ORDER BY c.ts DESC) AS rn
-			FROM candles c
+			FROM %[1]s c
 			WHERE c.timeframe = $1 AND c.ts >= $4
 			  AND c.symbol_id = ANY(ARRAY(SELECT symbol_id FROM tracked_symbols WHERE symbol = ANY($2)))
 		) t
 		JOIN tracked_symbols s ON s.symbol_id = t.symbol_id
 		WHERE rn <= $3
-		ORDER BY s.symbol, ts`,
+		ORDER BY s.symbol, ts`
+
+func getSeriesSince(ctx context.Context, pool *pgxpool.Pool, symbols []string, timeframe domain.Timeframe, bars int, from time.Time) (map[string][]domain.Candle, error) {
+	query := fmt.Sprintf(getSeriesSinceSQL, candleTable(timeframe))
+	rows, err := pool.Query(ctx, query,
 		string(timeframe), symbols, bars, from)
 	if err != nil {
 		return nil, fmt.Errorf("loading %s series for %d symbols: %w", timeframe, len(symbols), err)
@@ -313,9 +325,10 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 	// (x4) y se reintenta -- los simbolos densos pagan un solo query, los
 	// huecos cuestan un par de queries extra como mucho.
 	prevCount := -1
+	query := fmt.Sprintf(getCandlesSQL, candleTable(timeframe))
 	for attempt := 0; ; attempt++ {
 		from := anchor.Add(-window)
-		rows, err := r.pool.Query(ctx, getCandlesSQL, symbol, string(timeframe), from, before, bars)
+		rows, err := r.pool.Query(ctx, query, symbol, string(timeframe), from, before, bars)
 		if err != nil {
 			return nil, fmt.Errorf("querying candles for %s %s: %w", symbol, timeframe, err)
 		}
