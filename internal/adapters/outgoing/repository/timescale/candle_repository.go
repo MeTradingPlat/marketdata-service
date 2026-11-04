@@ -98,6 +98,7 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 	if len(candles) == 0 {
 		return nil
 	}
+	latestDailies := latestDailyBySymbol(candles)
 	return execWithDeadlockRetry(ctx, func(ctx context.Context) error {
 		batch := &pgx.Batch{}
 		for _, c := range candles {
@@ -106,13 +107,13 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 			if withWatermark {
 				batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
 			}
-			if c.Timeframe == domain.D1 {
-				batch.Queue(updateLastVolumeSQL, c.Symbol, c.Volume, c.Timestamp)
-			}
+		}
+		for _, c := range latestDailies {
+			batch.Queue(updateLastVolumeSQL, c.Symbol, c.Volume, c.Timestamp)
 		}
 		results := r.writePool.SendBatch(ctx, batch)
 		defer results.Close()
-		for _, c := range candles {
+		for range candles {
 			if _, err := results.Exec(); err != nil {
 				return fmt.Errorf("upserting candle batch: %w", err)
 			}
@@ -121,10 +122,10 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 					return fmt.Errorf("upserting watermark batch: %w", err)
 				}
 			}
-			if c.Timeframe == domain.D1 {
-				if _, err := results.Exec(); err != nil {
-					return fmt.Errorf("updating last volume: %w", err)
-				}
+		}
+		for range latestDailies {
+			if _, err := results.Exec(); err != nil {
+				return fmt.Errorf("updating last volume: %w", err)
 			}
 		}
 		return nil
