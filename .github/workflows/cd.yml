@@ -180,6 +180,7 @@ jobs:
           done
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_locks_per_transaction = 512;"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET max_connections = 200;"
+          docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET plan_cache_mode = 'force_custom_plan';"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET maintenance_work_mem = '256MB';"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET statement_timeout = '5min';"
           docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -c "ALTER SYSTEM SET idle_in_transaction_session_timeout = '5min';"
@@ -225,11 +226,13 @@ jobs:
           #
           # NOTA: se re-aplica en cada deploy porque el scope de systemd se
           # recrea con cada `docker rm`/`docker run` de postgres.
+          # 2026-11-04: 3.2GiB provocaba IO thrash (load 30, io full 71%) durante el backfill D1;
+          # se sube a 3.8GiB y plan_cache_mode=force_custom_plan evita backends de ~1GB por planes genericos.
           PG_ID=$(docker inspect -f '{{.Id}}' postgres-marketdata)
           if sudo -n true 2>/dev/null; then
-            echo 3435973836 | sudo tee "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high" >/dev/null
+            echo 4080218931 | sudo tee "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high" >/dev/null
           else
-            echo 3435973836 > "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
+            echo 4080218931 > "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
           fi
           cat "/sys/fs/cgroup/system.slice/docker-${PG_ID}.scope/memory.high"
 

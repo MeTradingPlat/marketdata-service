@@ -175,6 +175,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	liveRolloutDone.Store(false)
 
 	// FASE 1: D1 + beta (guard por-simbolo, se calcula con D1 propio).
+	pauseCompression(ctx, candles)
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, tracked, domain.D1, cfg.SweepWorkers)
 	// RefreshBeta usa el guard por-simbolo beta_updated_at: solo calcula
 	// los simbolos cuyo beta no se calculo en esta ventana de
@@ -205,6 +206,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// suscripcion rellena solo el hueco de las horas caidas.
 	// El sweep M1 es el REFILL que avanza el watermark M1.
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, activeTracked, domain.M1, cfg.SweepWorkers)
+	resumeCompression(candles)
 
 	// Sembrar el SnapshotTracker con UNA sola consulta de lote justo
 	// despues del sweep M1 y antes de abrir las suscripciones en vivo.

@@ -12,3 +12,6 @@
 - 2026-11-04: Cada reinicio repite el M1 completo porque los guardados en vivo no ponen watermark (pendiente: arrancar desde la última vela M1 guardada).
 - 2026-11-04: Servidor: ssh vaio. Usuario/BD con docker exec postgres-marketdata printenv POSTGRES_USER/POSTGRES_DB. La tabla candles tiene las columnas symbol_id/timeframe/ts (no symbol/time).
 - 2026-11-04: El CD falla en lunes–viernes de 04:00 a 20:00 ET; fuera de esa ventana despliega solo.
+- 2026-11-04: La compression policy de candles (job 1001) bloquea los INSERT del backfill D1 en chunks viejos (locks transactionid/tuple); el ciclo la pausa antes del sweep D1 y la reanuda tras M1.
+- 2026-11-04: pgx + plan generico (tras 5 ejecuciones) sobre ~6750 chunks infla backends a ~1GB que no se liberan; plan_cache_mode=force_custom_plan en el CD y MaxConnIdleTime 5m.
+- 2026-11-04: memory.high 3.2GiB en postgres causaba IO thrash (load 30) en backfill; subido a 3.8GiB (max 4GiB).

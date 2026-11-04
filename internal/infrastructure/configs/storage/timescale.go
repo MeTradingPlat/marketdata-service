@@ -83,6 +83,7 @@ func connect(cfg *configs.Config) *pgxpool.Pool {
 const (
 	maxConnLifetime       = 30 * time.Minute
 	maxConnLifetimeJitter = 5 * time.Minute
+	maxConnIdleTime       = 5 * time.Minute
 )
 
 func connectWithSize(cfg *configs.Config, maxConns int) *pgxpool.Pool {
@@ -95,6 +96,7 @@ func connectWithSize(cfg *configs.Config, maxConns int) *pgxpool.Pool {
 	}
 	poolCfg.MaxConnLifetime = maxConnLifetime
 	poolCfg.MaxConnLifetimeJitter = maxConnLifetimeJitter
+	poolCfg.MaxConnIdleTime = maxConnIdleTime
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), poolCfg)
 	if err != nil {
