@@ -475,9 +475,9 @@ func (r *CandleRepository) GetWatermarksBatch(ctx context.Context, symbols []str
 }
 
 const symbolsWithDataSQL = `
-	SELECT DISTINCT s.symbol
-	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
-	WHERE c.timeframe = $1
+	SELECT s.symbol
+	FROM watermarks w JOIN tracked_symbols s ON s.symbol_id = w.symbol_id
+	WHERE w.timeframe = $1
 `
 
 // SymbolsWithData es el equivalente en lote de "tiene watermark" -- una
