@@ -2,7 +2,9 @@ package catchup
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -191,7 +193,11 @@ const sweepBatchSize = 100
 func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, uncovered, covered []job, tf domain.Timeframe, workers int) {
 	start := time.Now()
 
-	var wg sync.WaitGroup
+	var (
+		emptyMu sync.Mutex
+		empty   []string
+		wg      sync.WaitGroup
+	)
 	queue := make(chan job, len(uncovered))
 	for _, j := range uncovered {
 		queue <- j
@@ -202,7 +208,11 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 		go func() {
 			defer wg.Done()
 			for j := range queue {
-				backfillWithRetry(ctx, ingest, j)
+				if backfillWithRetry(ctx, ingest, j) {
+					emptyMu.Lock()
+					empty = append(empty, j.symbol)
+					emptyMu.Unlock()
+				}
 			}
 		}()
 	}
@@ -225,13 +235,30 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 		go func() {
 			defer wg.Done()
 			for batch := range batches {
-				backfillBatchWithRetry(ctx, gateway, candles, ingest, batch, tf, duration)
+				if batchEmpty := backfillBatchWithRetry(ctx, gateway, candles, ingest, batch, tf, duration); len(batchEmpty) > 0 {
+					emptyMu.Lock()
+					empty = append(empty, batchEmpty...)
+					emptyMu.Unlock()
+				}
 			}
 		}()
 	}
 	wg.Wait()
 
-	log.Info().Str("timeframe", string(tf)).Int("symbols", len(uncovered)+len(covered)).Dur("elapsed", time.Since(start)).
+	ev := log.Info()
+	if len(empty) > 0 {
+		ev = log.Warn()
+		sort.Strings(empty)
+		sample := empty
+		if len(sample) > 50 {
+			sample = sample[:50]
+		}
+		ev = ev.Strs("emptySample", sample)
+	}
+	ev.Str("timeframe", string(tf)).
+		Int("symbols", len(uncovered)+len(covered)).
+		Int("empty", len(empty)).
+		Dur("elapsed", time.Since(start)).
 		Msg("universe sweep phase finished")
 }
 
@@ -254,7 +281,7 @@ const noWatermarkM1Fallback = 24 * time.Hour
 // y pide el resto en UNA suscripcion con el margen incremental de cada uno.
 // Si el fetch del lote falla, cae al backfill individual con reintentos --
 // peor lento que dejar un lote sin datos.
-func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) {
+func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) []string {
 	symbols := make([]string, 0, len(batch))
 	for _, j := range batch {
 		symbols = append(symbols, j.symbol)
@@ -266,7 +293,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		for _, j := range batch {
 			backfillWithRetry(ctx, ingest, j)
 		}
-		return
+		return nil
 	}
 	froms := make(map[string]time.Time, len(batch))
 	for _, j := range batch {
@@ -283,7 +310,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		}
 	}
 	if len(froms) == 0 {
-		return
+		return nil
 	}
 
 	result, err := gateway.GetCandlesBatch(ctx, tf, froms)
@@ -293,10 +320,18 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		for symbol := range froms {
 			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
 		}
-		return
+		return nil
+	}
+
+	var empty []string
+	for symbol := range froms {
+		if len(result[symbol]) == 0 {
+			empty = append(empty, symbol)
+		}
 	}
 
 	saveBatchSweep(ctx, candles, ingest, result, tf)
+	return empty
 }
 
 // saveBatchSweep junta las velas cerradas de TODOS los simbolos del lote en
@@ -347,18 +382,24 @@ func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in
 // simbolos en el mismo hilo de lectura del WebSocket, donde bloquear ahi
 // afectaria a todos -- cada worker de este pool ya procesa su propia cola:
 // reintentar aca solo demora a ESE worker, no a los demas.
-func backfillWithRetry(ctx context.Context, ingest in.IngestCandlesService, j job) {
+func backfillWithRetry(ctx context.Context, ingest in.IngestCandlesService, j job) bool {
 	var err error
 	for attempt := 1; attempt <= backfillMaxAttempts; attempt++ {
 		if err = ingest.Backfill(ctx, j.symbol, j.tf); err == nil {
-			return
+			return false
 		}
 		if attempt < backfillMaxAttempts {
 			time.Sleep(backfillRetryDelay)
 		}
 	}
+	if errors.Is(err, ingestion.ErrEmptyBackfill) {
+		log.Debug().Str("symbol", j.symbol).Str("timeframe", string(j.tf)).Int("attempts", backfillMaxAttempts).
+			Msg("universe sweep job returned no candles after retries")
+		return true
+	}
 	log.Error().Err(err).Str("symbol", j.symbol).Str("timeframe", string(j.tf)).Int("attempts", backfillMaxAttempts).
 		Msg("universe sweep job failed after retries")
+	return false
 }
 
 // RunSweep reconcilia el universo y despues corre D1 completo (fase 1) y

@@ -2,6 +2,7 @@ package ingestion
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,6 +33,8 @@ func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepos
 	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, snapshotBroadcaster: snapshotBroadcaster, tracker: tracker, recentCache: recentCache, liveSaveBuffer: newLiveSaveBuffer(), retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
 }
 
+var ErrEmptyBackfill = errors.New("backfill returned no candles")
+
 // IncrementalMargin son barras de mas antes del watermark que se vuelven a
 // pedir aposta -- cubre cualquier borde raro (ej. el watermark se capturo a
 // mitad de un guardado). Reducido de 10 a 1 para que ningun re-fetch
@@ -42,9 +45,12 @@ func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepos
 const IncrementalMargin = 1
 
 func (s *ingestCandlesService) Backfill(ctx context.Context, symbol string, timeframe domain.Timeframe) error {
-	candles, err := s.fetchForBackfill(ctx, symbol, timeframe)
+	candles, requested, err := s.fetchForBackfill(ctx, symbol, timeframe)
 	if err != nil {
 		return err
+	}
+	if requested && len(candles) == 0 {
+		return fmt.Errorf("%s %s: %w", symbol, timeframe, ErrEmptyBackfill)
 	}
 	closed, err := closedCandles(candles, timeframe)
 	if err != nil {
@@ -74,31 +80,31 @@ func (s *ingestCandlesService) RecordTodaysClosedCandles(candles []domain.Candle
 // watermark todavia); de ahi en adelante solo pide desde el ultimo dato
 // guardado, no lo repite todo. Este mismo camino es el que usa el catch-up
 // diario, ya no hace falta agregar M1 -> H1/D1 por separado.
-func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, error) {
+func (s *ingestCandlesService) fetchForBackfill(ctx context.Context, symbol string, timeframe domain.Timeframe) ([]domain.Candle, bool, error) {
 	newest, err := s.repo.GetWatermark(ctx, symbol, timeframe)
 	if err != nil {
-		return nil, fmt.Errorf("checking watermark for %s %s: %w", symbol, timeframe, err)
+		return nil, false, fmt.Errorf("checking watermark for %s %s: %w", symbol, timeframe, err)
 	}
 	if newest == nil {
 		candles, err := s.gateway.ProbeMaxDepth(ctx, symbol, timeframe)
 		if err != nil {
-			return nil, fmt.Errorf("probing max depth for %s %s: %w", symbol, timeframe, err)
+			return nil, false, fmt.Errorf("probing max depth for %s %s: %w", symbol, timeframe, err)
 		}
-		return candles, nil
+		return candles, true, nil
 	}
 	duration, err := timeframe.Duration()
 	if err != nil {
-		return nil, fmt.Errorf("getting duration for %s: %w", timeframe, err)
+		return nil, false, fmt.Errorf("getting duration for %s: %w", timeframe, err)
 	}
 	if !HasNewClosedBar(*newest, duration) {
-		return nil, nil
+		return nil, false, nil
 	}
 	from := newest.Add(-IncrementalMargin * duration)
 	candles, err := s.gateway.GetCandles(ctx, symbol, timeframe, from)
 	if err != nil {
-		return nil, fmt.Errorf("fetching incremental candles for %s %s: %w", symbol, timeframe, err)
+		return nil, false, fmt.Errorf("fetching incremental candles for %s %s: %w", symbol, timeframe, err)
 	}
-	return candles, nil
+	return candles, true, nil
 }
 
 // HasNewClosedBar dice si ya cerro al menos un periodo nuevo despues del

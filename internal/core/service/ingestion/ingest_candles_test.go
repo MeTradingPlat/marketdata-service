@@ -19,6 +19,7 @@ func TestBackfill(t *testing.T) {
 		probeErr    error
 		wantSaves   int
 		wantErr     bool
+		wantEmpty   bool
 	}{
 		{
 			name:        "saves candles returned by the gateway",
@@ -28,6 +29,7 @@ func TestBackfill(t *testing.T) {
 		{
 			name:      "no candles from gateway does not call save",
 			wantSaves: 0,
+			wantEmpty: true,
 		},
 		{
 			name:     "gateway error propagates",
@@ -44,13 +46,16 @@ func TestBackfill(t *testing.T) {
 
 			err := svc.Backfill(context.Background(), "AAPL", domain.D1)
 
-			if tt.wantErr {
+			if tt.wantEmpty {
+				if !errors.Is(err, ingestion.ErrEmptyBackfill) {
+					t.Fatalf("expected ErrEmptyBackfill, got %v", err)
+				}
+			} else if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got nil")
 				}
 				return
-			}
-			if err != nil {
+			} else if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if len(repo.saved) != tt.wantSaves {
