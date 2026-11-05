@@ -16,6 +16,10 @@ func TestSend(t *testing.T) {
 	ch := make(chan []byte, 1)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Gateway-Passed") != "true" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		c, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return

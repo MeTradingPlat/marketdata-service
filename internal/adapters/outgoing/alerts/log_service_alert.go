@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"time"
 
@@ -19,7 +20,7 @@ func Send(ctx context.Context, level, message string, metadata map[string]any) e
 		url = "ws://log-service:8084/ws/internal/logs"
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx2, url, nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx2, url, http.Header{"X-Gateway-Passed": []string{"true"}})
 	if err != nil {
 		return err
 	}
