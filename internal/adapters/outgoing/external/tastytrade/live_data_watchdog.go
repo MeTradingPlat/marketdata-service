@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/alerts"
 	"github.com/rs/zerolog/log"
 )
 
@@ -39,12 +40,14 @@ func StartLiveDataWatchdog(ctx context.Context, pool *CandlePool) {
 	ticker := time.NewTicker(liveDataWatchdogInterval)
 	go func() {
 		defer ticker.Stop()
+		var lastSessionsAlertAt time.Time
 		var lastTriggeredAt time.Time
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				checkOpenSessions(&lastSessionsAlertAt)
 				checkLiveData(ctx, pool, &lastTriggeredAt)
 			}
 		}
@@ -68,6 +71,7 @@ func checkLiveData(ctx context.Context, pool *CandlePool, lastTriggeredAt *time.
 
 	log.Error().Dur("silence", age).Int("live_symbols", pool.LiveSubscribedCount()).
 		Msg("live data watchdog: no candles from any symbol in too long, forcing full pool reconnect")
+	alerts.Notify("ERROR", "Sin velas M1 en vivo durante horario de mercado; forzando reconexion", map[string]any{"silencioSeg": int(age.Seconds()), "simbolosVivos": pool.LiveSubscribedCount()})
 	*lastTriggeredAt = time.Now()
 	pool.ForceReconnectAll(ctx)
 }

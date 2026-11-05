@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Regression: cada DxLinkConn del pool llama ResetSessions por su cuenta
@@ -16,7 +17,10 @@ import (
 // creada por el anterior. Confirmado en vivo el 2026-08-28: silencio total
 // de DxLink por horas en pleno mercado abierto, sin recuperarse solo.
 func TestResetSessions_ConcurrentCallsCollapseIntoOne(t *testing.T) {
+	const callers = 30
 	var deletes, refreshes int32
+	var started int32
+	var gate atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodDelete && r.URL.Path == "/sessions":
@@ -24,6 +28,12 @@ func TestResetSessions_ConcurrentCallsCollapseIntoOne(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 		case r.Method == http.MethodPost && r.URL.Path == "/oauth/token":
 			atomic.AddInt32(&refreshes, 1)
+			if gate.Load() {
+				for atomic.LoadInt32(&started) < callers {
+					time.Sleep(time.Millisecond)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"access_token":"fresh-token","refresh_token":"fresh-refresh"}`))
 		default:
@@ -37,14 +47,15 @@ func TestResetSessions_ConcurrentCallsCollapseIntoOne(t *testing.T) {
 		t.Fatalf("setup: unexpected error priming the access token: %v", err)
 	}
 	atomic.StoreInt32(&refreshes, 0)
+	gate.Store(true)
 
-	const callers = 30
 	var wg sync.WaitGroup
 	errs := make([]error, callers)
 	for i := 0; i < callers; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			atomic.AddInt32(&started, 1)
 			errs[i] = oauth.ResetSessions(context.Background())
 		}(i)
 	}

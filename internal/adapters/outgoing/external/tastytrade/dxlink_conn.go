@@ -77,7 +77,9 @@ type DxLinkConn struct {
 	onSessionSaturated     func()
 	waitForSessionCooldown func(ctx context.Context) (func(), error)
 
-	closing atomic.Bool
+	closing   atomic.Bool
+	closeOnce sync.Once
+	closedCh  chan struct{}
 
 	// connDone se cierra en cleanup() -- es la señal de "esta conexion en
 	// particular ya murio" para cualquier goroutine bloqueada esperando algo
@@ -126,7 +128,7 @@ func (c *DxLinkConn) lastMessageAge() time.Duration {
 // de que exista un access token o un dxlink-url real (eso llega despues,
 // via OAuth.RefreshAccessToken + QuoteToken.Refresh).
 func NewDxLinkConn(urlFunc func() string, tokenFunc func() string) *DxLinkConn {
-	return &DxLinkConn{urlFunc: urlFunc, tokenFunc: tokenFunc, nextChannelID: -1}
+	return &DxLinkConn{urlFunc: urlFunc, tokenFunc: tokenFunc, nextChannelID: -1, closedCh: make(chan struct{})}
 }
 
 func (c *DxLinkConn) OnReconnect(fn func(ctx context.Context, c *DxLinkConn)) {
@@ -254,6 +256,9 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 // con cero sesiones abiertas ante TastyTrade.
 func (c *DxLinkConn) Close() {
 	c.closing.Store(true)
+	if c.closedCh != nil {
+		c.closeOnce.Do(func() { close(c.closedCh) })
+	}
 	c.sendCloseFrame()
 	c.cleanup()
 }

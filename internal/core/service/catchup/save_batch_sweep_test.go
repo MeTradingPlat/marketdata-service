@@ -10,14 +10,17 @@ import (
 )
 
 type fakeSweepCandleRepo struct {
-	saveCalls int
-	lastBatch []domain.Candle
-	saveErr   error
+	saveCalls         int
+	lastBatch         []domain.Candle
+	lastWithWatermark bool
+	saveErr           error
+	watermarks        map[string]time.Time
 }
 
 func (f *fakeSweepCandleRepo) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
 	f.saveCalls++
 	f.lastBatch = candles
+	f.lastWithWatermark = withWatermark
 	return f.saveErr
 }
 func (f *fakeSweepCandleRepo) GetCandles(context.Context, string, domain.Timeframe, int, *time.Time) ([]domain.Candle, error) {
@@ -27,7 +30,7 @@ func (f *fakeSweepCandleRepo) GetWatermark(context.Context, string, domain.Timef
 	return nil, nil
 }
 func (f *fakeSweepCandleRepo) GetWatermarksBatch(context.Context, []string, domain.Timeframe) (map[string]time.Time, error) {
-	return nil, nil
+	return f.watermarks, nil
 }
 func (f *fakeSweepCandleRepo) SymbolsWithData(context.Context, domain.Timeframe) (map[string]struct{}, error) {
 	return nil, nil
@@ -84,7 +87,7 @@ func TestSaveBatchSweep_MergesAllSymbolsIntoOneSaveCall(t *testing.T) {
 		"MSFT": {{Symbol: "MSFT", Timeframe: domain.D1, Timestamp: time.Now().Add(-48 * time.Hour), Open: 2, High: 2, Low: 2, Close: 2}},
 	}
 
-	saveBatchSweep(context.Background(), repo, ingest, result, domain.D1)
+	saveBatchSweep(context.Background(), repo, ingest, result, domain.D1, true)
 
 	if repo.saveCalls != 1 {
 		t.Fatalf("Save() called %d times, want exactly 1 for the whole batch", repo.saveCalls)
@@ -101,7 +104,7 @@ func TestSaveBatchSweep_FallsBackPerSymbolOnSaveError(t *testing.T) {
 		"AAPL": {{Symbol: "AAPL", Timeframe: domain.D1, Timestamp: time.Now().Add(-48 * time.Hour), Close: 1}},
 	}
 
-	saveBatchSweep(context.Background(), repo, ingest, result, domain.D1)
+	saveBatchSweep(context.Background(), repo, ingest, result, domain.D1, true)
 
 	if len(ingest.backfillCalls) != 1 || ingest.backfillCalls[0] != "AAPL" {
 		t.Fatalf("expected fallback Backfill(AAPL), got %v", ingest.backfillCalls)
@@ -115,7 +118,7 @@ func TestSaveBatchSweep_M1FeedsSnapshotTracker(t *testing.T) {
 		"AAPL": {{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: time.Now().Add(-2 * time.Minute), Volume: 1234}},
 	}
 
-	saveBatchSweep(context.Background(), repo, ingest, result, domain.M1)
+	saveBatchSweep(context.Background(), repo, ingest, result, domain.M1, true)
 
 	if len(ingest.recordedTodays) != 1 || ingest.recordedTodays[0].Symbol != "AAPL" {
 		t.Fatalf("expected the saved M1 candle to be handed to RecordTodaysClosedCandles, got %+v", ingest.recordedTodays)
@@ -129,7 +132,7 @@ func TestSaveBatchSweep_NoClosedCandlesSkipsSave(t *testing.T) {
 		"AAPL": {{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: time.Now().Add(time.Hour)}},
 	}
 
-	saveBatchSweep(context.Background(), repo, ingest, result, domain.M1)
+	saveBatchSweep(context.Background(), repo, ingest, result, domain.M1, true)
 
 	if repo.saveCalls != 0 {
 		t.Fatalf("Save() called %d times, want 0 when nothing closed", repo.saveCalls)

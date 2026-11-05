@@ -194,9 +194,10 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 	start := time.Now()
 
 	var (
-		emptyMu sync.Mutex
-		empty   []string
-		wg      sync.WaitGroup
+		emptyMu        sync.Mutex
+		empty          []string
+		partialBatches int
+		wg             sync.WaitGroup
 	)
 	queue := make(chan job, len(uncovered))
 	for _, j := range uncovered {
@@ -235,9 +236,15 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 		go func() {
 			defer wg.Done()
 			for batch := range batches {
-				if batchEmpty := backfillBatchWithRetry(ctx, gateway, candles, ingest, batch, tf, duration); len(batchEmpty) > 0 {
+				batchEmpty, partial := backfillBatchWithRetry(ctx, gateway, candles, ingest, batch, tf, duration)
+				if len(batchEmpty) > 0 || partial {
 					emptyMu.Lock()
-					empty = append(empty, batchEmpty...)
+					if len(batchEmpty) > 0 {
+						empty = append(empty, batchEmpty...)
+					}
+					if partial {
+						partialBatches++
+					}
 					emptyMu.Unlock()
 				}
 			}
@@ -258,8 +265,10 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 	ev.Str("timeframe", string(tf)).
 		Int("symbols", len(uncovered)+len(covered)).
 		Int("empty", len(empty)).
+		Int("partialBatches", partialBatches).
 		Dur("elapsed", time.Since(start)).
 		Msg("universe sweep phase finished")
+	reportPhase(tf, len(uncovered)+len(covered), len(empty), partialBatches, time.Since(start))
 }
 
 // noWatermarkM1Fallback: cuanto pedir hacia atras para un simbolo M1 que
@@ -281,7 +290,7 @@ const noWatermarkM1Fallback = 24 * time.Hour
 // y pide el resto en UNA suscripcion con el margen incremental de cada uno.
 // Si el fetch del lote falla, cae al backfill individual con reintentos --
 // peor lento que dejar un lote sin datos.
-func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) []string {
+func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) ([]string, bool) {
 	symbols := make([]string, 0, len(batch))
 	for _, j := range batch {
 		symbols = append(symbols, j.symbol)
@@ -293,7 +302,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		for _, j := range batch {
 			backfillWithRetry(ctx, ingest, j)
 		}
-		return nil
+		return nil, false
 	}
 	froms := make(map[string]time.Time, len(batch))
 	for _, j := range batch {
@@ -310,7 +319,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		}
 	}
 	if len(froms) == 0 {
-		return nil
+		return nil, false
 	}
 
 	result, err := gateway.GetCandlesBatch(ctx, tf, froms)
@@ -325,14 +334,14 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 				}
 			}
 			saveBatchSweep(ctx, candles, ingest, result, tf, false)
-			return empty
+			return empty, true
 		}
 		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(froms)).
 			Msg("universe sweep batch fetch failed, falling back to per-symbol backfill")
 		for symbol := range froms {
 			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
 		}
-		return nil
+		return nil, false
 	}
 
 	var empty []string
@@ -343,7 +352,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 	}
 
 	saveBatchSweep(ctx, candles, ingest, result, tf, true)
-	return empty
+	return empty, false
 }
 
 // saveBatchSweep junta las velas cerradas de TODOS los simbolos del lote en
@@ -353,11 +362,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 // (ver candle_repository.go), asi que mezclar simbolos en el mismo llamado
 // es gratis. Si el guardado combinado falla, se cae al backfill individual
 // por simbolo (mismo camino de siempre) en vez de perder el lote entero.
-func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in.IngestCandlesService, result map[string][]domain.Candle, tf domain.Timeframe, withWatermark ...bool) {
-	wm := true
-	if len(withWatermark) > 0 {
-		wm = withWatermark[0]
-	}
+func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in.IngestCandlesService, result map[string][]domain.Candle, tf domain.Timeframe, withWatermark bool) {
 	merged := make([]domain.Candle, 0, len(result))
 	bySymbol := make(map[string]struct{}, len(result))
 	for symbol, candlesFetched := range result {
@@ -371,7 +376,7 @@ func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in
 	if len(merged) == 0 {
 		return
 	}
-	if err := candles.Save(ctx, merged, wm); err != nil {
+	if err := candles.Save(ctx, merged, withWatermark); err != nil {
 		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(bySymbol)).
 			Msg("universe sweep batch save failed, falling back to per-symbol backfill")
 		for symbol := range bySymbol {

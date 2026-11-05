@@ -126,6 +126,8 @@ func (c *DxLinkConn) reconnectLoop(ctx context.Context) {
 		}
 		select {
 		case <-time.After(delay):
+		case <-c.closedCh:
+			return
 		case <-ctx.Done():
 			return
 		}

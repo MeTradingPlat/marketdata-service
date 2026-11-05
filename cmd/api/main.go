@@ -11,10 +11,12 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/alerts"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/catchup"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
@@ -33,6 +35,7 @@ const shutdownTimeout = 10 * time.Second
 
 func main() {
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	catchup.Alert = alerts.Notify
 	container := injector.BuildContainer()
 
 	err := container.Invoke(func(

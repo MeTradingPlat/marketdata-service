@@ -351,6 +351,11 @@ jobs:
           docker ps --filter "name=marketdata-service"
           docker ps --filter "name=postgres-marketdata"
 
+      - name: Notify deploy failure
+        if: failure()
+        run: |
+          docker run --rm --network metradingplat-network --entrypoint ./notify virtud142/metradingplat_marketdata_service:latest ERROR "Deploy de marketdata-service fallo: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || echo "::warning::could not notify deploy failure"
+
       - name: Release exclusive deploy lock
         if: always()
         run: |

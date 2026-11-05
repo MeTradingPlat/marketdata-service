@@ -6,6 +6,7 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 go build -o /app/marketdata-service ./cmd/api
+RUN CGO_ENABLED=0 go build -o /app/notify ./cmd/notify
 
 # Stage 2: Production
 FROM alpine:3.20
@@ -15,5 +16,6 @@ RUN apk add --no-cache ca-certificates && addgroup -S app && adduser -S app -G a
 WORKDIR /app
 USER app
 COPY --from=build /app/marketdata-service .
+COPY --from=build /app/notify .
 EXPOSE 8082
 ENTRYPOINT ["./marketdata-service"]
