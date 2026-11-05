@@ -146,7 +146,7 @@ func (r *FundamentalsRepository) UpsertDividends(ctx context.Context, fundamenta
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for _, f := range fundamentals {
+	for _, f := range bySymbol(fundamentals) {
 		batch.Queue(upsertDividendSQL, f.Symbol, f.DividendAmount, f.DividendFrequency, f.TradingStatus, f.HaltStartTime, f.HaltEndTime)
 	}
 	results := r.pool.SendBatch(ctx, batch)
@@ -186,7 +186,7 @@ func (r *FundamentalsRepository) UpsertMarketMetrics(ctx context.Context, fundam
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for _, f := range fundamentals {
+	for _, f := range bySymbol(fundamentals) {
 		batch.Queue(upsertMarketMetricsSQL, f.Symbol, f.MarketCap, f.Eps, f.Beta, f.Lendability, f.BorrowRate,
 			f.Liquidity, f.LiquidityRating, f.ImpliedVolatilityIndex, f.ImpliedVolatilityRank,
 			f.ImpliedVolatilityPercentile, f.NextEarningsDate)
@@ -231,7 +231,7 @@ func (r *FundamentalsRepository) UpsertExternalFundamentals(ctx context.Context,
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for _, f := range fundamentals {
+	for _, f := range bySymbol(fundamentals) {
 		batch.Queue(upsertExternalFundamentalsSQL, f.Symbol, f.SharesOutstanding, f.FloatShares, f.ShortInterest, f.ShortRatio,
 			f.ShortInterestShares, f.ShortInterestSettlement, f.InsiderShares, f.InsiderCiks, f.FloatUpdatedAt)
 	}
@@ -264,7 +264,7 @@ func (r *FundamentalsRepository) UpsertEarningsHistory(ctx context.Context, fund
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for _, f := range fundamentals {
+	for _, f := range bySymbol(fundamentals) {
 		batch.Queue(upsertEarningsHistorySQL, f.Symbol, f.OccurredDate, f.NextEarningsDate)
 	}
 	results := r.pool.SendBatch(ctx, batch)
@@ -331,7 +331,7 @@ func (r *FundamentalsRepository) UpsertBeta(ctx context.Context, fundamentals []
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for _, f := range fundamentals {
+	for _, f := range bySymbol(fundamentals) {
 		batch.Queue(upsertBetaSQL, f.Symbol, f.Beta)
 	}
 	results := r.pool.SendBatch(ctx, batch)
@@ -475,20 +475,21 @@ const markPrevCloseAttemptedSQL = `
 // 2026-09-04: contribuyo a saturar Postgres en la apertura de mercado
 // junto con el resto de consultas per-simbolo de ese incidente).
 func (r *FundamentalsRepository) UpsertPrevCloseBatch(ctx context.Context, closes map[string]float64, attemptedOnly []string) error {
-	total := len(closes) + len(attemptedOnly)
-	if total == 0 {
+	order := lockOrder(closes, attemptedOnly)
+	if len(order) == 0 {
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for symbol, close := range closes {
-		batch.Queue(upsertPrevCloseSQL, symbol, close)
-	}
-	for _, symbol := range attemptedOnly {
-		batch.Queue(markPrevCloseAttemptedSQL, symbol)
+	for _, symbol := range order {
+		if close, ok := closes[symbol]; ok {
+			batch.Queue(upsertPrevCloseSQL, symbol, close)
+		} else {
+			batch.Queue(markPrevCloseAttemptedSQL, symbol)
+		}
 	}
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()
-	for i := 0; i < total; i++ {
+	for range order {
 		if _, err := results.Exec(); err != nil {
 			return fmt.Errorf("upserting prev close batch: %w", err)
 		}
@@ -538,20 +539,21 @@ const markPrevPostMarketVolumeAttemptedSQL = `
 // marcan como intentados sin dato, ver domain.Fundamentals.
 // PrevPostMarketVolume.
 func (r *FundamentalsRepository) UpsertPrevPostMarketVolumeBatch(ctx context.Context, volumes map[string]int64, attemptedOnly []string) error {
-	total := len(volumes) + len(attemptedOnly)
-	if total == 0 {
+	order := lockOrder(volumes, attemptedOnly)
+	if len(order) == 0 {
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for symbol, volume := range volumes {
-		batch.Queue(upsertPrevPostMarketVolumeSQL, symbol, volume)
-	}
-	for _, symbol := range attemptedOnly {
-		batch.Queue(markPrevPostMarketVolumeAttemptedSQL, symbol)
+	for _, symbol := range order {
+		if volume, ok := volumes[symbol]; ok {
+			batch.Queue(upsertPrevPostMarketVolumeSQL, symbol, volume)
+		} else {
+			batch.Queue(markPrevPostMarketVolumeAttemptedSQL, symbol)
+		}
 	}
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()
-	for i := 0; i < total; i++ {
+	for range order {
 		if _, err := results.Exec(); err != nil {
 			return fmt.Errorf("upserting prev post market volume batch: %w", err)
 		}
@@ -604,20 +606,21 @@ const markOpenInterestAttemptedSQL = `
 // simbolos que tuvieron opciones y estampa open_interest_updated_at para los
 // que se marcaron como intentados sin opciones.
 func (r *FundamentalsRepository) UpsertOpenInterestBatch(ctx context.Context, openInterests map[string]float64, attemptedOnly []string) error {
-	total := len(openInterests) + len(attemptedOnly)
-	if total == 0 {
+	order := lockOrder(openInterests, attemptedOnly)
+	if len(order) == 0 {
 		return nil
 	}
 	batch := &pgx.Batch{}
-	for symbol, oi := range openInterests {
-		batch.Queue(upsertOpenInterestSQL, symbol, oi)
-	}
-	for _, symbol := range attemptedOnly {
-		batch.Queue(markOpenInterestAttemptedSQL, symbol)
+	for _, symbol := range order {
+		if oi, ok := openInterests[symbol]; ok {
+			batch.Queue(upsertOpenInterestSQL, symbol, oi)
+		} else {
+			batch.Queue(markOpenInterestAttemptedSQL, symbol)
+		}
 	}
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()
-	for i := 0; i < total; i++ {
+	for range order {
 		if _, err := results.Exec(); err != nil {
 			return fmt.Errorf("upserting open interest batch: %w", err)
 		}
