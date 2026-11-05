@@ -19,8 +19,9 @@ import (
 const liveRolloutWorkers = 20
 
 const (
-	refreshMaxAttempts = 3
-	refreshRetryDelay  = 3 * time.Minute
+	refreshMaxAttempts      = 3
+	refreshRetryDelay       = 3 * time.Minute
+	liveRolloutSessionGrace = 60 * time.Second
 )
 
 // refreshWithRetry reintenta un refresh idempotente del barrido nocturno --
@@ -211,6 +212,12 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// Sembrar el SnapshotTracker con UNA sola consulta de lote justo
 	// despues del sweep M1 y antes de abrir las suscripciones en vivo.
 	seedSnapshotTracker(ctx, candles, tracker, activeTracked)
+
+	select {
+	case <-time.After(liveRolloutSessionGrace):
+	case <-ctx.Done():
+		return
+	}
 
 	startLiveUniverse(ctx, ingest, activeTracked)
 	// A partir de aca un simbolo que siga sin IsAttempted no esta "esperando

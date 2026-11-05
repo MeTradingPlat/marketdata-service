@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	openSessionsAlertThreshold = 30
+	openSessionsAlertThreshold = 15
 	openSessionsAlertCooldown  = 15 * time.Minute
 )
 

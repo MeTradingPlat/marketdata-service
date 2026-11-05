@@ -2,7 +2,7 @@ package tastytrade
 
 import "sync"
 
-const maxChannelsPerConnection = 8
+const maxChannelsPerConnection = 12
 
 type pooledConnection struct {
 	conn *DxLinkConn
