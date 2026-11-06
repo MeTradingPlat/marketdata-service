@@ -100,6 +100,31 @@ func TestChannelAllocator_EnforcesConnectionCeiling(t *testing.T) {
 	}
 }
 
+func TestChannelAllocator_OpensSecondConnectionWhenConfiguredChannelLimitReached(t *testing.T) {
+	wsURL := startFakeDxLinkServer(t)
+	factory, calls := newTestConnFactory(t, wsURL)
+	a := newChannelAllocator(factory, nil, nil, 40)
+	a.maxChannelsPerConn = 2
+
+	for i := 0; i < 3; i++ {
+		ch, err := a.allocate(context.Background())
+		if err != nil {
+			t.Fatalf("allocate channel %d: %v", i, err)
+		}
+		for j := 0; j < channelCapacity; j++ {
+			ch.occupy(candleKey(fmt.Sprintf("SYM%d-%d", i, j), domain.M1))
+		}
+		if i == 1 {
+			if got := atomic.LoadInt32(calls); got != 1 {
+				t.Fatalf("expected 2 channels on a single connection, got %d connections opened", got)
+			}
+		}
+	}
+	if got := atomic.LoadInt32(calls); got != 2 {
+		t.Fatalf("expected a 2nd connection for the 3rd channel, got %d connections opened", got)
+	}
+}
+
 func TestChannelAllocator_DrainAllResetsPool(t *testing.T) {
 	wsURL := startFakeDxLinkServer(t)
 	factory, calls := newTestConnFactory(t, wsURL)

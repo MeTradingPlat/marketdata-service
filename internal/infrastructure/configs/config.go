@@ -17,6 +17,7 @@ type Config struct {
 	TastyTradeRefreshToken      string
 	DxlinkURLOverride           string
 	MaxCandlePoolConnections    int
+	MaxChannelsPerConn          int
 	SweepWorkers                int
 	SessionResetHour            int
 	SessionResetMinute          int
@@ -51,6 +52,13 @@ func envIntOr(key string, fallback int) int {
 	return fallback
 }
 
+func positiveOr(n, fallback int) int {
+	if n < 1 {
+		return fallback
+	}
+	return n
+}
+
 func Load() *Config {
 	return &Config{
 		ServerPort:             envOr("SERVER_PORT", "8082"),
@@ -63,6 +71,7 @@ func Load() *Config {
 		DxlinkURLOverride:      os.Getenv("DXLINK_URL"),
 
 		MaxCandlePoolConnections: envIntOr("MAX_CANDLE_POOL_CONNECTIONS", 40),
+		MaxChannelsPerConn:       positiveOr(envIntOr("DXLINK_MAX_CHANNELS_PER_CONN", 8), 8),
 		SweepWorkers:             envIntOr("SWEEP_WORKERS", 25),
 		// Reset diario de sesiones de TastyTrade a las 00:05 UTC (mercado US ya
 		// cerrado desde las 00:00 UTC) -- ver StartSessionResetLoop.

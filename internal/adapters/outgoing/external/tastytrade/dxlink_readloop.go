@@ -3,6 +3,7 @@ package tastytrade
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -34,12 +35,25 @@ func (c *DxLinkConn) readLoop(ctx context.Context) {
 		_ = conn.SetReadDeadline(time.Now().Add(idleReadTimeout))
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			logReadError(ctx, err)
 			c.notifyHandshakeFailure(err)
 			c.handleDisconnect(ctx)
 			return
 		}
 		c.handleMessage(ctx, msg)
 	}
+}
+
+func logReadError(ctx context.Context, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+	var ce *websocket.CloseError
+	if errors.As(err, &ce) {
+		log.Warn().Int("close_code", ce.Code).Str("close_text", ce.Text).Msg("dxlink read error")
+		return
+	}
+	log.Warn().Str("error", err.Error()).Msg("dxlink read error")
 }
 
 func (c *DxLinkConn) notifyHandshakeFailure(err error) {

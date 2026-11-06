@@ -28,6 +28,8 @@ type channelAllocator struct {
 	onReconnect    func(ctx context.Context, pc *pooledConnection)
 	maxConnections int
 
+	maxChannelsPerConn int
+
 	mu          sync.Mutex // solo contabilidad -- nunca sostenido durante I/O de red
 	connections []*pooledConnection
 
@@ -138,7 +140,7 @@ func (a *channelAllocator) connectionWithRoomForChannel() *pooledConnection {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, pc := range a.connections {
-		if pc.hasRoomForNewChannel() {
+		if pc.hasRoomForNewChannel(a.maxChannelsPerConn) {
 			return pc
 		}
 	}

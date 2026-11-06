@@ -40,13 +40,16 @@ func (p *pooledConnection) channelWithRoom() *pooledChannel {
 	return nil
 }
 
-func (p *pooledConnection) hasRoomForNewChannel() bool {
+func (p *pooledConnection) hasRoomForNewChannel(maxChannels int) bool {
+	if maxChannels <= 0 {
+		maxChannels = maxChannelsPerConnection
+	}
 	if !p.conn.Connected() {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.channels) < maxChannelsPerConnection
+	return len(p.channels) < maxChannels
 }
 
 func (p *pooledConnection) addChannel(ch *pooledChannel) {

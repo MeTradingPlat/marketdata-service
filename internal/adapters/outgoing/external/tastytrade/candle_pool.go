@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 )
 
@@ -90,6 +92,13 @@ type CandlePool struct {
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
+	return NewCandlePoolWithChannels(connFactory, maxConnections, maxChannelsPerConnection)
+}
+
+func NewCandlePoolWithChannels(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections, maxChannelsPerConn int) *CandlePool {
+	if maxChannelsPerConn <= 0 {
+		maxChannelsPerConn = maxChannelsPerConnection
+	}
 	p := &CandlePool{
 		dispatch:   make(map[string]dispatchEntry),
 		liveSubs:   make(map[string]func(domain.Candle)),
@@ -99,6 +108,8 @@ func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), m
 		liveDayVolume: make(map[string]liveDayVolumeEntry),
 	}
 	p.allocator = newChannelAllocator(connFactory, p.wireChannel, p.handleConnectionReconnect, maxConnections)
+	p.allocator.maxChannelsPerConn = maxChannelsPerConn
+	log.Info().Int("max_connections", p.allocator.maxConnections).Int("max_channels_per_conn", maxChannelsPerConn).Msg("candle pool limits")
 	return p
 }
 
