@@ -8,7 +8,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const insiderZipURLTemplate = "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/%dq%d_form345.zip"
+var insiderZipURLTemplates = []string{
+	"https://www.sec.gov/files/datastandardsinnovation/data/insider-transactions-data-sets/%dq%d_form345.zip",
+	"https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/%dq%d_form345.zip",
+}
 
 // insiderLookbackQuarters: un insider que no opero en el trimestre mas
 // reciente simplemente no aparece en ese ZIP -- su tenencia real sigue

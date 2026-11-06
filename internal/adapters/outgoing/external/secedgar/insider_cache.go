@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type yearQuarter struct {
@@ -27,16 +29,11 @@ func (c *InsiderOwnershipClient) ensureCachedZips(ctx context.Context, lookbackQ
 			continue
 		}
 
-		url := fmt.Sprintf(insiderZipURLTemplate, q.year, q.quarter)
-		dlCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		err := downloadToFile(dlCtx, url, target)
-		cancel()
-		if err == nil {
-			zipFiles = append(zipFiles, target)
+		if err := downloadInsiderQuarter(ctx, insiderZipURLTemplates, q.year, q.quarter, target); err != nil {
+			log.Warn().Err(err).Int("year", q.year).Int("quarter", q.quarter).Msg("insider zip unavailable")
+			continue
 		}
-		// Un trimestre que todavia no se publico (tipicamente el mas
-		// reciente) simplemente se omite -- no es un error, los demas
-		// trimestres ya cubren el lookback.
+		zipFiles = append(zipFiles, target)
 	}
 	if len(zipFiles) == 0 {
 		return nil, fmt.Errorf("no insider ownership zip available for the last %d quarters", lookbackQuarters)
