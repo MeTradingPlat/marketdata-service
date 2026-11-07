@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -22,7 +23,7 @@ import (
 type frameEntity struct {
 	CIK        int64  `json:"cik"`
 	EntityName string `json:"entityName"`
-	Val        int64  `json:"val"`
+	Val        float64 `json:"val"`
 	End        string `json:"end"`
 }
 
@@ -70,7 +71,7 @@ func matchFrameEntities(entities []frameEntity, cikToSymbols map[string][]string
 		}
 		resolvedCiks[cik] = true
 		for _, symbol := range cikToSymbols[cik] {
-			shares[symbol] = pt.Val
+			shares[symbol] = int64(math.Round(pt.Val))
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package secedgar
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -50,7 +51,7 @@ func TestMatchFrameEntities(t *testing.T) {
 		belowMinCIK = 1111111111
 		staleCIK    = 2222222222
 		validCIK    = 3333333333
-		validShares = int64(34_000_000)
+		validShares = 34_000_000
 	)
 
 	recent := time.Now().AddDate(0, -1, 0).Format("2006-01-02")
@@ -90,5 +91,42 @@ func TestMatchFrameEntities(t *testing.T) {
 	}
 	if resolvedCiks["1111111111"] || resolvedCiks["2222222222"] {
 		t.Error("discarded entities must not be marked resolved")
+	}
+}
+
+func TestMatchFrameEntitiesDecimalRounding(t *testing.T) {
+	const (
+		intCIK     = 1111111111
+		decimalCIK = 2222222222
+	)
+
+	recent := time.Now().AddDate(0, -1, 0).Format("2006-01-02")
+	rawJSON := `{"data":[` +
+		`{"cik":1111111111,"entityName":"Int Corp","val":10000000,"end":"` + recent + `"},` +
+		`{"cik":2222222222,"entityName":"Decimal Corp","val":51580911.816,"end":"` + recent + `"}` +
+		`]}`
+
+	var resp framesResponse
+	if err := json.Unmarshal([]byte(rawJSON), &resp); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	cikToSymbols := map[string][]string{
+		"1111111111": {"INT"},
+		"2222222222": {"DEC"},
+	}
+	resolvedCiks := map[string]bool{}
+	shares := map[string]int64{}
+
+	matchFrameEntities(resp.Data, cikToSymbols, resolvedCiks, shares)
+
+	if got := shares["INT"]; got != 10000000 {
+		t.Errorf("INT = %d, want %d", got, 10000000)
+	}
+	if got := shares["DEC"]; got != 51580912 {
+		t.Errorf("DEC = %d, want %d", got, 51580912)
+	}
+	if !resolvedCiks["1111111111"] || !resolvedCiks["2222222222"] {
+		t.Error("both entities should be marked resolved")
 	}
 }
