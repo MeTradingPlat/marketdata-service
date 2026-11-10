@@ -69,6 +69,8 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 	// siempre. Ver el comentario de connDone en dxlink_conn.go.
 	case <-c.client.Done():
 		return fmt.Errorf("dxlink connection closed while opening channel %d", c.id)
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("opening dxlink channel %d timed out", c.id)
 	case <-ctx.Done():
 		return ctx.Err()
 	}

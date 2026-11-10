@@ -26,7 +26,8 @@ const closeFrameTimeout = time.Second
 const tcpKeepAlivePeriod = 15 * time.Second
 
 var dxLinkDialer = websocket.Dialer{
-	NetDialContext: (&net.Dialer{KeepAlive: tcpKeepAlivePeriod}).DialContext,
+	HandshakeTimeout: 30 * time.Second,
+	NetDialContext:   (&net.Dialer{KeepAlive: tcpKeepAlivePeriod}).DialContext,
 }
 
 type DxLinkConn struct {
@@ -36,6 +37,7 @@ type DxLinkConn struct {
 	writeMu sync.Mutex
 
 	mu            sync.RWMutex
+	ctx           context.Context
 	conn          *websocket.Conn
 	authenticated bool
 	channels      map[int]*dxLinkChannel
@@ -207,6 +209,10 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 
 	handshakeDone := make(chan error, 1)
 	c.mu.Lock()
+	if c.ctx == nil || c.ctx.Err() != nil {
+		c.ctx = ctx
+	}
+	runCtx := c.ctx
 	c.conn = conn
 	c.setAuthenticated(false)
 	c.handshakeDone = handshakeDone
@@ -215,7 +221,7 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 	c.mu.Unlock()
 	c.touchLastMessage()
 
-	go c.readLoop(ctx)
+	go c.readLoop(runCtx)
 
 	if err := c.send(setupMessage{
 		Type: "SETUP", Channel: 0, Version: "0.1-go/1.0.0",
@@ -241,8 +247,8 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	go c.keepaliveLoop(ctx)
-	go c.healthCheckLoop(ctx)
+	go c.keepaliveLoop(runCtx)
+	go c.healthCheckLoop(runCtx)
 	c.reconnectMu.Lock()
 	c.reconnectAttempts = 0
 	c.reconnectMu.Unlock()
@@ -301,6 +307,7 @@ const dxLinkWarnMessageBytes = 55000
 func (c *DxLinkConn) send(v interface{}) error {
 	c.mu.RLock()
 	conn := c.conn
+	ctx := c.ctx
 	c.mu.RUnlock()
 	if conn == nil {
 		return fmt.Errorf("dxlink connection not open")
@@ -313,8 +320,18 @@ func (c *DxLinkConn) send(v interface{}) error {
 		logOutgoingMessageSize(v, len(body))
 	}
 	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return conn.WriteMessage(websocket.TextMessage, body)
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	err = conn.WriteMessage(websocket.TextMessage, body)
+	c.writeMu.Unlock()
+	if err != nil {
+		c.cleanup()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		c.scheduleReconnect(ctx)
+		return err
+	}
+	return nil
 }
 
 func logOutgoingMessageSize(v interface{}, bytes int) {

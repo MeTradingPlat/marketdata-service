@@ -2,11 +2,14 @@ package tastytrade
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
+
+var reconnectStepTimeout = 3 * time.Minute
 
 const (
 	initialReconnectDelay = 5 * time.Second
@@ -156,11 +159,56 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) error {
 		}
 	}
 	c.cleanup()
-	if err := c.Connect(ctx); err != nil {
-		return err
+
+	c.mu.Lock()
+	if c.ctx == nil || c.ctx.Err() != nil {
+		c.ctx = ctx
 	}
+	c.mu.Unlock()
+
+	connCtx, connCancel := context.WithTimeout(ctx, reconnectStepTimeout)
+	defer connCancel()
+
+	connDone := make(chan error, 1)
+	go func() {
+		connDone <- c.Connect(connCtx)
+	}()
+
+	select {
+	case err := <-connDone:
+		if err != nil {
+			c.cleanup()
+			return err
+		}
+	case <-connCtx.Done():
+		c.cleanup()
+		return fmt.Errorf("dxlink connect step timed out: %w", connCtx.Err())
+	}
+
 	if c.onReconnect != nil {
-		c.onReconnect(ctx, c)
+		reconCtx, reconCancel := context.WithTimeout(ctx, reconnectStepTimeout)
+		defer reconCancel()
+
+		reconDone := make(chan struct{})
+		go func() {
+			c.onReconnect(reconCtx, c)
+			close(reconDone)
+		}()
+
+		select {
+		case <-reconDone:
+			if err := reconCtx.Err(); err != nil {
+				c.cleanup()
+				return fmt.Errorf("dxlink onReconnect timed out: %w", err)
+			}
+			if !c.Connected() {
+				c.cleanup()
+				return fmt.Errorf("dxlink disconnected during onReconnect")
+			}
+		case <-reconCtx.Done():
+			c.cleanup()
+			return fmt.Errorf("dxlink onReconnect timed out: %w", reconCtx.Err())
+		}
 	}
 	return nil
 }
@@ -175,6 +223,7 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) error {
 func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 	ticker := time.NewTicker(healthCheckInterval)
 	defer ticker.Stop()
+	var disconnectedSince time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -191,9 +240,15 @@ func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 				return
 			}
 			if !c.Connected() {
+				if disconnectedSince.IsZero() {
+					disconnectedSince = time.Now()
+				} else if d := time.Since(disconnectedSince); d > 5*time.Minute {
+					log.Warn().Dur("duration", d).Msg("dxlink disconnected for more than 5m while reconnecting")
+				}
 				c.scheduleReconnect(ctx)
 				continue
 			}
+			disconnectedSince = time.Time{}
 			if age := c.lastMessageAge(); age > staleConnectionThreshold {
 				log.Warn().Dur("silence", age).Msg("dxlink connection silent too long, forcing close to trigger reconnect")
 				c.cleanup()

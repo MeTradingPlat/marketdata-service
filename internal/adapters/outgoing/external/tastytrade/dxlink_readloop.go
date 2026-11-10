@@ -37,6 +37,7 @@ func (c *DxLinkConn) readLoop(ctx context.Context) {
 		if err != nil {
 			logReadError(ctx, err)
 			c.notifyHandshakeFailure(err)
+			c.cleanup()
 			c.handleDisconnect(ctx)
 			return
 		}
@@ -57,27 +58,17 @@ func logReadError(ctx context.Context, err error) {
 }
 
 func (c *DxLinkConn) notifyHandshakeFailure(err error) {
-	// Un cierre NORMAL (1000, tipicamente con texto "Bye") antes de terminar
-	// el handshake es atipico: un servidor sano no cierra asi una conexion
-	// recien abierta que todavia esta autenticando. En la practica es la
-	// forma en que TastyTrade rechaza un intento cuando el limite de
-	// sesiones ya esta saturado -- no llega como ERROR de protocolo (ver el
-	// caso "sessions" en handleError) porque nunca se completa el AUTH.
-	// Confirmado en vivo el 2026-08-30/31: el barrido pedia conexiones
-	// nuevas para el backfill y cada una se cerraba asi durante el storm.
-	if ce, ok := err.(*websocket.CloseError); ok && ce.Code == websocket.CloseNormalClosure {
-		// Visibilidad, no logica nueva -- confirmar con datos reales (no una
-		// sola observacion) si vale la pena cancelar dials en vuelo cuando
-		// el breaker se activa, antes de tocar codigo historicamente fragil
-		// (ver docs/dxlink-session-incidents.md).
-		log.Warn().Int64("openSessions", openDxLinkSessions.Load()).Msg("dxlink session saturation detected during handshake (new connection rejected)")
-		c.markSessionSaturated()
-	}
-
 	c.mu.Lock()
 	done := c.handshakeDone
 	c.handshakeDone = nil
 	c.mu.Unlock()
+
+	var ce *websocket.CloseError
+	if errors.As(err, &ce) && ce.Code == websocket.CloseNormalClosure && done != nil {
+		log.Warn().Int64("openSessions", openDxLinkSessions.Load()).Msg("dxlink session saturation detected during handshake (new connection rejected)")
+		c.markSessionSaturated()
+	}
+
 	if done != nil {
 		done <- fmt.Errorf("dxlink connection closed during handshake: %w", err)
 	}
