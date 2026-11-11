@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -147,4 +148,67 @@ func TestDxLinkConn_PerformReconnect_BlocksTimeout(t *testing.T) {
 			t.Fatal("expected Connected() to be false")
 		}
 	})
+}
+
+func TestDxLinkChannel_Open_TimesOutWhenServerNeverAnswers(t *testing.T) {
+	origTimeout := channelOpenTimeout
+	channelOpenTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { channelOpenTimeout = origTimeout })
+
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var env struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(msg, &env); err != nil {
+				continue
+			}
+			switch env.Type {
+			case "SETUP":
+				_ = conn.WriteJSON(map[string]any{"type": "SETUP", "channel": 0})
+			case "AUTH":
+				_ = conn.WriteJSON(map[string]any{"type": "AUTH_STATE", "channel": 0, "state": "AUTHORIZED"})
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	c := newConnectedDxLinkConn(t, wsURL)
+
+	ch := newDxLinkChannel(1, c)
+	c.mu.Lock()
+	c.channels[1] = ch
+	c.mu.Unlock()
+
+	start := time.Now()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ch.open(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected open() to return a timeout error, got nil")
+		}
+		if !strings.Contains(err.Error(), "timed out") {
+			t.Fatalf("expected timeout error containing 'timed out', got: %v", err)
+		}
+		if time.Since(start) > 2*time.Second {
+			t.Fatalf("open() hung (%v), expected timeout near 50ms", time.Since(start))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("open() hung and did not return within 2s")
+	}
 }

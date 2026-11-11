@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/rs/zerolog/log"
 )
+
+var channelOpenTimeout = 45 * time.Second
 
 // eventFlags al final (indice 9, ver candle_event.go): pedido nuevo,
 // defensivo -- dxFeed documenta Candle como IndexedEvent con esta propiedad
@@ -53,6 +56,7 @@ func newDxLinkChannel(id int, client *DxLinkConn) *dxLinkChannel {
 }
 
 func (c *dxLinkChannel) open(ctx context.Context) error {
+	start := time.Now()
 	if err := c.client.send(channelRequestMessage{
 		Type: "CHANNEL_REQUEST", Channel: c.id, Service: "FEED", Parameters: map[string]string{"contract": "AUTO"},
 	}); err != nil {
@@ -60,6 +64,9 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 	}
 	select {
 	case <-c.ready:
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			log.Warn().Int("channel", c.id).Dur("elapsed", elapsed).Msg("opening dxlink channel slow")
+		}
 		return nil
 	// client.Done() cubre el caso donde el socket muere (zombie, sessions
 	// exceeded, INVALID_MESSAGE) despues de mandar el CHANNEL_REQUEST pero
@@ -69,8 +76,9 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 	// siempre. Ver el comentario de connDone en dxlink_conn.go.
 	case <-c.client.Done():
 		return fmt.Errorf("dxlink connection closed while opening channel %d", c.id)
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("opening dxlink channel %d timed out", c.id)
+	case <-time.After(channelOpenTimeout):
+		elapsed := time.Since(start)
+		return fmt.Errorf("opening dxlink channel %d timed out after %s", c.id, elapsed)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
