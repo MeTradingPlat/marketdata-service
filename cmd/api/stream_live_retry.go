@@ -34,4 +34,5 @@ func startLiveWithRetry(ctx context.Context, ingest in.IngestCandlesService, sym
 	}
 	log.Error().Err(err).Str("symbol", symbol).Int("attempts", streamLiveMaxAttempts).
 		Msg("giving up on live candle stream after all retries failed")
+	recordGiveUp(symbol)
 }
