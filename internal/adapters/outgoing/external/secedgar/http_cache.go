@@ -47,7 +47,11 @@ func downloadToFile(ctx context.Context, url, target string) error {
 		return fmt.Errorf("writing %s: %w", url, err)
 	}
 	f.Close()
-	return os.Rename(tmp, target)
+	if err := os.Rename(tmp, target); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("renaming temp file for %s: %w", url, err)
+	}
+	return nil
 }
 
 // fetchBody es para los JSON/XML chicos pedidos por-simbolo (submissions.json,

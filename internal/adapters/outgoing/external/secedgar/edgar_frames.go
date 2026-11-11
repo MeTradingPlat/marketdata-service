@@ -21,10 +21,10 @@ import (
 // primer tag que lo resuelve gana).
 
 type frameEntity struct {
-	CIK        int64  `json:"cik"`
-	EntityName string `json:"entityName"`
+	CIK        int64   `json:"cik"`
+	EntityName string  `json:"entityName"`
 	Val        float64 `json:"val"`
-	End        string `json:"end"`
+	End        string  `json:"end"`
 }
 
 type framesResponse struct {

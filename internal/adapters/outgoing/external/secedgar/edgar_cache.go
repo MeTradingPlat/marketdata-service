@@ -6,7 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
+
+const companyFactsDownloadTimeout = 40 * time.Minute
+
+var downloadCompanyFacts = downloadToFile
 
 func (c *EdgarClient) ensureCachedZip(ctx context.Context) (string, error) {
 	if err := os.MkdirAll(c.cacheDir, 0o755); err != nil {
@@ -17,9 +23,13 @@ func (c *EdgarClient) ensureCachedZip(ctx context.Context) (string, error) {
 		return target, nil
 	}
 
-	dlCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	dlCtx, cancel := context.WithTimeout(ctx, companyFactsDownloadTimeout)
 	defer cancel()
-	if err := downloadToFile(dlCtx, bulkFactsURL, target); err != nil {
+	if err := downloadCompanyFacts(dlCtx, bulkFactsURL, target); err != nil {
+		if stale, ok := newestCachedCompanyFactsZip(c.cacheDir); ok {
+			log.Warn().Err(err).Str("file", stale).Msg("using stale companyfacts.zip")
+			return stale, nil
+		}
 		return "", err
 	}
 	cleanupOldCacheFiles(c.cacheDir, "companyfacts_", target)
