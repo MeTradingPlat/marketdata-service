@@ -319,7 +319,7 @@ jobs:
             -e TEST_SYMBOLS="AAPL,MSFT,GOOGL,TSLA,AMZN" \
             -e TEST_MARKET="XNAS" \
             -e MAX_CANDLE_POOL_CONNECTIONS="15" \
-            -e LIVE_MAX_CHANNELS_PER_CONN="12" \
+            -e LIVE_MAX_CHANNELS_PER_CONN="10" \
             -e SWEEP_WORKERS="25" \
             -e EUREKA_HOST="directory" \
             -e MAX_CONCURRENT_BATCH_RESPONSES="10" \

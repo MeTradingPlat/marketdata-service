@@ -73,7 +73,7 @@ func Load() *Config {
 
 		MaxCandlePoolConnections: envIntOr("MAX_CANDLE_POOL_CONNECTIONS", 15),
 		MaxChannelsPerConn:       positiveOr(envIntOr("DXLINK_MAX_CHANNELS_PER_CONN", 8), 8),
-		LiveMaxChannelsPerConn:   positiveOr(envIntOr("LIVE_MAX_CHANNELS_PER_CONN", 12), 12),
+		LiveMaxChannelsPerConn:   positiveOr(envIntOr("LIVE_MAX_CHANNELS_PER_CONN", 10), 10),
 		SweepWorkers:             envIntOr("SWEEP_WORKERS", 25),
 		// Reset diario de sesiones de TastyTrade a las 00:05 UTC (mercado US ya
 		// cerrado desde las 00:00 UTC) -- ver StartSessionResetLoop.
