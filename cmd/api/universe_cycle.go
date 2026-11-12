@@ -62,22 +62,22 @@ func refreshWithRetry(name string, fn func() error) {
 // termine. Solo beta (D1) y prevClose/prevPostMarketVolume (M1) quedan
 // despues de su fase respectiva, porque esos si dependen de velas propias
 // recien sembradas (ver el cuerpo de runUniverseCycle).
-func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, volumeProfiles out.VolumeProfileRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool) {
+func StartUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, volumeProfiles out.VolumeProfileRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, packer channelPacker) {
 	go func() {
-		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, volumeProfiles, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true)
+		runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, volumeProfiles, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, true, packer)
 		for {
 			wait := time.Until(catchup.NextMaintenanceWindowAt(time.Now()))
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(wait):
-				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, volumeProfiles, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false)
+				runUniverseCycle(ctx, cfg, gateway, symbols, candles, fundamentals, volumeProfiles, ingest, edgar, insiders, finra, profile, backfilling, tracker, fundamentalsCache, symbolsCache, liveRolloutDone, false, packer)
 			}
 		}
 	}()
 }
 
-func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, volumeProfiles out.VolumeProfileRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool) {
+func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, fundamentals out.FundamentalsRepository, volumeProfiles out.VolumeProfileRepository, ingest in.IngestCandlesService, edgar out.SharesOutstandingGateway, insiders out.InsiderOwnershipGateway, finra out.ShortInterestGateway, profile out.ProfileSharesGateway, backfilling *atomic.Bool, tracker *intraday.SnapshotTracker, fundamentalsCache *fundamentals2.FundamentalsCache, symbolsCache *metadata.SymbolsCache, liveRolloutDone *atomic.Bool, firstRun bool, packer channelPacker) {
 	// Pipeline del backfill: D1 primero, se cierran las conexiones, se calcula
 	// beta (D1), luego H1 (se cierra, backfill nativo propio), y por ultimo
 	// M1 que se queda suscrito. backfilling bloquea SOLO las rutas de
@@ -219,7 +219,11 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 		return
 	}
 
-	startLiveUniverse(ctx, ingest, activeTracked)
+	eligibleLive := liveEligible(activeTracked)
+	log.Info().Int("eligible", len(eligibleLive)).Int("excluded", len(activeTracked)-len(eligibleLive)).Msg("live rollout symbols eligibility")
+	packer.SetMaxChannelsPerConn(cfg.LiveMaxChannelsPerConn)
+	startLiveUniverse(ctx, ingest, liveEligible(activeTracked))
+	packer.SetMaxChannelsPerConn(cfg.MaxChannelsPerConn)
 	// A partir de aca un simbolo que siga sin IsAttempted no esta "esperando
 	// su turno" -- se cayo de la foto de tracked/activeTracked y el reconciler ya lo puede tratar como
 	// cualquier otro caido.

@@ -56,6 +56,7 @@ func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService,
 					continue
 				}
 				tracked = catchup.FilterStaleSymbols(ctx, candles, tracked, time.Now())
+				tracked = liveEligible(tracked)
 				retried := 0
 				for _, s := range tracked {
 					if shouldSkipReconcileRetry(ingest.IsAttempted(s.Symbol), rolloutDone.Load(), ingest.IsLive(s.Symbol), gateway.LiveSubscribed(s.Symbol)) {

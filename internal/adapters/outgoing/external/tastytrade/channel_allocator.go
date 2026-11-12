@@ -207,3 +207,13 @@ func (a *channelAllocator) stats() (connected, total int) {
 	}
 	return connected, total
 }
+
+func (a *channelAllocator) setMaxChannelsPerConn(n int) {
+	if n <= 0 {
+		return
+	}
+	a.growMu.Lock()
+	defer a.growMu.Unlock()
+	a.maxChannelsPerConn = n
+}
+

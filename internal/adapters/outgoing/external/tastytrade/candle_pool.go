@@ -118,6 +118,11 @@ func (p *CandlePool) Connected() bool {
 	return connected > 0
 }
 
+func (p *CandlePool) SetMaxChannelsPerConn(n int) {
+	p.allocator.setMaxChannelsPerConn(n)
+	log.Info().Int("max_channels_per_conn", n).Msg("candle pool max channels per conn updated")
+}
+
 // WarmUp abre la primera conexion/canal por adelantado -- sin esto, la
 // primera peticion real (o el health check) paga el costo del handshake
 // DxLink completo, y un fallo de credenciales/red recien se descubre en
