@@ -12,7 +12,7 @@ func (p *CandlePool) ReviveSilentLive(ctx context.Context, now time.Time) {
 	var targets []string
 	p.activityMu.Lock()
 	for sym, st := range p.pendingRevive {
-		if last := p.lastEventAt[sym]; !last.Before(st.reconnectedAt) {
+		if last := p.lastEventAt[sym]; shouldDropRevive(st, last, now) {
 			delete(p.pendingRevive, sym)
 		} else if shouldRevive(st, last, now) && len(targets) < reviveMaxPerTick {
 			targets = append(targets, sym)

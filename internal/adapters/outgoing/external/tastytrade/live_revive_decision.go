@@ -14,7 +14,7 @@ func shouldRevive(st reviveState, lastEvent, now time.Time) bool {
 	if now.Sub(st.reconnectedAt) < 3*time.Minute {
 		return false
 	}
-	if !lastEvent.Before(st.reconnectedAt) {
+	if !lastEvent.Before(st.reconnectedAt.Add(reviveSustainedAfter)) {
 		return false
 	}
 	if st.attempts >= 2 {
