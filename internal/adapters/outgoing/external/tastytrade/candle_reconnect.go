@@ -36,6 +36,7 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 
 	now := time.Now()
 	p.activityMu.Lock()
+	p.ensureActivityMaps()
 	for _, symbol := range symbols {
 		if last, ok := p.lastEventAt[symbol]; ok && now.Sub(last) <= 10*time.Minute {
 			p.pendingRevive[symbol] = reviveState{reconnectedAt: now}

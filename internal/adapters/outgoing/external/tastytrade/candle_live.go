@@ -362,8 +362,18 @@ func (p *CandlePool) CurrentCandle(symbol string) (domain.Candle, bool) {
 	return c, ok
 }
 
+func (p *CandlePool) ensureActivityMaps() {
+	if p.lastEventAt == nil {
+		p.lastEventAt = make(map[string]time.Time)
+	}
+	if p.pendingRevive == nil {
+		p.pendingRevive = make(map[string]reviveState)
+	}
+}
+
 func (p *CandlePool) noteLiveEvent(symbol string, now time.Time) {
 	p.activityMu.Lock()
+	p.ensureActivityMaps()
 	p.lastEventAt[symbol] = now
 	p.activityMu.Unlock()
 }
