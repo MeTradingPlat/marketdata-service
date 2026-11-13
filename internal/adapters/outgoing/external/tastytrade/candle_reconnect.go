@@ -34,6 +34,15 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 	}
 	p.currentMu.Unlock()
 
+	now := time.Now()
+	p.activityMu.Lock()
+	for _, symbol := range symbols {
+		if last, ok := p.lastEventAt[symbol]; ok && now.Sub(last) <= 10*time.Minute {
+			p.pendingRevive[symbol] = reviveState{reconnectedAt: now}
+		}
+	}
+	p.activityMu.Unlock()
+
 	for _, symbol := range symbols {
 		p.liveMu.Lock()
 		cb := p.liveSubs[symbol]

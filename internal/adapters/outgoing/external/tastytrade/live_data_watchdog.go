@@ -49,6 +49,9 @@ func StartLiveDataWatchdog(ctx context.Context, pool *CandlePool) {
 			case <-ticker.C:
 				checkOpenSessions(&lastSessionsAlertAt)
 				checkLiveData(ctx, pool, &lastTriggeredAt)
+				if isExtendedSessionET(time.Now()) {
+					pool.ReviveSilentLive(ctx, time.Now())
+				}
 			}
 		}
 	}()

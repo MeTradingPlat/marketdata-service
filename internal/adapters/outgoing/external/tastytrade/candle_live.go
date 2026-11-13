@@ -153,7 +153,9 @@ func (p *CandlePool) RefreshLiveSubscriptions(ctx context.Context) {
 // mas atras de una vela, caso raro), se fusiona sobre una base vacia como
 // antes -- mejor esfuerzo, no hay de donde mas sacar el resto de los campos.
 func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
-	p.lastLiveEventAtUnixNano.Store(time.Now().UnixNano())
+	now := time.Now()
+	p.lastLiveEventAtUnixNano.Store(now.UnixNano())
+	p.noteLiveEvent(symbol, now)
 	p.currentMu.Lock()
 	prev, exists := p.current[symbol]
 	last, hasLast := p.lastClosed[symbol]
@@ -359,3 +361,10 @@ func (p *CandlePool) CurrentCandle(symbol string) (domain.Candle, bool) {
 	c, ok := p.current[symbol]
 	return c, ok
 }
+
+func (p *CandlePool) noteLiveEvent(symbol string, now time.Time) {
+	p.activityMu.Lock()
+	p.lastEventAt[symbol] = now
+	p.activityMu.Unlock()
+}
+

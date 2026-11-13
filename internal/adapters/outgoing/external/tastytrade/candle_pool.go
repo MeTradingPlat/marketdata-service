@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -89,6 +90,10 @@ type CandlePool struct {
 	// cada simbolo.
 	liveDayVolumeMu sync.RWMutex
 	liveDayVolume   map[string]liveDayVolumeEntry
+
+	activityMu    sync.Mutex
+	lastEventAt   map[string]time.Time
+	pendingRevive map[string]reviveState
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
@@ -106,6 +111,8 @@ func NewCandlePoolWithChannels(connFactory func(ctx context.Context) (*DxLinkCon
 		current:       make(map[string]domain.Candle),
 		lastClosed:    make(map[string]domain.Candle),
 		liveDayVolume: make(map[string]liveDayVolumeEntry),
+		lastEventAt:   make(map[string]time.Time),
+		pendingRevive: make(map[string]reviveState),
 	}
 	p.allocator = newChannelAllocator(connFactory, p.wireChannel, p.handleConnectionReconnect, maxConnections)
 	p.allocator.maxChannelsPerConn = maxChannelsPerConn
@@ -131,3 +138,10 @@ func (p *CandlePool) WarmUp(ctx context.Context) error {
 	_, err := p.allocator.allocate(ctx)
 	return err
 }
+
+func (a *channelAllocator) releaseKey(key string) {
+	for _, ch := range a.allChannels() {
+		ch.release(key)
+	}
+}
+
