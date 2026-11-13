@@ -223,7 +223,6 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	log.Info().Int("eligible", len(eligibleLive)).Int("excluded", len(activeTracked)-len(eligibleLive)).Msg("live rollout symbols eligibility")
 	packer.SetMaxChannelsPerConn(cfg.LiveMaxChannelsPerConn)
 	startLiveUniverse(ctx, ingest, liveEligible(activeTracked))
-	packer.SetMaxChannelsPerConn(cfg.MaxChannelsPerConn)
 	// A partir de aca un simbolo que siga sin IsAttempted no esta "esperando
 	// su turno" -- se cayo de la foto de tracked/activeTracked y el reconciler ya lo puede tratar como
 	// cualquier otro caido.
