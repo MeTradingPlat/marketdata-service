@@ -3,6 +3,7 @@ package tastytrade
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -183,4 +184,37 @@ func TestChannelAllocator_StaggersNewConnections(t *testing.T) {
 	if elapsed < connectionStaggerDelay/2 {
 		t.Fatalf("expected the second connection open to be staggered by ~%v, only waited %v", connectionStaggerDelay, elapsed)
 	}
+}
+
+func TestSetMaxChannelsPerConnConcurrentWithAllocate(t *testing.T) {
+	wsURL := startFakeDxLinkServer(t)
+	factory, _ := newTestConnFactory(t, wsURL)
+	a := newChannelAllocator(factory, nil, nil, 40)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(base int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				a.setMaxChannelsPerConn(2 + (base+j)%4)
+			}
+		}(i)
+	}
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				ch, err := a.allocate(context.Background())
+				if err != nil {
+					continue
+				}
+				for k := 0; k < channelCapacity; k++ {
+					ch.occupy(candleKey(fmt.Sprintf("SYM%d-%d", j, k), domain.M1))
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

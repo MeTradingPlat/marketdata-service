@@ -57,7 +57,8 @@ func newChannelAllocator(connFactory func(ctx context.Context) (*DxLinkConn, err
 	}
 	return &channelAllocator{
 		connFactory: connFactory, onNewChannel: onNewChannel, onReconnect: onReconnect,
-		maxConnections: maxConnections,
+		maxConnections:     maxConnections,
+		maxChannelsPerConn: maxChannelsPerConnection,
 	}
 }
 
