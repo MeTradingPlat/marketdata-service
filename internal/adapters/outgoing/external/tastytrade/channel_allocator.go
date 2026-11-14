@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const defaultMaxConnections = 40
+const defaultMaxConnections = 15
 
 // connectionStaggerDelay espacia la apertura de conexiones nuevas -- sin
 // esto, un onboarding grande (ej. el rollout de M1 con el pool recien
@@ -229,3 +229,8 @@ func (a *channelAllocator) setMaxChannelsPerConn(n int) {
 	a.maxChannelsPerConn = n
 }
 
+func (a *channelAllocator) releaseKey(key string) {
+	for _, ch := range a.allChannels() {
+		ch.release(key)
+	}
+}

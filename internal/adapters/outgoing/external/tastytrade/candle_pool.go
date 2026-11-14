@@ -138,10 +138,3 @@ func (p *CandlePool) WarmUp(ctx context.Context) error {
 	_, err := p.allocator.allocate(ctx)
 	return err
 }
-
-func (a *channelAllocator) releaseKey(key string) {
-	for _, ch := range a.allChannels() {
-		ch.release(key)
-	}
-}
-

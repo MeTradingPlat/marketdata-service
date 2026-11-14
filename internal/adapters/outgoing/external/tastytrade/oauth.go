@@ -136,12 +136,8 @@ func (o *OAuth) RefreshAccessToken(ctx context.Context) (string, error) {
 // servidor (docs/dxlink-session-incidents.md).
 func (o *OAuth) ResetSessions(ctx context.Context) error {
 	_, err, _ := o.resetGroup.Do("reset", func() (interface{}, error) {
-		return nil, o.resetSessionsOnce(ctx)
+		_, err := o.RefreshAccessToken(ctx)
+		return nil, err
 	})
-	return err
-}
-
-func (o *OAuth) resetSessionsOnce(ctx context.Context) error {
-	_, err := o.RefreshAccessToken(ctx)
 	return err
 }

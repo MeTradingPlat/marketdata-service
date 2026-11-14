@@ -317,14 +317,6 @@ func (p *CandlePool) dispatchTick(symbol string, c domain.Candle) {
 	}
 }
 
-// hasLiveSub dice si un simbolo ya tiene una suscripcion M1 en vivo activa.
-func (p *CandlePool) hasLiveSub(symbol string) bool {
-	p.liveMu.Lock()
-	defer p.liveMu.Unlock()
-	_, ok := p.liveSubs[symbol]
-	return ok
-}
-
 // LiveSubscribed dice si el stream M1 del simbolo esta ACTUALMENTE
 // registrado en el pool -- el reconciliador (cmd/api) lo usa para
 // detectar las muertes silenciosas (un resubscribe fallido tras una
@@ -383,4 +375,3 @@ func (p *CandlePool) noteLiveEvent(symbol string, now time.Time) {
 	p.lastEventAt[symbol] = now
 	p.activityMu.Unlock()
 }
-

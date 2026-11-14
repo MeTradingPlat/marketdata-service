@@ -171,7 +171,7 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	// resto del trafico del lote. El stream en vivo (mas el relleno de
 	// huecos tras reconexion) ya es la fuente autoritativa hacia adelante
 	// para M1, asi que aqui no hay nada que este fetch pueda aportar.
-	if tf == domain.M1 && p.hasLiveSub(symbol) {
+	if tf == domain.M1 && p.LiveSubscribed(symbol) {
 		return nil, nil
 	}
 
