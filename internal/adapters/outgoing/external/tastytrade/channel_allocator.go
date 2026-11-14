@@ -208,6 +208,18 @@ func (a *channelAllocator) stats() (connected, total int) {
 	return connected, total
 }
 
+func (a *channelAllocator) owns(ch *pooledChannel) bool {
+	a.mu.Lock()
+	conns := append([]*pooledConnection(nil), a.connections...)
+	a.mu.Unlock()
+	for _, pc := range conns {
+		if pc.owns(ch) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *channelAllocator) setMaxChannelsPerConn(n int) {
 	if n <= 0 {
 		return

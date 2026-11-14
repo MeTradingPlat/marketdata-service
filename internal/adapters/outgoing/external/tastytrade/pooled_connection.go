@@ -58,12 +58,21 @@ func (p *pooledConnection) addChannel(ch *pooledChannel) {
 	p.channels = append(p.channels, ch)
 }
 
-// liveSymbols y reset se usan juntos al reconectar: los canales viejos
-// quedan invalidos (IDs de un socket que ya no existe), asi que se leen
-// los simbolos en vivo que había que restaurar ANTES de vaciar la lista.
-func (p *pooledConnection) liveSymbols() []string {
+func (p *pooledConnection) owns(ch *pooledChannel) bool {
 	p.mu.Lock()
-	channels := append([]*pooledChannel(nil), p.channels...)
+	defer p.mu.Unlock()
+	for _, c := range p.channels {
+		if c == ch {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *pooledConnection) takeLiveSymbols() []string {
+	p.mu.Lock()
+	channels := p.channels
+	p.channels = nil
 	p.mu.Unlock()
 
 	var symbols []string
@@ -71,10 +80,4 @@ func (p *pooledConnection) liveSymbols() []string {
 		symbols = append(symbols, ch.liveSymbols()...)
 	}
 	return symbols
-}
-
-func (p *pooledConnection) reset() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.channels = nil
 }

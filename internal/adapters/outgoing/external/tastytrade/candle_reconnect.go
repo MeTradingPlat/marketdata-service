@@ -13,8 +13,7 @@ import (
 // resetea (no se saca del pool) y se vuelve a pedir un slot para cada
 // simbolo en vivo que tenia.
 func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledConnection) {
-	symbols := pc.liveSymbols()
-	pc.reset()
+	symbols := pc.takeLiveSymbols()
 
 	// La vela a medio formar de cada simbolo queda incompleta -- le faltan
 	// los ticks de los segundos que la conexion estuvo caida -- asi que se

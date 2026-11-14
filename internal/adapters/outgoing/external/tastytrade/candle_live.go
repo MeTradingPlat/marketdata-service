@@ -18,7 +18,7 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 	if from.IsZero() {
 		from = time.Now().Add(-5 * time.Minute)
 	}
-	ch, err := p.allocator.allocate(ctx)
+	ch, err := p.claimLiveChannel(ctx, symbol)
 	if err != nil {
 		return fmt.Errorf("allocating channel for %s live M1: %w", symbol, err)
 	}
@@ -29,7 +29,6 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 	p.liveMu.Unlock()
 
 	_ = p.registerDispatch(symbol, domain.M1, "live", func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
-	ch.occupy(candleKey(symbol, domain.M1))
 
 	if err := ch.channel.subscribeLive(symbol, domain.M1, from); err != nil {
 		return fmt.Errorf("subscribing live M1 for %s: %w", symbol, err)
@@ -126,6 +125,13 @@ func (p *CandlePool) RefreshLiveSubscriptions(ctx context.Context) {
 		refreshed += len(symbols)
 	}
 	log.Info().Int("channels", len(channels)).Int("symbols", refreshed).Msg("live subscriptions refreshed")
+	if orphans := p.orphanedLiveSymbols(); len(orphans) > 0 {
+		sample := orphans
+		if len(sample) > 5 {
+			sample = sample[:5]
+		}
+		log.Warn().Int("count", len(orphans)).Strs("sample", sample).Msg("live symbols outside any pooled channel")
+	}
 }
 
 // handleLiveEvent detecta el cierre de una vela: mientras los eventos que
