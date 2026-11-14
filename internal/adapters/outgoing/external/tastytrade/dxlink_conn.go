@@ -324,11 +324,10 @@ func (c *DxLinkConn) send(v interface{}) error {
 	err = conn.WriteMessage(websocket.TextMessage, body)
 	c.writeMu.Unlock()
 	if err != nil {
-		c.cleanup()
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		c.scheduleReconnect(ctx)
+		c.dropAndReconnect(ctx)
 		return err
 	}
 	return nil

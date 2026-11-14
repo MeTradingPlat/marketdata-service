@@ -51,6 +51,8 @@ func StartLiveDataWatchdog(ctx context.Context, pool *CandlePool) {
 				checkLiveData(ctx, pool, &lastTriggeredAt)
 				if isExtendedSessionET(time.Now()) {
 					pool.ReviveSilentLive(ctx, time.Now())
+				} else {
+					pool.DropExpiredRevive(time.Now())
 				}
 			}
 		}

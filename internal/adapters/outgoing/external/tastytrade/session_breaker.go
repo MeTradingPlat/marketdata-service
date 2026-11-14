@@ -8,9 +8,6 @@ import (
 	"time"
 )
 
-// sessionSaturationCooldown: misma ventana que ya usaba el reconnectLoop
-// individual (sessionSaturatedDelay en dxlink_reconnect.go), pero aca se
-// comparte entre TODAS las conexiones del proceso.
 const sessionSaturationCooldown = 15 * time.Minute
 
 // sessionCooldownJitter separa a las conexiones que esperaban la MISMA

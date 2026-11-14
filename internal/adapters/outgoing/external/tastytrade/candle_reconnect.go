@@ -62,6 +62,10 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 			delete(p.liveSubs, symbol)
 			delete(p.liveTicks, symbol)
 			p.liveMu.Unlock()
+			p.activityMu.Lock()
+			delete(p.lastEventAt, symbol)
+			delete(p.pendingRevive, symbol)
+			p.activityMu.Unlock()
 			log.Error().Err(err).Str("symbol", symbol).Msg("failed to resubscribe live candle after reconnect, dropped from live state")
 		}
 	}

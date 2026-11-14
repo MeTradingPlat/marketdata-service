@@ -8,6 +8,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+func (p *CandlePool) DropExpiredRevive(now time.Time) {
+	p.activityMu.Lock()
+	for sym, st := range p.pendingRevive {
+		if shouldDropRevive(st, p.lastEventAt[sym], now) {
+			delete(p.pendingRevive, sym)
+		}
+	}
+	p.activityMu.Unlock()
+}
+
 func (p *CandlePool) ReviveSilentLive(ctx context.Context, now time.Time) {
 	var targets []string
 	p.activityMu.Lock()

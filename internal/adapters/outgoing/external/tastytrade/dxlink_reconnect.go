@@ -18,15 +18,6 @@ const (
 	healthCheckInterval   = 20 * time.Second
 	keepaliveInterval     = 30 * time.Second
 
-	// sessionSaturatedDelay: cuando el servidor rechaza por limite de
-	// sesiones, el backoff normal no basta -- cada handshake rechazado deja
-	// una sesion que tarda mas en expirar que el intervalo entre intentos
-	// (5 min max), asi el storm se auto-alimenta indefinidamente (confirmado
-	// en vivo el 2026-08-18: saturado 17:16 -> 18:54 sin resolver). Con 15
-	// min entre intentos las sesiones expiran entre medio y la mesa se
-	// desocupa de verdad.
-	sessionSaturatedDelay = 15 * time.Minute
-
 	// sessionSaturatedJitter: sin esto, varias conexiones que se saturaron
 	// juntas en el storm original vuelven a reintentar casi en el mismo
 	// instante 15 min despues (su propio reloj fijo, sin relacion con el
@@ -53,6 +44,10 @@ const (
 // mensaje (ver CandlePool.ForceReconnectAll). cleanup() ya es seguro de
 // llamar sobre una conexion que ya esta reconectando o caida.
 func (c *DxLinkConn) ForceReconnect(ctx context.Context) {
+	c.dropAndReconnect(ctx)
+}
+
+func (c *DxLinkConn) dropAndReconnect(ctx context.Context) {
 	c.cleanup()
 	c.scheduleReconnect(ctx)
 }
@@ -124,8 +119,8 @@ func (c *DxLinkConn) reconnectLoop(ctx context.Context) {
 		c.reconnectMu.Unlock()
 
 		delay := reconnectDelay(int(attempts))
-		if c.sessionSaturated.Load() && delay < sessionSaturatedDelay {
-			delay = sessionSaturatedDelay + time.Duration(rand.Int63n(int64(sessionSaturatedJitter)))
+		if c.sessionSaturated.Load() && delay < sessionSaturationCooldown {
+			delay = sessionSaturationCooldown + time.Duration(rand.Int63n(int64(sessionSaturatedJitter)))
 		}
 		select {
 		case <-time.After(delay):
@@ -251,8 +246,7 @@ func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 			disconnectedSince = time.Time{}
 			if age := c.lastMessageAge(); age > staleConnectionThreshold {
 				log.Warn().Dur("silence", age).Msg("dxlink connection silent too long, forcing close to trigger reconnect")
-				c.cleanup()
-				c.scheduleReconnect(ctx)
+				c.dropAndReconnect(ctx)
 			}
 		}
 	}
