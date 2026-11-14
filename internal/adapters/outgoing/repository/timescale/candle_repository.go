@@ -15,11 +15,7 @@ import (
 
 type CandleRepository struct {
 	pool *pgxpool.Pool
-	// writePool es un pool chico DEDICADO a Save() -- las escrituras del
-	// streaming M1 nunca compiten por slots con las lecturas de charts (ver
-	// storage.writePoolConns): confirmado en vivo que 24 consultas de
-	// agregacion lentas ocupaban todas las conexiones del pool general y las
-	// escrituras de velas hacian fila detras con el mercado abierto.
+	// writePool es un pool chico DEDICADO a Save() para que el streaming M1 no compita por slots con las lecturas de charts.
 	writePool *pgxpool.Pool
 	// snapshotPool es un pool chico DEDICADO a fundamentals/realtime en
 	// lote (GetIntradaySessionsBatch/GetPreviousSessionCloseBatch) -- ver
@@ -34,12 +30,7 @@ func NewCandleRepository(pool, writePool, snapshotPool *pgxpool.Pool) *CandleRep
 
 const deadlockRetries = 5
 
-// execWithDeadlockRetry reintenta ante un deadlock de Postgres (40P01) --
-// mucho menos probable ahora que ya no hay una transaccion grande
-// multi-simbolo compitiendo con Save() (ver daily_catchup.go), pero dos
-// escrituras concurrentes para el MISMO simbolo (ej. catch-up diario y
-// stream en vivo tocando el mismo D1 a la vez) todavia podrian chocar --
-// reintentar es seguro porque todo es UPSERT.
+// execWithDeadlockRetry reintenta ante un deadlock de Postgres (40P01); reintentar es seguro porque todo es UPSERT.
 func execWithDeadlockRetry(ctx context.Context, exec func(context.Context) error) error {
 	var err error
 	for attempt := 0; attempt < deadlockRetries; attempt++ {
@@ -89,16 +80,7 @@ const updateLastVolumeSQL = `
 	WHERE symbol = $1 AND (last_volume_ts IS NULL OR last_volume_ts < $3)
 `
 
-// Todo timeframe deja watermark aqui ahora -- antes solo M1 lo hacia (la
-// vieja agregacion SQL H1/D1 ya no existe, asi que la fila ya no tiene con
-// quien competir) y D1/H1 se apoyaban en MAX(ts) sobre candles directamente
-// via GetWatermark. Eso resulto ser mucho mas caro de lo que parecia: sin
-// un rango de fecha que acotar, Postgres no puede excluir chunks de la
-// hypertable ni para PLANEAR la consulta (confirmado en vivo: hasta un
-// EXPLAIN sin ejecutar tiraba "out of shared memory" con miles de chunks
-// bloqueados de golpe). watermarks es una tabla chica sin particionar, una
-// fila por simbolo+timeframe -- leerla es una busqueda por clave primaria,
-// nunca toca la hypertable.
+// Todo timeframe deja watermark aqui; watermarks es una tabla chica que se lee por clave primaria sin tocar la hypertable.
 func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
 	if len(candles) == 0 {
 		return nil
@@ -156,94 +138,26 @@ const getCandlesSQL = `
 	) recent ORDER BY ts ASC
 `
 
-// maxWindowWidenAttempts/windowWidenFactor: ver el loop de ensanchamiento
-// en GetCandles -- las zonas muertas grandes (fines de semana) dejaban la
-// paginacion del frontend clavada en 0 barras. Bajado de 6 a 4 tras
-// confirmar en vivo: cada intento extra de un simbolo ralo escaneaba
-// chunks comprimidos mas viejos con decompresion vectorizada, y 10 queries
-// asi en paralelo (30-90s cada una, ~7k locks) ahogaban el lock manager
-// de postgres y todo el servicio se sentia lento.
+// maxWindowWidenAttempts/windowWidenFactor acotan el ensanchamiento de la ventana en GetCandles.
 const (
 	maxWindowWidenAttempts = 4
 	windowWidenFactor      = 4
 )
 
-// GetCandles arranca leyendo el watermark (la tabla chica, ver comentario
-// de Save()) para calcular un piso de fecha real antes de tocar la
-// hypertable -- sin eso, "dame las ultimas N barras" no le daba a Postgres
-// ningun rango que excluir y sufria el mismo problema que GetWatermark
-// antes de arreglarse: hasta planear la consulta bloqueaba chunks de mas.
-// El margen base (2x bars + 30 periodos) cubre fines de semana/feriados/
-// halts normales; zonas muertas mas largas se absorben ensanchando la
-// ventana (ver el loop de abajo).
+// GetCandles lee el watermark para acotar el rango antes de tocar la hypertable; el margen base cubre feriados/halts y las zonas muertas se absorben ensanchando la ventana.
 //
-// before es nil para el chart inicial (las N barras mas recientes hasta el
-// watermark) y no-nil para "cargar mas historial" al scrollear a la
-// izquierda -- el frontend pide velas ANTES de la mas vieja que ya tiene
-// (ver endDate en loadMoreHistory). Sin este parametro toda pagina
-// devolvia siempre las mismas N barras mas recientes, asi que llegar al
-// borde izquierdo nunca traia nada nuevo.
-// GetSeries lee hasta bars velas por simbolo para un lote de simbolos en
-// UNA query (row_number por particion de simbolo) -- el refresh de beta
-// corria 13k queries individuales de 1300 barras D1 y saturaba la CPU de
-// postgres ~40 min; con el mercado abierto las escrituras M1 en vivo hacian
-// fila detras de la saturacion. Cada serie se devuelve ordenada por ts
-// ascendente (mismo contenido que GetCandles por-simbolo).
+// before es nil para el chart inicial y no-nil para cargar historial anterior al scrollear a la izquierda.
+// GetSeries lee hasta bars velas por simbolo para un lote en una sola query, devueltas ordenadas por ts ascendente.
 func (r *CandleRepository) GetSeries(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
 	return getSeriesFrom(ctx, r.pool, symbols, timeframe, bars)
 }
 
-// GetSeriesPriority es GetSeries por el pool chico de fundamentals/realtime
-// (ver storage.snapshotPoolConns) -- confirmado en vivo el 2026-08-19: el
-// fallback M1/D1 de GetSnapshotsBatch (para simbolos sin vela en vivo o sin
-// subasta de cierre encontrada) llamaba GetSeries por el pool general, y con
-// 3 escaneres reales pegandole al mismo tiempo esa consulta quedaba 23+
-// segundos en espera de lectura de disco (DataFileRead) detras de las
-// mismas agregaciones time_bucket que ya compiten por ese pool -- el mismo
-// problema que motivo el pool dedicado, solo que esta llamada especifica
-// nunca se movio para alla.
+// GetSeriesPriority es GetSeries por el pool chico de fundamentals/realtime (ver storage.snapshotPoolConns).
 func (r *CandleRepository) GetSeriesPriority(ctx context.Context, symbols []string, timeframe domain.Timeframe, bars int) (map[string][]domain.Candle, error) {
 	return getSeriesFrom(ctx, r.snapshotPool, symbols, timeframe, bars)
 }
 
-// seriesLookbackWindow calcula cuanto retroceder en el tiempo para
-// encontrar `bars` velas de una temporalidad dada -- funcion pura, separada
-// de getSeriesFrom, para poder testearla sin tocar la base de datos.
-//
-// Sin cota de ts, ROW_NUMBER() OVER (PARTITION BY symbol_id ...) tiene que
-// leer y ordenar TODA la historia de cada simbolo antes de recortar a
-// `bars` -- para D1 eso son años de chunks comprimidos. Confirmado en vivo
-// el 2026-08-21: una consulta de este tipo llevaba 68+ segundos activa
-// bajo carga concurrente de escaneres (pg_stat_activity). JOIN LATERAL
-// (la solucion que funciono para el mismo problema en seriesAggregatedBatchSQL)
-// NO sirve aca: con D1 abarcando cientos de chunks el planner tarda 11+
-// segundos SOLO planificando un lateral por simbolo. La cota de ts deja
-// que TimescaleDB excluya chunks viejos enteros antes de siquiera
-// descomprimirlos.
-//
-// minLookback pisa la formula cuando da una ventana absurdamente angosta
-// -- SeedLastClose llama esto con bars=1 (M1: bars*3+60 = 63 MINUTOS), a
-// proposito para sobrevivir el hueco entre el cierre de ayer y el primer
-// tick de hoy (ver el comentario de SnapshotTracker.last). Confirmado en
-// vivo el 2026-08-22: un arranque en fin de semana (horas despues del
-// cierre del viernes) caia fuera de esos 63 minutos, la siembra volvia 0
-// simbolos, y CADA lookup de precio en vivo terminaba cayendo al fallback
-// individual de resolvePrice en vez de servirse del tracker -- 10 dias
-// cubre de sobra cualquier fin de semana largo sin resucitar el problema
-// original.
-//
-// D1+: ~5 dias habiles cada 7 calendario -- bars*3 sobreestima ~2x lo que
-// realmente hace falta. Confirmado en vivo: pivots pide bars=1038 (4 anios
-// de historial) y bars*3+60 daba una ventana de 8.7 anios, forzando
-// escanear/descomprimir miles de chunks de mas para UN solo simbolo (37+s
-// activo en pg_stat_activity, sin ningun lock de por medio). x1.6 (la
-// proporcion real mas colchon de feriados) da ~4.7 anios para ese mismo
-// caso -- margen comodo sin ser 2x mas ancho de lo necesario. Los
-// timeframes intradia (M1/M5/H1/etc.) no tienen este problema -- su hueco
-// de fin de semana es chico frente al total de `bars`, asi que siguen con
-// la formula generica de siempre (igual de generosa que el ensanchamiento
-// de ventana de GetCandles, sobra para los pedidos chicos que hace ese
-// camino).
+// seriesLookbackWindow calcula cuanto retroceder para encontrar bars velas; la cota de ts deja que TimescaleDB excluya chunks viejos enteros sin descomprimirlos.
 func seriesLookbackWindow(bars int, duration time.Duration) time.Duration {
 	const minLookback = 10 * 24 * time.Hour
 	var window time.Duration
@@ -315,15 +229,7 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 
 	candles := make([]domain.Candle, 0)
 	window := time.Duration(bars*2+30) * duration
-	// La ventana base (2x bars + 30 periodos) cubre feriados/halts normales,
-	// pero una zona muerta LARGA (un fin de semana entero, pausas de
-	// cotizacion en un simbolo iliquido) hace que la pagina caiga entera en
-	// cero velas -- y el frontend interpreta "pagina vacia" como "no hay mas
-	// historia" (hasMoreHistory=false, confirmado en vivo: el loadMore de
-	// MDXH M1 un domingo devolvia 0 barras con 951 velas del viernes justo
-	// detras). Por eso, si la pagina viene corta, se ensancha la ventana
-	// (x4) y se reintenta -- los simbolos densos pagan un solo query, los
-	// huecos cuestan un par de queries extra como mucho.
+	// Si la pagina viene corta se ensancha la ventana (x4) y se reintenta, para no confundir una zona muerta con "no hay mas historia".
 	prevCount := -1
 	query := fmt.Sprintf(getCandlesSQL, candleTable(timeframe))
 	for attempt := 0; ; attempt++ {
@@ -332,11 +238,7 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 		if err != nil {
 			return nil, fmt.Errorf("querying candles for %s %s: %w", symbol, timeframe, err)
 		}
-		// candles arranca como slice vacio, no nil -- un query sin filas
-		// (ej. al scrollear mas alla del historial real) debe serializar
-		// como "[]" en la respuesta JSON, no como "null" (confirmado en
-		// vivo: un nil slice le rompia el `.length` al frontend, "Cannot
-		// read properties of null").
+		// candles arranca como slice vacio, no nil, para serializar "[]" y no "null" en la respuesta JSON.
 		candles = candles[:0]
 		for rows.Next() {
 			c := domain.Candle{Symbol: symbol, Timeframe: timeframe}
@@ -351,24 +253,7 @@ func (r *CandleRepository) GetCandles(ctx context.Context, symbol string, timefr
 		if err != nil {
 			return nil, err
 		}
-		// Un simbolo con historia real corta (ETF apalancado recien listado,
-		// ej. MSTU con 481 D1 desde su lanzamiento) NUNCA junta `bars` sin
-		// importar cuanto se ensanche la ventana -- confirmado en vivo el
-		// 2026-08-20: sin este corte, las 4 vueltas de ensanche (hasta 256x
-		// la ventana base) igual repetian la misma consulta sobre un rango
-		// que ya cubria toda la historia real, costando 14s en vez de una
-		// sola consulta que ya tenia la respuesta correcta.
-		//
-		// "len(candles) == prevCount" SOLO corta si ya se encontro algo (> 0):
-		// contando 0 en dos vueltas seguidas NO prueba que no hay mas historia,
-		// solo que la ventana todavia no llego lo bastante atras -- un simbolo
-		// MUY iliquido (ej. CCRP, un ETF de bonos con literal 1 trade real en
-		// todo el dia) puede tener su unica vela real justo pasado el segundo
-		// ensanche y adentro del tercero. Confirmado en vivo el 2026-09-30:
-		// bars=10 (ventana base 50min, primer ensanche 200min) volvia "[]" para
-		// CCRP con antelacion de antes de que un attempt=2 (800min) SI hubiera
-		// encontrado la vela real a 251min de "anchor" -- se rendia despues de
-		// solo 1 ensanche sin haber agotado los 4 permitidos.
+		// Un simbolo con historia real corta nunca junta bars: se corta si ya hay velas y no crecen, o al agotar los intentos permitidos.
 		if len(candles) >= bars || attempt >= maxWindowWidenAttempts || (len(candles) > 0 && len(candles) == prevCount) {
 			return candles, nil
 		}
@@ -401,11 +286,7 @@ func (r *CandleRepository) GetPreviousSessionClose(ctx context.Context, symbol s
 	for d := 1; d <= prevSessionCloseDays; d++ {
 		day := dayStart.AddDate(0, 0, -d)
 		from := day.Add(15*time.Hour + 58*time.Minute)
-		// to = 16:01 ET (no 16:02): la barra ts=16:00 es la subasta de cierre
-		// regular, la ts=16:01 ya es after-hours -- con la ventana [15:58,16:02)
-		// el ORDER BY ts DESC tomaba la vela post-cierre como prevClose cuando
-		// el simbolo opera despues del cierre (confirmado en vivo con MDXH:
-		// subasta 0.7998 vs 0.7548 de la barra 16:01).
+		// to = 16:01 ET: la ts=16:00 es la subasta de cierre, la 16:01 ya es after-hours.
 		to := day.Add(16*time.Hour + time.Minute)
 		windows = append(windows, fmt.Sprintf("($%d::timestamptz <= c.ts AND c.ts < $%d::timestamptz)", len(args)+1, len(args)+2))
 		args = append(args, from, to)
@@ -455,10 +336,7 @@ func (r *CandleRepository) GetWatermark(ctx context.Context, symbol string, time
 	return newest, nil
 }
 
-// GetWatermarksBatch lee los watermarks de un lote en una sola query -- el
-// barrido por simbolo era 13k queries por fase, y bajo la carga de
-// escrituras M1 cada una pagaba cola de IO (el refill media ~170s solo en
-// lecturas de watermarks, confirmado en vivo el 2026-08-18).
+// GetWatermarksBatch lee los watermarks de un lote en una sola query.
 func (r *CandleRepository) GetWatermarksBatch(ctx context.Context, symbols []string, timeframe domain.Timeframe) (map[string]time.Time, error) {
 	if len(symbols) == 0 {
 		return map[string]time.Time{}, nil
@@ -516,15 +394,7 @@ func (r *CandleRepository) SymbolsWithData(ctx context.Context, timeframe domain
 	return symbols, rows.Err()
 }
 
-// intradaySessionsSQL agrega las M1 de hoy en las 3 sesiones (pre/regular/
-// post) en una sola pasada. Los limites de tiempo se calculan en Go
-// (dayStart/dayEnd/marketOpen/marketClose, ya en America/New_York) y se
-// mandan como parametros -- comparar c.ts contra un valor ya calculado usa
-// el indice (symbol_id, timeframe, ts) de verdad; la version anterior
-// filtraba con (c.ts AT TIME ZONE ...)::date = hoy, una expresion por fila
-// que Postgres no puede indexar y tardaba 30s en producción. ARRAY_AGG(...)[1]
-// es el modismo para "primer/ultimo valor segun ese orden" sin una
-// subconsulta correlacionada por sesion.
+// intradaySessionsSQL agrega las M1 de hoy en las 3 sesiones en una sola pasada; los limites se calculan en Go para usar el indice (symbol_id, timeframe, ts).
 const intradaySessionsSQL = `
 	SELECT
 		(ARRAY_AGG(c.open ORDER BY c.ts) FILTER (WHERE c.ts >= $4 AND c.ts < $5))[1],
@@ -578,19 +448,8 @@ func (r *CandleRepository) GetIntradaySessions(ctx context.Context, symbol strin
 	return snap, nil
 }
 
-// GetIntradaySessionsBatch es intradaySessionsSQL con GROUP BY s.symbol --
-// ver el comentario del puerto (GetIntradaySessionsBatch) sobre por que esto
-// reemplaza N queries secuenciales por una sola.
-// universeBatchChunkSize: acota cuantos simbolos entran en un solo ANY($1)
-// contra el universo activo entero (ver chunkSymbols) -- usado tanto por
-// GetIntradaySessionsBatch (ARRAY_AGG por symbol, el caso mas caro: infló el
-// snapshotPool a mas de 1GB de RSS por conexion el 2026-09-02, ver
-// MaxConnLifetime en storage/timescale.go) como por
-// GetPreviousSessionCloseBatch (DISTINCT ON, mucho mas liviano por fila,
-// pero mismo principio de no mandarle los ~13k simbolos activos a Postgres
-// de una sola vez). 9-10 lotes secuenciales acotan el pico de memoria por
-// consulta sin perder ningun dato -- el resultado final es identico, solo
-// mas repartido en el tiempo.
+// GetIntradaySessionsBatch es intradaySessionsSQL con GROUP BY s.symbol.
+// universeBatchChunkSize acota cuantos simbolos entran en un solo ANY($1) para limitar el pico de memoria por consulta.
 const universeBatchChunkSize = 1500
 
 func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols []string) (map[string]domain.IntradaySnapshot, error) {
@@ -668,15 +527,7 @@ func (r *CandleRepository) queryIntradaySessionsBatch(ctx context.Context, symbo
 	return nil
 }
 
-// previousSessionCloseWindowSQL busca la subasta de UN dia especifico para
-// el lote entero -- deliberadamente SIN el OR de prevSessionCloseDays
-// ventanas que usa la version por simbolo. Confirmado en vivo el 2026-08-19:
-// esa misma query con 10 ventanas OR-eadas y ~8800 simbolos en el ANY()
-// tumbaba Postgres con "out of shared memory / max_locks_per_transaction"
-// -- el planner necesita considerar los chunks candidatos de las 10 ramas a
-// la vez dentro de una sola transaccion. Una ventana angosta por llamada
-// solo toca 1-2 chunks (chunk_time_interval=7 dias), muy por debajo del
-// limite.
+// previousSessionCloseWindowSQL busca la subasta de UN dia para el lote entero; una ventana angosta por llamada solo toca 1-2 chunks.
 const previousSessionCloseWindowSQL = `
 	SELECT DISTINCT ON (s.symbol) s.symbol, c.close
 	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id

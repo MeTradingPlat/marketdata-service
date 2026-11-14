@@ -156,3 +156,536 @@ esto mismo).
 - Ver también [[reference_dxlink_session_limit]] y
   [[reference_java_dxlink_pool_sizing]] en la memoria de Claude para el
   contexto histórico previo a este archivo.
+
+## Comentarios movidos desde el codigo (fase 6a)
+
+### internal/adapters/outgoing/repository/timescale/candle_repository.go
+
+**CandleRepository.writePool (campo)**
+
+```go
+// writePool es un pool chico DEDICADO a Save() -- las escrituras del
+// streaming M1 nunca compiten por slots con las lecturas de charts (ver
+// storage.writePoolConns): confirmado en vivo que 24 consultas de
+// agregacion lentas ocupaban todas las conexiones del pool general y las
+// escrituras de velas hacian fila detras con el mercado abierto.
+```
+
+**execWithDeadlockRetry (funcion)**
+
+```go
+// execWithDeadlockRetry reintenta ante un deadlock de Postgres (40P01) --
+// mucho menos probable ahora que ya no hay una transaccion grande
+// multi-simbolo compitiendo con Save() (ver daily_catchup.go), pero dos
+// escrituras concurrentes para el MISMO simbolo (ej. catch-up diario y
+// stream en vivo tocando el mismo D1 a la vez) todavia podrian chocar --
+// reintentar es seguro porque todo es UPSERT.
+```
+
+**(CandleRepository).Save (metodo)**
+
+```go
+// Todo timeframe deja watermark aqui ahora -- antes solo M1 lo hacia (la
+// vieja agregacion SQL H1/D1 ya no existe, asi que la fila ya no tiene con
+// quien competir) y D1/H1 se apoyaban en MAX(ts) sobre candles directamente
+// via GetWatermark. Eso resulto ser mucho mas caro de lo que parecia: sin
+// un rango de fecha que acotar, Postgres no puede excluir chunks de la
+// hypertable ni para PLANEAR la consulta (confirmado en vivo: hasta un
+// EXPLAIN sin ejecutar tiraba "out of shared memory" con miles de chunks
+// bloqueados de golpe). watermarks es una tabla chica sin particionar, una
+// fila por simbolo+timeframe -- leerla es una busqueda por clave primaria,
+// nunca toca la hypertable.
+```
+
+**maxWindowWidenAttempts/windowWidenFactor (const)**
+
+```go
+// maxWindowWidenAttempts/windowWidenFactor: ver el loop de ensanchamiento
+// en GetCandles -- las zonas muertas grandes (fines de semana) dejaban la
+// paginacion del frontend clavada en 0 barras. Bajado de 6 a 4 tras
+// confirmar en vivo: cada intento extra de un simbolo ralo escaneaba
+// chunks comprimidos mas viejos con decompresion vectorizada, y 10 queries
+// asi en paralelo (30-90s cada una, ~7k locks) ahogaban el lock manager
+// de postgres y todo el servicio se sentia lento.
+```
+
+**GetCandles (comentario previo a GetSeries)**
+
+```go
+// GetCandles arranca leyendo el watermark (la tabla chica, ver comentario
+// de Save()) para calcular un piso de fecha real antes de tocar la
+// hypertable -- sin eso, "dame las ultimas N barras" no le daba a Postgres
+// ningun rango que excluir y sufria el mismo problema que GetWatermark
+// antes de arreglarse: hasta planear la consulta bloqueaba chunks de mas.
+// El margen base (2x bars + 30 periodos) cubre fines de semana/feriados/
+// halts normales; zonas muertas mas largas se absorben ensanchando la
+// ventana (ver el loop de abajo).
+//
+// before es nil para el chart inicial (las N barras mas recientes hasta el
+// watermark) y no-nil para "cargar mas historial" al scrollear a la
+// izquierda -- el frontend pide velas ANTES de la mas vieja que ya tiene
+// (ver endDate en loadMoreHistory). Sin este parametro toda pagina
+// devolvia siempre las mismas N barras mas recientes, asi que llegar al
+// borde izquierdo nunca traia nada nuevo.
+```
+
+**(CandleRepository).GetSeries (metodo)**
+
+```go
+// GetSeries lee hasta bars velas por simbolo para un lote de simbolos en
+// UNA query (row_number por particion de simbolo) -- el refresh de beta
+// corria 13k queries individuales de 1300 barras D1 y saturaba la CPU de
+// postgres ~40 min; con el mercado abierto las escrituras M1 en vivo hacian
+// fila detras de la saturacion. Cada serie se devuelve ordenada por ts
+// ascendente (mismo contenido que GetCandles por-simbolo).
+```
+
+**(CandleRepository).GetSeriesPriority (metodo)**
+
+```go
+// GetSeriesPriority es GetSeries por el pool chico de fundamentals/realtime
+// (ver storage.snapshotPoolConns) -- confirmado en vivo el 2026-08-19: el
+// fallback M1/D1 de GetSnapshotsBatch (para simbolos sin vela en vivo o sin
+// subasta de cierre encontrada) llamaba GetSeries por el pool general, y con
+// 3 escaneres reales pegandole al mismo tiempo esa consulta quedaba 23+
+// segundos en espera de lectura de disco (DataFileRead) detras de las
+// mismas agregaciones time_bucket que ya compiten por ese pool -- el mismo
+// problema que motivo el pool dedicado, solo que esta llamada especifica
+// nunca se movio para alla.
+```
+
+**seriesLookbackWindow (funcion)**
+
+```go
+// seriesLookbackWindow calcula cuanto retroceder en el tiempo para
+// encontrar `bars` velas de una temporalidad dada -- funcion pura, separada
+// de getSeriesFrom, para poder testearla sin tocar la base de datos.
+//
+// Sin cota de ts, ROW_NUMBER() OVER (PARTITION BY symbol_id ...) tiene que
+// leer y ordenar TODA la historia de cada simbolo antes de recortar a
+// `bars` -- para D1 eso son años de chunks comprimidos. Confirmado en vivo
+// el 2026-08-21: una consulta de este tipo llevaba 68+ segundos activa
+// bajo carga concurrente de escaneres (pg_stat_activity). JOIN LATERAL
+// (la solucion que funciono para el mismo problema en seriesAggregatedBatchSQL)
+// NO sirve aca: con D1 abarcando cientos de chunks el planner tarda 11+
+// segundos SOLO planificando un lateral por simbolo. La cota de ts deja
+// que TimescaleDB excluya chunks viejos enteros antes de siquiera
+// descomprimirlos.
+//
+// minLookback pisa la formula cuando da una ventana absurdamente angosta
+// -- SeedLastClose llama esto con bars=1 (M1: bars*3+60 = 63 MINUTOS), a
+// proposito para sobrevivir el hueco entre el cierre de ayer y el primer
+// tick de hoy (ver el comentario de SnapshotTracker.last). Confirmado en
+// vivo el 2026-08-22: un arranque en fin de semana (horas despues del
+// cierre del viernes) caia fuera de esos 63 minutos, la siembra volvia 0
+// simbolos, y CADA lookup de precio en vivo terminaba cayendo al fallback
+// individual de resolvePrice en vez de servirse del tracker -- 10 dias
+// cubre de sobra cualquier fin de semana largo sin resucitar el problema
+// original.
+//
+// D1+: ~5 dias habiles cada 7 calendario -- bars*3 sobreestima ~2x lo que
+// realmente hace falta. Confirmado en vivo: pivots pide bars=1038 (4 anios
+// de historial) y bars*3+60 daba una ventana de 8.7 anios, forzando
+// escanear/descomprimir miles de chunks de mas para UN solo simbolo (37+s
+// activo en pg_stat_activity, sin ningun lock de por medio). x1.6 (la
+// proporcion real mas colchon de feriados) da ~4.7 anios para ese mismo
+// caso -- margen comodo sin ser 2x mas ancho de lo necesario. Los
+// timeframes intradia (M1/M5/H1/etc.) no tienen este problema -- su hueco
+// de fin de semana es chico frente al total de `bars`, asi que siguen con
+// la formula generica de siempre (igual de generosa que el ensanchamiento
+// de ventana de GetCandles, sobra para los pedidos chicos que hace ese
+// camino).
+```
+
+**GetCandles (ensanchamiento de la ventana)**
+
+```go
+// La ventana base (2x bars + 30 periodos) cubre feriados/halts normales,
+// pero una zona muerta LARGA (un fin de semana entero, pausas de
+// cotizacion en un simbolo iliquido) hace que la pagina caiga entera en
+// cero velas -- y el frontend interpreta "pagina vacia" como "no hay mas
+// historia" (hasMoreHistory=false, confirmado en vivo: el loadMore de
+// MDXH M1 un domingo devolvia 0 barras con 951 velas del viernes justo
+// detras). Por eso, si la pagina viene corta, se ensancha la ventana
+// (x4) y se reintenta -- los simbolos densos pagan un solo query, los
+// huecos cuestan un par de queries extra como mucho.
+```
+
+**GetCandles (slice vacio)**
+
+```go
+// candles arranca como slice vacio, no nil -- un query sin filas
+// (ej. al scrollear mas alla del historial real) debe serializar
+// como "[]" en la respuesta JSON, no como "null" (confirmado en
+// vivo: un nil slice le rompia el `.length` al frontend, "Cannot
+// read properties of null").
+```
+
+**GetCandles (historia real corta)**
+
+```go
+// Un simbolo con historia real corta (ETF apalancado recien listado,
+// ej. MSTU con 481 D1 desde su lanzamiento) NUNCA junta `bars` sin
+// importar cuanto se ensanche la ventana -- confirmado en vivo el
+// 2026-08-20: sin este corte, las 4 vueltas de ensanche (hasta 256x
+// la ventana base) igual repetian la misma consulta sobre un rango
+// que ya cubria toda la historia real, costando 14s en vez de una
+// sola consulta que ya tenia la respuesta correcta.
+//
+// "len(candles) == prevCount" SOLO corta si ya se encontro algo (> 0):
+// contando 0 en dos vueltas seguidas NO prueba que no hay mas historia,
+// solo que la ventana todavia no llego lo bastante atras -- un simbolo
+// MUY iliquido (ej. CCRP, un ETF de bonos con literal 1 trade real en
+// todo el dia) puede tener su unica vela real justo pasado el segundo
+// ensanche y adentro del tercero. Confirmado en vivo el 2026-09-30:
+// bars=10 (ventana base 50min, primer ensanche 200min) volvia "[]" para
+// CCRP con antelacion de antes de que un attempt=2 (800min) SI hubiera
+// encontrado la vela real a 251min de "anchor" -- se rendia despues de
+// solo 1 ensanche sin haber agotado los 4 permitidos.
+```
+
+**(CandleRepository).GetPreviousSessionClose (metodo, to=16:01)**
+
+```go
+// to = 16:01 ET (no 16:02): la barra ts=16:00 es la subasta de cierre
+// regular, la ts=16:01 ya es after-hours -- con la ventana [15:58,16:02)
+// el ORDER BY ts DESC tomaba la vela post-cierre como prevClose cuando
+// el simbolo opera despues del cierre (confirmado en vivo con MDXH:
+// subasta 0.7998 vs 0.7548 de la barra 16:01).
+```
+
+**(CandleRepository).GetWatermarksBatch (metodo)**
+
+```go
+// GetWatermarksBatch lee los watermarks de un lote en una sola query -- el
+// barrido por simbolo era 13k queries por fase, y bajo la carga de
+// escrituras M1 cada una pagaba cola de IO (el refill media ~170s solo en
+// lecturas de watermarks, confirmado en vivo el 2026-08-18).
+```
+
+**intradaySessionsSQL (const)**
+
+```go
+// intradaySessionsSQL agrega las M1 de hoy en las 3 sesiones (pre/regular/
+// post) en una sola pasada. Los limites de tiempo se calculan en Go
+// (dayStart/dayEnd/marketOpen/marketClose, ya en America/New_York) y se
+// mandan como parametros -- comparar c.ts contra un valor ya calculado usa
+// el indice (symbol_id, timeframe, ts) de verdad; la version anterior
+// filtraba con (c.ts AT TIME ZONE ...)::date = hoy, una expresion por fila
+// que Postgres no puede indexar y tardaba 30s en producción. ARRAY_AGG(...)[1]
+// es el modismo para "primer/ultimo valor segun ese orden" sin una
+// subconsulta correlacionada por sesion.
+```
+
+**universeBatchChunkSize (const)**
+
+```go
+// GetIntradaySessionsBatch es intradaySessionsSQL con GROUP BY s.symbol --
+// ver el comentario del puerto (GetIntradaySessionsBatch) sobre por que esto
+// reemplaza N queries secuenciales por una sola.
+// universeBatchChunkSize: acota cuantos simbolos entran en un solo ANY($1)
+// contra el universo activo entero (ver chunkSymbols) -- usado tanto por
+// GetIntradaySessionsBatch (ARRAY_AGG por symbol, el caso mas caro: infló el
+// snapshotPool a mas de 1GB de RSS por conexion el 2026-09-02, ver
+// MaxConnLifetime en storage/timescale.go) como por
+// GetPreviousSessionCloseBatch (DISTINCT ON, mucho mas liviano por fila,
+// pero mismo principio de no mandarle los ~13k simbolos activos a Postgres
+// de una sola vez). 9-10 lotes secuenciales acotan el pico de memoria por
+// consulta sin perder ningun dato -- el resultado final es identico, solo
+// mas repartido en el tiempo.
+```
+
+**previousSessionCloseWindowSQL (const)**
+
+```go
+// previousSessionCloseWindowSQL busca la subasta de UN dia especifico para
+// el lote entero -- deliberadamente SIN el OR de prevSessionCloseDays
+// ventanas que usa la version por simbolo. Confirmado en vivo el 2026-08-19:
+// esa misma query con 10 ventanas OR-eadas y ~8800 simbolos en el ANY()
+// tumbaba Postgres con "out of shared memory / max_locks_per_transaction"
+// -- el planner necesita considerar los chunks candidatos de las 10 ramas a
+// la vez dentro de una sola transaccion. Una ventana angosta por llamada
+// solo toca 1-2 chunks (chunk_time_interval=7 dias), muy por debajo del
+// limite.
+```
+
+### internal/adapters/outgoing/external/tastytrade/candle_live.go
+
+**(CandlePool).RefreshLiveSubscriptions (metodo)**
+
+```go
+// RefreshLiveSubscriptions reenvia el Add M1 de cada simbolo ya suscrito,
+// por su MISMO canal (nunca abre un canal o conexion nueva, ver
+// channelAllocator.allChannels) -- un remove+add de la misma clave deja el
+// streaming mudo para siempre (ver el comentario de subscribeLive), pero un
+// Add repetido sobre una suscripcion que sigue viva es inofensivo: dxLink
+// fusiona los "add" al mismo tema (ver el comentario de
+// unsubscribeHistoryBatch) y, con FromTime distinto de cero, repite el
+// historial desde ese punto antes de seguir en vivo por la misma
+// suscripcion. Para una suscripcion que dejo de empujar datos en silencio
+// (el caso que motivo esto, confirmado en vivo el 2026-09-04 con BSV/TW:
+// canal y conexion sanos, cero eventos nuevos igual), este re-Add es la
+// unica señal que le llega al servidor para reintentar sin que nosotros
+// sepamos de antemano cual simbolo puntual esta mudo -- se manda a todos
+// por igual, un mensaje por canal (no por simbolo), asi que el costo es
+// proporcional a la cantidad de canales (~130-150), no al universo (~13k).
+```
+
+**refreshCycle (campo de CandlePool)**
+
+```go
+// refreshCycle alterna en dos mitades (canales pares/impares) cual grupo se
+// refresca en cada llamada del ticker de 1 min -- confirmado en vivo el
+// 2026-09-05: mandar los ~130-150 mensajes de TODOS los canales juntos, uno
+// tras otro con solo 50ms de por medio, disparo un reenganche masivo de
+// sesiones ("dispatch registration replaced" por miles en segundos) que
+// termino saturando el limite de sesiones de TastyTrade minutos despues.
+// Partiendo el barrido a la mitad, cada minuto manda la mitad de los
+// mensajes (~65-75) y cada canal puntual se refresca cada 2 min en vez de
+// cada 1 -- refreshLiveSubscriptionsFrom ya cubre exactamente esa ventana,
+// asi que no queda ningun hueco sin repetir.
+```
+
+**(CandlePool).handleLiveEvent (metodo)**
+
+```go
+// handleLiveEvent detecta el cierre de una vela: mientras los eventos que
+// llegan comparten el mismo timestamp, son actualizaciones de la vela en
+// formacion; un timestamp MAS NUEVO significa que la anterior ya cerro. En
+// los dos casos se reenvia la vela en formacion actualizada (dispatchTick)
+// -- los graficos la necesitan tick a tick, no solo al cierre.
+//
+// Un timestamp MAS VIEJO que la vela en formacion (o igual/anterior a
+// lastClosed cuando ya no hay "current" -- ver CloseElapsedForming) es un
+// caso aparte: una correccion tardia de una vela YA cerrada (el trade real
+// ocurrio en ese minuto pero el reporte del exchange/SIP llego despues de
+// que ya cerramos el minuto siguiente -- documentado, no un caso raro: "el
+// primer trade del minuto nuevo puede llegar varios segundos despues del
+// cierre formal si el simbolo opera poco o hay demoras tecnicas"). Antes,
+// el simple "timestamp distinto" de mas abajo confundia esto con una vela
+// nueva -- cerraba de golpe la vela en formacion REAL con datos a medio
+// completar y reabria la vieja como si fuera la actual. Confirmado en vivo
+// el 2026-08-27/28: el volumen real de un pico de un minuto tardaba varios
+// ciclos del escaner en reflejarse completo rio abajo. Ahora se despacha
+// aparte via dispatchClosed, SIN tocar current -- fusionada contra
+// lastClosed[symbol] (la ultima vela que SI cerro de verdad) para no perder
+// los campos que dxLink no reenvio (formato COMPACT: solo manda lo que
+// cambio). Si lastClosed no tiene ese timestamp exacto (la correccion apunta
+// mas atras de una vela, caso raro), se fusiona sobre una base vacia como
+// antes -- mejor esfuerzo, no hay de donde mas sacar el resto de los campos.
+```
+
+**handleLiveEvent (cierre organico)**
+
+```go
+// Cierre organico: llego un tick de un minuto mas nuevo. Sintetizar
+// velas planas para los minutos intermedios sin tick (open=close al
+// ultimo precio, volumen 0) parecia dar continuidad al grafico, pero
+// el usuario lo rechazo en vivo el 2026-08-19: barras identicas donde
+// no cambio nada ensucian la serie -- el chart debe mostrar barras
+// solo donde hubo movimiento real (como antes de a19301a). Un minuto
+// SIN ningun tick de por medio (silencio real) se cierra igual, pero
+// por tiempo -- ver CloseElapsedForming.
+```
+
+**(CandlePool).flushFormingCandles (metodo)**
+
+```go
+// flushFormingCandles guarda la vela EN FORMACION de cada simbolo antes de
+// que StopAllLive/CloseAllConnections la descarten -- confirmado en vivo el
+// 2026-09-01: ninguno de los dos guardaba la vela a medio cerrar, asi que
+// se perdia en silencio cada vez que el proceso se reinicia (hoy paso 6+
+// veces) o en cada ventana de mantenimiento nocturna, hasta que el barrido
+// M1 la volvia a traer de TastyTrade horas despues. Reusa dispatchClosed
+// (mismo camino de guardado que un cierre real, con su chequeo IsComplete)
+// en vez de inventar uno nuevo -- del lado de afuera es indistinguible de
+// un cierre real, solo que forzado por el apagado en vez de un tick nuevo.
+// Guardar por este camino usa withWatermark=false igual que un cierre
+// normal, asi que si quedo incompleta el proximo barrido M1 la reemplaza
+// con la version real de TastyTrade sin conflicto.
+```
+
+**(CandlePool).LiveSubscribed (metodo)**
+
+```go
+// LiveSubscribed dice si el stream M1 del simbolo esta ACTUALMENTE
+// registrado en el pool -- el reconciliador (cmd/api) lo usa para
+// detectar las muertes silenciosas (un resubscribe fallido tras una
+// reconexion deja el stream mudo sin error visible, confirmado en vivo el
+// 2026-08-18 con OSRH) y resuscribirlas aunque la marca del ingestor siga
+// en true.
+```
+
+## Comentarios movidos desde el codigo (fase 6b)
+
+### cmd/api/universe_cycle.go
+
+**refreshWithRetry (funcion)**
+
+```text
+// refreshWithRetry reintenta un refresh idempotente del barrido nocturno --
+// confirmado en vivo: postgres cayo en recovery mode justo durante el upsert
+// de beta (SQLSTATE 57P03) y con un solo intento se perdieron beta, earnings
+// y el refresh externo de SEC/FINRA hasta la ventana del dia siguiente. Un
+// fallo transitorio de BD no deberia costar una noche entera de datos.
+```
+
+**runUniverseCycle (funcion)**
+
+```text
+	// Mismo motivo para el SnapshotTracker: sin este seed temprano, el
+	// ranking de Search() por volumen de HOY (ver rankByTodayVolume) no
+	// tiene nada del tracker hasta que termine el sweep M1 (hasta 20+ min),
+	// y cae al last_volume de AYER para casi todo el universo -- confirmado
+	// en vivo el 2026-09-03: SNXX con 116k de volumen real de hoy en
+	// Postgres aparecia en el puesto #18 de la busqueda, detras de simbolos
+	// con mucho menos volumen real, solo porque el tracker todavia no tenia
+	// nada cargado. Se usa `tracked` (no `activeTracked`, que recien se
+	// calcula despues de D1) -- el seed de mas abajo, tras el sweep M1,
+	// reemplaza esto con el dato completo y ya filtrado.
+```
+
+**runUniverseCycle (funcion)**
+
+```text
+	// FASE 2: H1, desde cero sesiones (RunSweepPhase cierra al terminar) --
+	// restaurada el 2026-09-11: H1 volvio a ser timeframe base con backfill
+	// nativo propio (ver timeframe_aggregation.go), no un derivado de M1
+	// calculado al vuelo.
+```
+
+**runUniverseCycle (funcion)**
+
+```text
+	// FASE 3: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
+	// las velas M1 de la sesion anterior, asi que va DESPUES del rollout
+	// M1 -- corria antes con la tabla M1 vacia en un refill en frio y
+	// calculaba 0). Sin verificacion de huecos de 10 dias: cada vela
+	// guardada (en vivo y en refill) actualiza su watermark, asi que un
+	// reinicio retoma desde el ultimo minuto guardado y el replay de la
+	// suscripcion rellena solo el hueco de las horas caidas.
+	// El sweep M1 es el REFILL que avanza el watermark M1.
+```
+
+### internal/core/service/catchup/daily_catchup.go
+
+**marketCloseHourET (constante)**
+
+```text
+	// marketCloseHourET es el cierre del POST-MARKET extendido, 20:00 ET --
+	// vuelto a este valor el 2026-08-20 a pedido expreso del usuario: beta y
+	// otros calculos que dependen de la barra D1 de hoy necesitan el precio
+	// de cierre real del dia (post-market incluido), no solo el de la subasta
+	// de las 16:00 ET. El refill arranca postCloseDelay despues (00:05 UTC en
+	// EDT, 01:05 UTC en EST). Nota historica: entre el 2026-08-18 y esta fecha
+	// se uso el cierre REGULAR (16:00 ET) en su lugar, porque el post-market
+	// atrasaba el refill 4 horas frente a lo esperado en ese momento (20:05
+	// UTC) -- si esto vuelve a ser un problema, ese es el tradeoff a resolver,
+	// no volver a un offset UTC fijo (ver el test de DST mas abajo).
+```
+
+**testSymbolSuffix (constante)**
+
+```text
+// testSymbolSuffix: la familia UTP/NASDAQ "Z..ZZT" (ZAZZT, ZCZZT, ZWZZT,
+// ZXZZT...) -- confirmado en vivo el 2026-08-31: ZWZZT y ZXZZT (descripcion
+// "NASDAQ TEST STOCK") se colaron al universo rastreado porque el filtro
+// anterior solo enumeraba dos variantes puntuales (ZAZZT/ZCZZT) en vez del
+// patron completo. Ninguna accion real termina en ZZT.
+```
+
+**reconcileUniverse (funcion)**
+
+```text
+	// activeSet se arma desde `real` (ya filtrado), no `active` -- `real :=
+	// active[:0]` reutiliza el mismo array de abajo (filtro in-place comun en
+	// Go), asi que `active` queda con su cola sin sobreescribir despues del
+	// loop de arriba: iterarlo de nuevo aca colaba symbolos de prueba
+	// (isTestSymbol) de vuelta al set de "activos", dejandolos is_active=true
+	// para siempre porque Deactivate() nunca los veia como stale (confirmado
+	// en vivo el 2026-08-31 con ZWZZT/ZXZZT).
+```
+
+**runPhase (funcion)**
+
+```text
+// runPhase corre UN timeframe hasta el final -- todos los workers drenan la
+// cola y terminan (wg.Wait) antes de que el llamador pueda arrancar la
+// fase siguiente. Barrera estricta a proposito: nada de H1 empieza mientras
+// quede un solo D1 pendiente, ni al reves.
+//
+// Los simbolos sin datos todavia (uncovered) siguen por el backfill
+// individual (probe de profundidad maxima), que son pocos. El resto se
+// agrupa en lotes de sweepBatchSize: una sola suscripcion DxLink por lote
+// con el FromTime de cada simbolo -- confirmado en vivo que la version
+// anterior (una suscripcion por simbolo) hacia el barrido 100 veces mas
+// lento en mensajes y se sentia si corria en horario de mercado.
+```
+
+**noWatermarkM1Fallback (constante)**
+
+```text
+// noWatermarkM1Fallback: cuanto pedir hacia atras para un simbolo M1 que
+// "phaseJobs" clasifico como covered (SymbolsWithData ve al menos una fila)
+// pero que en realidad NUNCA tuvo un backfill real -- solo velas del stream
+// en vivo (withWatermark=false, ver ingest_candles.go), asi que no aparece
+// en GetWatermarksBatch. Confirmado en vivo el 2026-08-19: sin este
+// fallback, esos simbolos se caian en silencio del mapa `froms` (ni error
+// ni log) y quedaban para siempre sin una sola vela M1 verificada -- miles
+// de simbolos activos (AAPL, NVDA, AMD, GOOGL...) con semanas de datos sin
+// verificar. 24h alcanza para lo que de verdad importa (hoy + el cierre de
+// ayer) sin mandar a estos simbolos por el camino lento de a uno
+// (backfillWithRetry/ProbeMaxDepth) que fue diseñado para simbolos NUEVOS
+// sin ninguna fila todavia, no para miles de simbolos activos de golpe.
+```
+
+**saveBatchSweep (funcion)**
+
+```text
+// saveBatchSweep junta las velas cerradas de TODOS los simbolos del lote en
+// un solo Save() -- antes era un Save por simbolo (hasta sweepBatchSize
+// round-trips a Postgres para un lote que ya llego en UNA sola respuesta de
+// DxLink). Save() ya arma un pgx.Batch heterogeneo por simbolo/timeframe
+// (ver candle_repository.go), asi que mezclar simbolos en el mismo llamado
+// es gratis. Si el guardado combinado falla, se cae al backfill individual
+// por simbolo (mismo camino de siempre) en vez de perder el lote entero.
+```
+
+**saveBatchSweep (funcion)**
+
+```text
+	// Este es el camino PRINCIPAL del sweep M1 (el per-symbol de arriba solo
+	// corre si el Save() en lote falla) -- sin este llamado, todo el catch-up
+	// de arranque le seguia dejando al SnapshotTracker el volumen de ayer de
+	// cada simbolo hasta el proximo reconcile contra la BD. Confirmado en
+	// vivo el 2026-09-08: SMH (con su primera vela via stream en vivo)
+	// rankeaba por encima de NVDA/TSLL/GPRO (con miles de acciones reales de
+	// HOY ya en Postgres via este mismo sweep) simplemente porque el tracker
+	// todavia no los habia visto.
+```
+
+**backfillWithRetry (funcion)**
+
+```text
+// backfillWithRetry reintenta un trabajo de backfill fallido -- confirmado en
+// vivo: un apagon transitorio de Postgres (segundos) durante la fase D1/H1
+// dejaba simbolos completos sin H1 hasta la siguiente noche, porque este
+// camino nunca tuvo reintento (a diferencia de M1, ver startLiveWithRetry).
+// A diferencia del callback de M1 en vivo -- compartido por cientos de
+// simbolos en el mismo hilo de lectura del WebSocket, donde bloquear ahi
+// afectaria a todos -- cada worker de este pool ya procesa su propia cola:
+// reintentar aca solo demora a ESE worker, no a los demas.
+```
+
+**RunSweepPhase (funcion)**
+
+```text
+// RunSweepPhase ejecuta el barrido de UN timeframe (los pendientes + los
+// cubiertos con margen) y cierra TODAS las conexiones DxLink al terminar --
+// diseno original del usuario: cada fase termina, se desuscribe y se cierran
+// las conexiones para asegurarse de que termino y de no arrastrar sesiones
+// a la fase siguiente (el limite de sesiones de TastyTrade se superaba
+// arrastrando las conexiones de una fase a la otra). El ciclo (ver
+// universe_cycle.go) intercala los calculos de cada fase entre barridos:
+// D1 -> beta/prevClose -> H1 -> M1.
+```

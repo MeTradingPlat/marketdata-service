@@ -18,16 +18,7 @@ import (
 
 const (
 	postCloseDelay = 5 * time.Minute
-	// marketCloseHourET es el cierre del POST-MARKET extendido, 20:00 ET --
-	// vuelto a este valor el 2026-08-20 a pedido expreso del usuario: beta y
-	// otros calculos que dependen de la barra D1 de hoy necesitan el precio
-	// de cierre real del dia (post-market incluido), no solo el de la subasta
-	// de las 16:00 ET. El refill arranca postCloseDelay despues (00:05 UTC en
-	// EDT, 01:05 UTC en EST). Nota historica: entre el 2026-08-18 y esta fecha
-	// se uso el cierre REGULAR (16:00 ET) en su lugar, porque el post-market
-	// atrasaba el refill 4 horas frente a lo esperado en ese momento (20:05
-	// UTC) -- si esto vuelve a ser un problema, ese es el tradeoff a resolver,
-	// no volver a un offset UTC fijo (ver el test de DST mas abajo).
+	// marketCloseHourET es el cierre del POST-MARKET extendido, 20:00 ET (beta necesita el cierre real con post-market).
 	marketCloseHourET = 20
 )
 
@@ -79,11 +70,7 @@ func NextMaintenanceWindowAt(now time.Time) time.Time {
 // prefijo cubre las variantes (NTEST/A, ...).
 var testSymbolPatterns = []string{"NTEST", "PTEST"}
 
-// testSymbolSuffix: la familia UTP/NASDAQ "Z..ZZT" (ZAZZT, ZCZZT, ZWZZT,
-// ZXZZT...) -- confirmado en vivo el 2026-08-31: ZWZZT y ZXZZT (descripcion
-// "NASDAQ TEST STOCK") se colaron al universo rastreado porque el filtro
-// anterior solo enumeraba dos variantes puntuales (ZAZZT/ZCZZT) en vez del
-// patron completo. Ninguna accion real termina en ZZT.
+// testSymbolSuffix: la familia UTP/NASDAQ "Z..ZZT"; ninguna accion real termina en ZZT.
 const testSymbolSuffix = "ZZT"
 
 func isTestSymbol(symbol string) bool {
@@ -120,13 +107,7 @@ func reconcileUniverse(ctx context.Context, gateway out.MarketDataGateway, symbo
 	if err != nil {
 		return fmt.Errorf("listing tracked symbols: %w", err)
 	}
-	// activeSet se arma desde `real` (ya filtrado), no `active` -- `real :=
-	// active[:0]` reutiliza el mismo array de abajo (filtro in-place comun en
-	// Go), asi que `active` queda con su cola sin sobreescribir despues del
-	// loop de arriba: iterarlo de nuevo aca colaba symbolos de prueba
-	// (isTestSymbol) de vuelta al set de "activos", dejandolos is_active=true
-	// para siempre porque Deactivate() nunca los veia como stale (confirmado
-	// en vivo el 2026-08-31 con ZWZZT/ZXZZT).
+	// activeSet se arma desde `real` (ya filtrado): `real := active[:0]` reutiliza el mismo array de abajo.
 	activeSet := make(map[string]struct{}, len(real))
 	for _, s := range real {
 		activeSet[s.Symbol] = struct{}{}
@@ -179,17 +160,7 @@ const (
 // esto la fase D1 pasa de 13k round-trips de add/remove a ~130 mensajes.
 const sweepBatchSize = 100
 
-// runPhase corre UN timeframe hasta el final -- todos los workers drenan la
-// cola y terminan (wg.Wait) antes de que el llamador pueda arrancar la
-// fase siguiente. Barrera estricta a proposito: nada de H1 empieza mientras
-// quede un solo D1 pendiente, ni al reves.
-//
-// Los simbolos sin datos todavia (uncovered) siguen por el backfill
-// individual (probe de profundidad maxima), que son pocos. El resto se
-// agrupa en lotes de sweepBatchSize: una sola suscripcion DxLink por lote
-// con el FromTime de cada simbolo -- confirmado en vivo que la version
-// anterior (una suscripcion por simbolo) hacia el barrido 100 veces mas
-// lento en mensajes y se sentia si corria en horario de mercado.
+// runPhase corre UN timeframe hasta el final; todos los workers terminan (wg.Wait) antes de la fase siguiente.
 func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, uncovered, covered []job, tf domain.Timeframe, workers int) {
 	start := time.Now()
 
@@ -271,18 +242,7 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 	reportPhase(tf, len(uncovered)+len(covered), len(empty), partialBatches, time.Since(start))
 }
 
-// noWatermarkM1Fallback: cuanto pedir hacia atras para un simbolo M1 que
-// "phaseJobs" clasifico como covered (SymbolsWithData ve al menos una fila)
-// pero que en realidad NUNCA tuvo un backfill real -- solo velas del stream
-// en vivo (withWatermark=false, ver ingest_candles.go), asi que no aparece
-// en GetWatermarksBatch. Confirmado en vivo el 2026-08-19: sin este
-// fallback, esos simbolos se caian en silencio del mapa `froms` (ni error
-// ni log) y quedaban para siempre sin una sola vela M1 verificada -- miles
-// de simbolos activos (AAPL, NVDA, AMD, GOOGL...) con semanas de datos sin
-// verificar. 24h alcanza para lo que de verdad importa (hoy + el cierre de
-// ayer) sin mandar a estos simbolos por el camino lento de a uno
-// (backfillWithRetry/ProbeMaxDepth) que fue diseñado para simbolos NUEVOS
-// sin ninguna fila todavia, no para miles de simbolos activos de golpe.
+// noWatermarkM1Fallback: cuanto pedir hacia atras para un simbolo M1 sin backfill real (solo velas del stream en vivo).
 const noWatermarkM1Fallback = 24 * time.Hour
 
 // backfillBatchWithRetry arma el lote: lee el watermark de cada simbolo,
@@ -355,13 +315,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 	return empty, false
 }
 
-// saveBatchSweep junta las velas cerradas de TODOS los simbolos del lote en
-// un solo Save() -- antes era un Save por simbolo (hasta sweepBatchSize
-// round-trips a Postgres para un lote que ya llego en UNA sola respuesta de
-// DxLink). Save() ya arma un pgx.Batch heterogeneo por simbolo/timeframe
-// (ver candle_repository.go), asi que mezclar simbolos en el mismo llamado
-// es gratis. Si el guardado combinado falla, se cae al backfill individual
-// por simbolo (mismo camino de siempre) en vez de perder el lote entero.
+// saveBatchSweep junta las velas cerradas de TODOS los simbolos del lote en un solo Save(); si falla, cae al backfill individual.
 func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in.IngestCandlesService, result map[string][]domain.Candle, tf domain.Timeframe, withWatermark bool) {
 	merged := make([]domain.Candle, 0, len(result))
 	bySymbol := make(map[string]struct{}, len(result))
@@ -384,25 +338,11 @@ func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in
 		}
 		return
 	}
-	// Este es el camino PRINCIPAL del sweep M1 (el per-symbol de arriba solo
-	// corre si el Save() en lote falla) -- sin este llamado, todo el catch-up
-	// de arranque le seguia dejando al SnapshotTracker el volumen de ayer de
-	// cada simbolo hasta el proximo reconcile contra la BD. Confirmado en
-	// vivo el 2026-09-08: SMH (con su primera vela via stream en vivo)
-	// rankeaba por encima de NVDA/TSLL/GPRO (con miles de acciones reales de
-	// HOY ya en Postgres via este mismo sweep) simplemente porque el tracker
-	// todavia no los habia visto.
+	// Sin este RecordTodaysClosedCandles, el SnapshotTracker se quedaria con el volumen de ayer hasta el proximo reconcile.
 	ingest.RecordTodaysClosedCandles(merged)
 }
 
-// backfillWithRetry reintenta un trabajo de backfill fallido -- confirmado en
-// vivo: un apagon transitorio de Postgres (segundos) durante la fase D1/H1
-// dejaba simbolos completos sin H1 hasta la siguiente noche, porque este
-// camino nunca tuvo reintento (a diferencia de M1, ver startLiveWithRetry).
-// A diferencia del callback de M1 en vivo -- compartido por cientos de
-// simbolos en el mismo hilo de lectura del WebSocket, donde bloquear ahi
-// afectaria a todos -- cada worker de este pool ya procesa su propia cola:
-// reintentar aca solo demora a ESE worker, no a los demas.
+// backfillWithRetry reintenta un trabajo de backfill fallido; cada worker tiene su propia cola, asi que reintentar solo lo demora a el.
 func backfillWithRetry(ctx context.Context, ingest in.IngestCandlesService, j job) bool {
 	var err error
 	for attempt := 1; attempt <= backfillMaxAttempts; attempt++ {
@@ -449,14 +389,7 @@ func ReconcileAndTracked(ctx context.Context, gateway out.MarketDataGateway, sym
 	return tracked
 }
 
-// RunSweepPhase ejecuta el barrido de UN timeframe (los pendientes + los
-// cubiertos con margen) y cierra TODAS las conexiones DxLink al terminar --
-// diseno original del usuario: cada fase termina, se desuscribe y se cierran
-// las conexiones para asegurarse de que termino y de no arrastrar sesiones
-// a la fase siguiente (el limite de sesiones de TastyTrade se superaba
-// arrastrando las conexiones de una fase a la otra). El ciclo (ver
-// universe_cycle.go) intercala los calculos de cada fase entre barridos:
-// D1 -> beta/prevClose -> H1 -> M1.
+// RunSweepPhase ejecuta el barrido de UN timeframe y cierra TODAS las conexiones DxLink al terminar.
 func RunSweepPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, tracked []domain.Symbol, tf domain.Timeframe, workers int) {
 	if len(tracked) == 0 {
 		return

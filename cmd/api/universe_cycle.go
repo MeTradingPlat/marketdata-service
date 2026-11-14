@@ -24,11 +24,7 @@ const (
 	liveRolloutSessionGrace = 60 * time.Second
 )
 
-// refreshWithRetry reintenta un refresh idempotente del barrido nocturno --
-// confirmado en vivo: postgres cayo en recovery mode justo durante el upsert
-// de beta (SQLSTATE 57P03) y con un solo intento se perdieron beta, earnings
-// y el refresh externo de SEC/FINRA hasta la ventana del dia siguiente. Un
-// fallo transitorio de BD no deberia costar una noche entera de datos.
+// refreshWithRetry reintenta un refresh idempotente del barrido nocturno.
 func refreshWithRetry(name string, fn func() error) {
 	for attempt := 1; attempt <= refreshMaxAttempts; attempt++ {
 		if err := fn(); err != nil {
@@ -102,16 +98,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// buenos que ya estan en Postgres de la ventana anterior. El reload de
 	// mas abajo (al terminar el ciclo) sigue refrescandolo con lo nuevo.
 	fundamentalsCache.ReloadAll(ctx)
-	// Mismo motivo para el SnapshotTracker: sin este seed temprano, el
-	// ranking de Search() por volumen de HOY (ver rankByTodayVolume) no
-	// tiene nada del tracker hasta que termine el sweep M1 (hasta 20+ min),
-	// y cae al last_volume de AYER para casi todo el universo -- confirmado
-	// en vivo el 2026-09-03: SNXX con 116k de volumen real de hoy en
-	// Postgres aparecia en el puesto #18 de la busqueda, detras de simbolos
-	// con mucho menos volumen real, solo porque el tracker todavia no tenia
-	// nada cargado. Se usa `tracked` (no `activeTracked`, que recien se
-	// calcula despues de D1) -- el seed de mas abajo, tras el sweep M1,
-	// reemplaza esto con el dato completo y ya filtrado.
+	// Mismo motivo para el SnapshotTracker: sin este seed temprano, Search() rankearia por el volumen de AYER hasta el sweep M1.
 	seedSnapshotTracker(ctx, candles, tracker, tracked)
 
 	windowStart := catchup.LastMaintenanceWindowStart(time.Now())
@@ -192,20 +179,10 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// volvio?" que hace falta (ver FilterStaleSymbols).
 	activeTracked := catchup.FilterStaleSymbols(ctx, candles, tracked, time.Now())
 
-	// FASE 2: H1, desde cero sesiones (RunSweepPhase cierra al terminar) --
-	// restaurada el 2026-09-11: H1 volvio a ser timeframe base con backfill
-	// nativo propio (ver timeframe_aggregation.go), no un derivado de M1
-	// calculado al vuelo.
+	// FASE 2: H1, desde cero sesiones (RunSweepPhase cierra al terminar).
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, activeTracked, domain.H1, cfg.SweepWorkers)
 
-	// FASE 3: M1 en vivo (se queda suscrito) + prevClose (se calcula desde
-	// las velas M1 de la sesion anterior, asi que va DESPUES del rollout
-	// M1 -- corria antes con la tabla M1 vacia en un refill en frio y
-	// calculaba 0). Sin verificacion de huecos de 10 dias: cada vela
-	// guardada (en vivo y en refill) actualiza su watermark, asi que un
-	// reinicio retoma desde el ultimo minuto guardado y el replay de la
-	// suscripcion rellena solo el hueco de las horas caidas.
-	// El sweep M1 es el REFILL que avanza el watermark M1.
+	// FASE 3: M1 en vivo (se queda suscrito) + prevClose (va DESPUES del rollout M1).
 	catchup.RunSweepPhase(ctx, gateway, candles, ingest, activeTracked, domain.M1, cfg.SweepWorkers)
 	resumeCompression(candles)
 
