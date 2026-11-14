@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 )
 
 // candleForceCloseInterval: 1s -- el mismo orden de magnitud que el margen
@@ -18,7 +18,7 @@ const candleForceCloseInterval = 1 * time.Second
 // justo en el cierre (silencio real de mercado) se queda "en formacion"
 // hasta el proximo trade, que en un simbolo poco liquido puede tardar
 // minutos u horas. Ver CandlePool.CloseElapsedForming.
-func StartCandleForceCloseLoop(ctx context.Context, pool *tastytrade.CandlePool) {
+func StartCandleForceCloseLoop(ctx context.Context, closer out.CandleForceCloser) {
 	go func() {
 		ticker := time.NewTicker(candleForceCloseInterval)
 		defer ticker.Stop()
@@ -27,7 +27,7 @@ func StartCandleForceCloseLoop(ctx context.Context, pool *tastytrade.CandlePool)
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				pool.CloseElapsedForming(time.Now())
+				closer.CloseElapsedForming(time.Now())
 			}
 		}
 	}()

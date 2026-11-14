@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/infrastructure/configs"
 	"github.com/rs/zerolog/log"
@@ -18,7 +17,7 @@ import (
 // limpia cada manana aunque la limpieza reactiva del reconnect hubiera
 // fallado el dia anterior. Se ejecuta con el mercado cerrado para no cortar
 // streams en vivo en horario de trading.
-func StartSessionResetLoop(ctx context.Context, cfg *configs.Config, oauth *tastytrade.OAuth, gateway out.MarketDataGateway) {
+func StartSessionResetLoop(ctx context.Context, cfg *configs.Config, resetter out.SessionResetter, gateway out.MarketDataGateway) {
 	go func() {
 		for {
 			next := nextResetTime(time.Now(), cfg.SessionResetHour, cfg.SessionResetMinute)
@@ -27,7 +26,7 @@ func StartSessionResetLoop(ctx context.Context, cfg *configs.Config, oauth *tast
 				return
 			case <-time.After(time.Until(next)):
 			}
-			if err := oauth.ResetSessions(ctx); err != nil {
+			if err := resetter.ResetSessions(ctx); err != nil {
 				log.Error().Err(err).Msg("scheduled session reset failed")
 				continue
 			}
