@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/rs/zerolog/log"
@@ -23,11 +24,19 @@ func (p *CandlePool) routeEvent(ev rawCandleEvent) {
 	if !ok {
 		return
 	}
+	key := candleKey(symbol, tf)
 	p.dispatchMu.RLock()
-	entry, found := p.dispatch[candleKey(symbol, tf)]
+	entry, found := p.dispatch[key]
 	p.dispatchMu.RUnlock()
 	if found {
 		entry.handler(ev)
+		return
+	}
+	if p.retired.wasRecentlyRetired(key, time.Now()) {
+		if n := atomic.AddInt64(&p.lateEvents, 1); n%1000 == 1 {
+			log.Debug().Str("symbol", symbol).Str("timeframe", string(tf)).Int64("total_late_events", n).
+				Msg("late candle event after handler retired")
+		}
 		return
 	}
 	if n := atomic.AddInt64(&p.orphanEvents, 1); n%20 == 1 {
@@ -64,6 +73,7 @@ func (p *CandlePool) unregisterDispatchIfCurrent(symbol string, tf domain.Timefr
 	key := candleKey(symbol, tf)
 	if entry, ok := p.dispatch[key]; ok && entry.id == id {
 		delete(p.dispatch, key)
+		p.retired.mark(key, time.Now())
 		log.Info().Str("symbol", symbol).Str("timeframe", string(tf)).Str("source", source).Uint64("id", id).
 			Msg("dispatch entry removed")
 	}
