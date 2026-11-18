@@ -121,7 +121,7 @@ func main() {
 		// intentado) -- ver shouldSkipReconcileRetry.
 		var liveRolloutDone atomic.Bool
 		StartUniverseCycle(ctx, cfg, gateway, symbols, candleRepo, fundamentalsRepo, volumeProfiles, ingest, edgar, insiders, finra, profileShares, backfilling, snapshotTracker, fundamentalsCache, symbolsCache, &liveRolloutDone, pool)
-		StartLiveReconcileLoop(ctx, ingest, gateway, symbols, candleRepo, &liveRolloutDone)
+		StartLiveReconcileLoop(ctx, ingest, gateway, pool, symbols, candleRepo, &liveRolloutDone)
 		// StartSnapshotReconcileLoop (reconciliar el tracker contra Postgres
 		// cada 20 min con un ARRAY_AGG sobre el M1 del dia entero) se quita a
 		// proposito el 2026-09-08 para probar si alcanza con las otras dos

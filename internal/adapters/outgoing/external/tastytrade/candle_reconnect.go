@@ -43,6 +43,7 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 	}
 	p.activityMu.Unlock()
 
+	retriesLeft := resubscribeRetryBudget
 	for _, symbol := range symbols {
 		p.liveMu.Lock()
 		cb := p.liveSubs[symbol]
@@ -51,7 +52,8 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 		if cb == nil {
 			continue
 		}
-		if err := p.SubscribeLive(ctx, symbol, resumeFrom[symbol], cb, tick); err != nil {
+		subscribe := func() error { return p.SubscribeLive(ctx, symbol, resumeFrom[symbol], cb, tick) }
+		if err := resubscribeWithRetry(ctx, subscribe, &retriesLeft, resubscribeRetryDelay); err != nil {
 			// El simbolo quedo MUERTO de verdad (sin canal que lo sirva) --
 			// sacarlo del estado live del pool para que LiveSubscribed() lo
 			// reporte como caido y el reconciliador (cmd/api) lo resuscriba

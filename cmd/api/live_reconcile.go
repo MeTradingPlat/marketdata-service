@@ -21,6 +21,10 @@ const (
 	liveReconcileMaxPerTick = 100
 )
 
+type poolHealth interface {
+	Connected() bool
+}
+
 // StartLiveReconcileLoop resuscribe cada 5 minutos los simbolos cuyo stream
 // en vivo se intento y fallo -- confirmado en vivo el 2026-08-18: con el
 // limite de sesiones DxLink saturado el rollout M1 fallo para varios
@@ -41,7 +45,15 @@ const (
 // que reintentarlo como a cualquier otro caido -- confirmado en vivo el
 // 2026-09-01: TWO, LEG, RMAX y ~200 simbolos liquidos mas quedaron mudos sin
 // autosanar el resto del dia por este mismo hueco).
-func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService, gateway out.MarketDataGateway, symbols out.SymbolRepository, candles out.CandleRepository, rolloutDone *atomic.Bool) {
+//
+// 2026-11-17: tras un corte de internet de 5h el reconciler tardaba ~7 min
+// por simbolo caido (3 intentos x 45s de canal + esperas, en serie) y
+// reintentaba siempre los mismos al frente de la lista. Ahora cada tick usa
+// pocos workers, un presupuesto de tiempo, backoff por simbolo y se corta
+// tras fallos consecutivos (ver reconcile_tick.go).
+func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService, gateway out.MarketDataGateway, pool poolHealth, symbols out.SymbolRepository, candles out.CandleRepository, rolloutDone *atomic.Bool) {
+	backoff := newReconcileBackoff()
+	probes := reconcileProbes{isAttempted: ingest.IsAttempted, isLive: ingest.IsLive, subscribed: gateway.LiveSubscribed}
 	go func() {
 		ticker := time.NewTicker(liveReconcileInterval)
 		defer ticker.Stop()
@@ -50,6 +62,10 @@ func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService,
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if !pool.Connected() {
+					log.Warn().Msg("live reconcile: no dxlink connection available, skipping tick")
+					continue
+				}
 				tracked, err := symbols.Tracked(ctx)
 				if err != nil {
 					log.Error().Err(err).Msg("live reconcile: listing tracked symbols failed")
@@ -57,17 +73,13 @@ func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService,
 				}
 				tracked = catchup.FilterStaleSymbols(ctx, candles, tracked, time.Now())
 				tracked = liveEligible(tracked)
-				retried := 0
-				for _, s := range tracked {
-					if shouldSkipReconcileRetry(ingest.IsAttempted(s.Symbol), rolloutDone.Load(), ingest.IsLive(s.Symbol), gateway.LiveSubscribed(s.Symbol)) {
-						continue
-					}
-					if retried >= liveReconcileMaxPerTick {
-						break
-					}
-					retried++
-					startLiveWithRetry(ctx, ingest, s.Symbol)
+				candidates := selectReconcileCandidates(tracked, probes, rolloutDone.Load(), backoff, time.Now(), liveReconcileMaxPerTick)
+				if len(candidates) == 0 {
+					continue
 				}
+				outcome := runReconcileTick(ctx, candidates, startLiveOnce(ingest), backoff, time.Now)
+				log.Info().Int("candidates", len(candidates)).Int("started", outcome.started).Int("failed", outcome.failed).Bool("aborted", outcome.tripped).
+					Msg("live reconcile tick finished")
 			}
 		}
 	}()
