@@ -1,6 +1,7 @@
 package secedgar
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -10,9 +11,10 @@ import (
 )
 
 func TestDownloadInsiderQuarterFallsBackToLegacy(t *testing.T) {
+	zipData := validZip(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/legacy/2026q1.zip" {
-			w.Write([]byte("zipdata"))
+			w.Write(zipData)
 			return
 		}
 		http.NotFound(w, r)
@@ -29,8 +31,8 @@ func TestDownloadInsiderQuarterFallsBackToLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading target: %v", err)
 	}
-	if string(got) != "zipdata" {
-		t.Fatalf("content = %q, want %q", got, "zipdata")
+	if !bytes.Equal(got, zipData) {
+		t.Fatal("downloaded content differs from the legacy zip")
 	}
 }
 

@@ -3,6 +3,7 @@ package secedgar
 import (
 	"archive/zip"
 	"bufio"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -11,10 +12,10 @@ import (
 // forEachRow busca entryName (ej. "SUBMISSION.tsv") dentro del ZIP y llama
 // rowHandler por cada fila de datos -- entra una sola entrada a memoria a
 // la vez via bufio.Scanner, nunca el ZIP ni el TSV completo.
-func forEachRow(zipPath, entryName string, rowHandler func(headers, cols []string)) {
+func forEachRow(zipPath, entryName string, rowHandler func(headers, cols []string)) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
-		return
+		return fmt.Errorf("opening %s: %w", zipPath, err)
 	}
 	defer r.Close()
 
@@ -24,21 +25,22 @@ func forEachRow(zipPath, entryName string, rowHandler func(headers, cols []strin
 		}
 		f, err := entry.Open()
 		if err != nil {
-			return
+			return fmt.Errorf("opening %s in %s: %w", entryName, zipPath, err)
 		}
 		defer f.Close()
 
 		scanner := bufio.NewScanner(f)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		if !scanner.Scan() {
-			return
+			return scanner.Err()
 		}
 		headers := strings.Split(scanner.Text(), "\t")
 		for scanner.Scan() {
 			rowHandler(headers, strings.Split(scanner.Text(), "\t"))
 		}
-		return
+		return scanner.Err()
 	}
+	return fmt.Errorf("%s not found in %s", entryName, zipPath)
 }
 
 func value(headers, cols []string, columnName string) string {
