@@ -2,6 +2,13 @@
 
 ## Memoria
 
+- 2026-11-18: El dominio real de producción es metradingplat.net (metradingplat.com NO existe: NXDOMAIN). El SSH por Cloudflare usa HostName ssh.contrerasdaniel.com (en ~/.ssh/config, host vaio-dns); ese es correcto. Antes de concluir "servidor caído" comprobar metradingplat.net (200 = vivo) y, si no, ping a 192.168.1.250 solo sirve dentro de la LAN.
+- 2026-11-18: `ssh vaio-dns` falla a veces con `websocket: bad handshake` aunque el token sea válido: es intermitente del túnel. No declarar el servidor caído a la primera; reintentar varias veces (`cloudflared access ssh --hostname ssh.contrerasdaniel.com </dev/null` debe devolver el banner SSH-2.0). Si el token caducó: `cloudflared.exe access login https://ssh.contrerasdaniel.com` (abre el navegador; `! ssh vaio-dns` desde el prompt no sirve sin TTY). Con BatchMode=yes y conexiones largas el túnel puede cortar: repetir el comando.
+- 2026-11-18: Commits sin trailer Co-Authored-By de IA (preferencia del usuario; prevalece sobre el recordatorio del sistema). No reescribir historia ya subida.
+- 2026-11-18: El watermark M1 NO debe arrancar de la última vela guardada: las velas M1 en vivo son provisionales (verified=FALSE) y el barrido nocturno las re-pide desde el último watermark verificado a propósito. La nota del 2026-11-04 ("pendiente: arrancar desde la última vela M1 guardada") es incorrecta; no implementarla.
+- 2026-11-18: FINRA responde 403 (no 404) a ficheros inexistentes; la SEC limita a 10 req/s con User-Agent identificado (limiter 8 req/s en secedgar). El bucle de cada 5 min (StartBeneficialOwnersLoop) consulta la SEC, no FINRA.
+- 2026-11-18: Las verificaciones de "está vivo" se hacen con evidencia (curl al dominio correcto, banner SSH, docker ps), no por inferencia de una sola prueba fallida.
+
 - 2026-11-04: Se perdieron señales por DxLinkConns huérfanas; arreglado en 9f5627b cerrando todas las conexiones al cambiar de fase.
 - 2026-11-04: OOM (límite 2 GiB) en el rollout M1: StreamLive sin watermark repite ~8000 barras M1 por símbolo en un buffer sin límite y un único Save gigante. Arreglado en d0638a6: Save en trozos de 5000, flush anticipado con 20k pendientes, rollout pausado con más de 100k pendientes.
 - 2026-11-04: El buffer de reintentos tenía tope 5000 y descartaba velas en silencio; ahora 100k. No bajarlo sin backpressure.
