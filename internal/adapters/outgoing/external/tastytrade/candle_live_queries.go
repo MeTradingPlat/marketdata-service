@@ -51,6 +51,9 @@ func (p *CandlePool) ensureActivityMaps() {
 	if p.pendingRevive == nil {
 		p.pendingRevive = make(map[string]reviveState)
 	}
+	if p.orphanSince == nil {
+		p.orphanSince = make(map[string]time.Time)
+	}
 }
 
 func (p *CandlePool) noteLiveEvent(symbol string, now time.Time) {

@@ -91,3 +91,19 @@ func (a *channelAllocator) releaseKey(key string) {
 		ch.release(key)
 	}
 }
+
+func (a *channelAllocator) removeChannel(ch *pooledChannel) bool {
+	if ch == nil {
+		return false
+	}
+	a.mu.Lock()
+	conns := append([]*pooledConnection(nil), a.connections...)
+	a.mu.Unlock()
+	for _, pc := range conns {
+		if pc.removeChannel(ch) {
+			pc.conn.CloseChannel(ch.channel)
+			return true
+		}
+	}
+	return false
+}

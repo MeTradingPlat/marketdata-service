@@ -48,29 +48,14 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) error {
 	}
 
 	if c.onReconnect != nil {
-		reconCtx, reconCancel := context.WithTimeout(ctx, reconnectStepTimeout)
-		defer reconCancel()
-
-		reconDone := make(chan struct{})
 		go func() {
+			reconCtx, reconCancel := context.WithTimeout(ctx, reconnectResubscribeTimeout)
+			defer reconCancel()
 			c.onReconnect(reconCtx, c)
-			close(reconDone)
-		}()
-
-		select {
-		case <-reconDone:
-			if err := reconCtx.Err(); err != nil {
-				c.cleanup()
-				return fmt.Errorf("dxlink onReconnect timed out: %w", err)
-			}
 			if !c.Connected() {
-				c.cleanup()
-				return fmt.Errorf("dxlink disconnected during onReconnect")
+				log.Warn().Msg("dxlink connection lost while resubscribing live symbols after reconnect")
 			}
-		case <-reconCtx.Done():
-			c.cleanup()
-			return fmt.Errorf("dxlink onReconnect timed out: %w", reconCtx.Err())
-		}
+		}()
 	}
 	return nil
 }

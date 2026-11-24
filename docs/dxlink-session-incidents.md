@@ -48,6 +48,7 @@ cuando una tanda de reconexiones se dispara junta. Confirmado en vivo:
 | 2026-08-29 | `dd3197f` | `connDone` channel para desbloquear `dxLinkChannel.open()` cuando la conexión muere a mitad del handshake (deadlock de goroutines, no el storm en sí) | Bug relacionado pero distinto: sin esto, un storm de reconexión podía dejar workers del barrido colgados para siempre (sin error en el log, CPU en reposo) en vez de solo reintentar. |
 | **2026-08-31** | **`0109c18`** | **`SessionBreaker` compartido por todo el proceso** (`session_breaker.go`) | **Fix actual, ver abajo.** |
 | **2026-10-15** | -- | **`SessionBreaker.Guard`: gate serializado tras cooldown activo** (`session_breaker.go`, `dxlink_conn.go`) | **Fix actual, ver abajo.** |
+| **2026-11-24** | -- | **`onReconnect` asíncrono con timeout propio + huérfanos reenganchables + reciclado de canales mudos** (`dxlink_reconnect_perform.go`, `candle_reconnect.go`, `live_orphan_heal.go`, `live_channel_heal.go`) | **Fix actual, ver abajo.** |
 
 ## El gap que quedaba sin cubrir (fix del 2026-08-31)
 
@@ -92,6 +93,40 @@ atravesado una ventana de cooldown activa. Las demás conexiones en cola esperan
 en el gate hasta que el dial en curso resuelve (éxito o re-saturación); si el
 primer intento vuelve a saturar, el siguiente re-bloquea por la nueva ventana.
 Cuando no hubo cooldown activo, `Guard` opera sin serialización añadida (no-op).
+
+## El colapso por timeout de resubscripción (fix del 2026-11-24)
+
+Confirmado en vivo el 2026-11-24: a las 17:02Z el pool colapsó (10.309
+símbolos en `liveSubs` sin canal, 312 "dropped from live state" en 6 min,
+racimos de hasta 96 símbolos congelados a la misma hora = canal entero mudo).
+Causa raíz: `performReconnect` ejecutaba `onReconnect` con el MISMO
+`reconnectStepTimeout` de 3 min que el handshake; con ~1.000 símbolos por
+conexión la resubscripción se pasaba, el timeout llamaba `cleanup()` y cerraba
+una sesión recién autenticada sana, y el bucle volvía a reconectar
+(reconexión→timeout→reconexión). Además `handleConnectionReconnect` borraba
+`liveSubs`/`liveTicks` al primer fallo de resubscripción, dejando al
+reconciliador (100 símbolos/5 min) como único camino de recuperación.
+
+**Fix**:
+- `onReconnect` corre en su propio goroutine con `reconnectResubscribeTimeout`
+  (10 min, `dxlink_reconnect.go`); `performReconnect` devuelve nil tras un
+  "Connect" correcto y ya no cierra la sesión por el resultado de la
+  resubscripción (solo loguea si la conexión se perdió mientras tanto).
+- `pooledConnection.resubMu` serializa `handleConnectionReconnect` de la misma
+  conexión (dos reconexiones pueden solaparse con la resubscripción asíncrona).
+- Un fallo de resubscripción ya NO borra `liveSubs`/`liveTicks`: `liveSubs` pasa
+  a ser la memoria de "este símbolo debe estar vivo" y el símbolo queda huérfano.
+- `ReattachOrphans` (`live_orphan_heal.go`, 500/tick cada minuto, gracia 2 min):
+  reengancha símbolos de `liveSubs` que no ocupan canal, con `FromTime` desde
+  `lastClosed`.
+- `HealMuteChannels` (`live_channel_heal.go`, 3/5 min, solo horario extendido y
+  con el pool recibiendo eventos): recicla canales con ≥50 miembros, ≥90% mudos
+  15 min y creados hace ≥30 min, vía `allocator.removeChannel` + `CHANNEL_CANCEL`;
+  sus símbolos quedan huérfanos para `ReattachOrphans`.
+- `StartLiveHealLoop` (`cmd/api/live_heal_loop.go`) corre ambos saneadores.
+
+Verificación: `go build ./...` y `go vet` en verde; `go test -race` de
+tastytrade, cmd/api, domain y catchup ok (servidor, docker golang:1.25).
 
 ## Incidente relacionado pero DISTINTO: OOM del contenedor ("se satura, solo arregla el reinicio")
 

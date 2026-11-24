@@ -50,3 +50,36 @@ func TestCandlePool_ClaimLiveChannel_OccupiesAndOwns(t *testing.T) {
 		t.Fatalf("claim BBB: %v, same: %v", err, ch2 == ch1)
 	}
 }
+
+func TestPooledConnection_RemoveChannel(t *testing.T) {
+	wsURL := startFakeDxLinkServer(t)
+	factory, _ := newTestConnFactory(t, wsURL)
+	a := newChannelAllocator(factory, nil, nil, 1)
+	ctx := context.Background()
+
+	ch, err := a.allocate(ctx)
+	if err != nil {
+		t.Fatalf("allocate first: %v", err)
+	}
+	pc := a.connections[0]
+	if !pc.removeChannel(ch) {
+		t.Fatal("expected pc.removeChannel to return true")
+	}
+	if pc.owns(ch) {
+		t.Fatal("expected pc.owns to be false after removeChannel")
+	}
+	if pc.removeChannel(ch) {
+		t.Fatal("expected second pc.removeChannel to return false")
+	}
+
+	ch2, err := a.allocate(ctx)
+	if err != nil {
+		t.Fatalf("allocate second: %v", err)
+	}
+	if !a.removeChannel(ch2) {
+		t.Fatal("expected allocator.removeChannel to return true")
+	}
+	if len(a.allChannels()) != 0 {
+		t.Fatalf("expected allocator.allChannels() empty, got %d", len(a.allChannels()))
+	}
+}

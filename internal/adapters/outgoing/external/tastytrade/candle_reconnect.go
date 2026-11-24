@@ -13,6 +13,9 @@ import (
 // resetea (no se saca del pool) y se vuelve a pedir un slot para cada
 // simbolo en vivo que tenia.
 func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledConnection) {
+	pc.resubMu.Lock()
+	defer pc.resubMu.Unlock()
+
 	symbols := pc.takeLiveSymbols()
 
 	// La vela a medio formar de cada simbolo queda incompleta -- le faltan
@@ -54,21 +57,13 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 		}
 		subscribe := func() error { return p.SubscribeLive(ctx, symbol, resumeFrom[symbol], cb, tick) }
 		if err := resubscribeWithRetry(ctx, subscribe, &retriesLeft, resubscribeRetryDelay); err != nil {
-			// El simbolo quedo MUERTO de verdad (sin canal que lo sirva) --
-			// sacarlo del estado live del pool para que LiveSubscribed() lo
-			// reporte como caido y el reconciliador (cmd/api) lo resuscriba
-			// (confirmado en vivo el 2026-08-18: OSRH quedo mudo en silencio
-			// tras un resubscribe fallido y nada lo reintentaba porque la
-			// entrada seguia en el mapa).
-			p.liveMu.Lock()
-			delete(p.liveSubs, symbol)
-			delete(p.liveTicks, symbol)
-			p.liveMu.Unlock()
+			// La entrada en liveSubs es la memoria de que el simbolo debe estar
+			// vivo y ReattachOrphans lo reengancha; borrarla dejaba al
+			// reconciliador (100 simbolos/5 min) como unico camino.
 			p.activityMu.Lock()
-			delete(p.lastEventAt, symbol)
 			delete(p.pendingRevive, symbol)
 			p.activityMu.Unlock()
-			log.Error().Err(err).Str("symbol", symbol).Msg("failed to resubscribe live candle after reconnect, dropped from live state")
+			log.Error().Err(err).Str("symbol", symbol).Msg("failed to resubscribe live candle after reconnect, leaving it for orphan heal")
 		}
 	}
 }

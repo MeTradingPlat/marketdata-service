@@ -10,6 +10,11 @@ import (
 
 var reconnectStepTimeout = 3 * time.Minute
 
+// reconnectResubscribeTimeout: la resubscripcion no puede colgar del timeout
+// del handshake porque al expirar cerraba una sesion sana y reiniciaba el
+// ciclo reconexion->timeout->reconexion.
+var reconnectResubscribeTimeout = 10 * time.Minute
+
 const (
 	initialReconnectDelay = 5 * time.Second
 	maxReconnectDelay     = 300 * time.Second

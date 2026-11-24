@@ -130,22 +130,44 @@ func TestDxLinkConn_PerformReconnect_BlocksTimeout(t *testing.T) {
 	})
 
 	t.Run("onReconnect blocks", func(t *testing.T) {
+		origResubTimeout := reconnectResubscribeTimeout
+		reconnectResubscribeTimeout = 50 * time.Millisecond
+		t.Cleanup(func() { reconnectResubscribeTimeout = origResubTimeout })
+
 		wsURL := startFakeDxLinkServer(t)
 		c := NewDxLinkConn(func() string { return wsURL }, func() string { return "token" })
+		t.Cleanup(c.Close)
+
+		started := make(chan struct{})
+		ctxDone := make(chan struct{})
 		c.OnReconnect(func(ctx context.Context, _ *DxLinkConn) {
+			close(started)
 			<-ctx.Done()
+			close(ctxDone)
 		})
 
 		start := time.Now()
-		err := c.performReconnect(context.Background())
-		if err == nil {
-			t.Fatal("expected performReconnect to return an error when onReconnect blocks")
+		if err := c.performReconnect(context.Background()); err != nil {
+			t.Fatalf("expected performReconnect to return nil, got %v", err)
 		}
 		if time.Since(start) > 2*time.Second {
-			t.Fatalf("performReconnect hung (%v), expected timeout near 50ms", time.Since(start))
+			t.Fatalf("performReconnect hung (%v), expected async onReconnect", time.Since(start))
 		}
-		if c.Connected() {
-			t.Fatal("expected Connected() to be false")
+		if !c.Connected() {
+			t.Fatal("expected Connected() to remain true")
+		}
+		for _, ch := range []struct {
+			name string
+			c    chan struct{}
+		}{
+			{"started", started},
+			{"ctxDone", ctxDone},
+		} {
+			select {
+			case <-ch.c:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("timed out waiting for %s channel to close", ch.name)
+			}
 		}
 	})
 }

@@ -7,6 +7,10 @@ const maxChannelsPerConnection = 8
 type pooledConnection struct {
 	conn *DxLinkConn
 
+	// resubMu serializa handleConnectionReconnect de la misma conexion; con la
+	// resubscripcion asincrona dos reconexiones pueden solaparse.
+	resubMu sync.Mutex
+
 	mu       sync.Mutex
 	channels []*pooledChannel
 }
@@ -63,6 +67,18 @@ func (p *pooledConnection) owns(ch *pooledChannel) bool {
 	defer p.mu.Unlock()
 	for _, c := range p.channels {
 		if c == ch {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *pooledConnection) removeChannel(ch *pooledChannel) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, c := range p.channels {
+		if c == ch {
+			p.channels = append(p.channels[:i], p.channels[i+1:]...)
 			return true
 		}
 	}

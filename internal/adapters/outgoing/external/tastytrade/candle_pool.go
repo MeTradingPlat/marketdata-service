@@ -97,6 +97,7 @@ type CandlePool struct {
 	activityMu    sync.Mutex
 	lastEventAt   map[string]time.Time
 	pendingRevive map[string]reviveState
+	orphanSince   map[string]time.Time
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
@@ -113,6 +114,7 @@ func NewCandlePoolWithChannels(connFactory func(ctx context.Context) (*DxLinkCon
 		liveDayVolume: make(map[string]liveDayVolumeEntry),
 		lastEventAt:   make(map[string]time.Time),
 		pendingRevive: make(map[string]reviveState),
+		orphanSince:   make(map[string]time.Time),
 	}
 	p.allocator = newChannelAllocator(connFactory, p.wireChannel, p.handleConnectionReconnect, maxConnections)
 	p.allocator.setMaxChannelsPerConn(maxChannelsPerConn)

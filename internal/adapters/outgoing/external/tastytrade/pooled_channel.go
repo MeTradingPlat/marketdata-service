@@ -1,18 +1,22 @@
 package tastytrade
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 const channelCapacity = 100
 
 type pooledChannel struct {
-	channel *dxLinkChannel
+	channel   *dxLinkChannel
+	createdAt time.Time
 
 	mu      sync.Mutex
 	symbols map[string]struct{}
 }
 
 func newPooledChannel(ch *dxLinkChannel) *pooledChannel {
-	return &pooledChannel{channel: ch, symbols: make(map[string]struct{})}
+	return &pooledChannel{channel: ch, createdAt: time.Now(), symbols: make(map[string]struct{})}
 }
 
 func (p *pooledChannel) hasRoom() bool {

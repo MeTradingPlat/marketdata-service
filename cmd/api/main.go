@@ -100,6 +100,7 @@ func main() {
 			fatalStartup(err, "failed to warm up candle pool")
 		}
 		tastytrade.StartLiveDataWatchdog(ctx, pool)
+		StartLiveHealLoop(ctx, pool)
 
 		// Red de seguridad: si ActiveSymbols fallara en la primera pasada del
 		// ciclo, estos simbolos ya quedan rastreados igual.
