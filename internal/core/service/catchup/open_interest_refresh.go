@@ -12,8 +12,9 @@ import (
 )
 
 // openInterestWorkers: el endpoint de open interest de TastyTrade consulta
-// option-chains por simbolo (hasta 2 REST calls por simbolo), asi que un
-// pool moderado evita saturar el rate limit de la API externa.
+// la cadena /nested y luego lotes de 100 contratos en /market-data/by-type
+// por simbolo, asi que un pool moderado evita saturar el rate limit de la
+// API externa.
 const openInterestWorkers = 4
 
 // RefreshOpenInterest consulta TastyTrade para los simbolos cuyo open

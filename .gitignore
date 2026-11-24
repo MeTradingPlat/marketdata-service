@@ -58,3 +58,6 @@ Thumbs.db
 # Ignorar archivos temporales
 *.tmp*
 *.java.tmp.*
+
+# Encargos del agent-bridge
+.agent-bridge-tasks/
