@@ -45,10 +45,11 @@ func (p *CandlePool) channelMuteStats(ch *pooledChannel, now time.Time) channelM
 	return stats
 }
 
-// HealMuteChannels recicla canales dxLink mudos en horario extendido dejando
+// HealMuteChannels recicla canales dxLink mudos solo en sesion regular (en
+// pre y post market el silencio de un canal de 100 simbolos es normal) dejando
 // sus simbolos como huerfanos para que ReattachOrphans los reenganche.
 func (p *CandlePool) HealMuteChannels(ctx context.Context, now time.Time, limit int) int {
-	if limit <= 0 || !p.Connected() || !isExtendedSessionET(now) {
+	if limit <= 0 || !p.Connected() || !isRegularSessionET(now) {
 		return 0
 	}
 	age := p.LastLiveEventAge()

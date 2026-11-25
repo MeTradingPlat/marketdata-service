@@ -724,3 +724,15 @@ esto mismo).
 // universe_cycle.go) intercala los calculos de cada fase entre barridos:
 // D1 -> beta/prevClose -> H1 -> M1.
 ```
+
+## 2026-11-25: HealMuteChannels reciclaba canales sanos en pre-market
+
+HealMuteChannels reciclaba canales sanos en pre-market: el silencio de un
+canal con >=90% de miembros mudos es legitimo fuera de la sesion regular. La
+reapertura de canales fallo porque dxLink estaba inestable y ReattachOrphans
+reintentaba los huerfanos en serie (45 s por intento), dejando el pool
+degradado.
+
+Fix: HealMuteChannels solo actua en sesion regular 09:30-16:00 ET
+(isRegularSessionET, session_regular.go) y ReattachOrphans corta el tick tras
+3 fallos consecutivos (orphanReattachMaxConsecutiveFailures).

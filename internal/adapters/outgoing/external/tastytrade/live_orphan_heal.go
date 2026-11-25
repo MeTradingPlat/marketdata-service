@@ -11,6 +11,8 @@ import (
 // reenganchar un simbolo huerfano.
 const orphanReattachGrace = 2 * time.Minute
 
+const orphanReattachMaxConsecutiveFailures = 3
+
 func (p *CandlePool) ReattachOrphans(ctx context.Context, now time.Time, limit int) int {
 	if limit <= 0 || !p.Connected() {
 		return 0
@@ -40,7 +42,11 @@ func (p *CandlePool) ReattachOrphans(ctx context.Context, now time.Time, limit i
 	}
 	p.activityMu.Unlock()
 	reattached := 0
+	consecutiveFailures := 0
 	for _, sym := range candidates {
+		if consecutiveFailures >= orphanReattachMaxConsecutiveFailures {
+			break
+		}
 		p.liveMu.Lock()
 		cb, tick := p.liveSubs[sym], p.liveTicks[sym]
 		p.liveMu.Unlock()
@@ -60,10 +66,12 @@ func (p *CandlePool) ReattachOrphans(ctx context.Context, now time.Time, limit i
 			p.orphanSince[sym] = now
 			p.activityMu.Unlock()
 			log.Warn().Err(err).Str("symbol", sym).Msg("failed to reattach orphan live symbol")
+			consecutiveFailures++
 			continue
 		}
 		p.forgetOrphan(sym)
 		reattached++
+		consecutiveFailures = 0
 	}
 	if reattached > 0 {
 		log.Info().Int("reattached", reattached).Int("orphans", len(orphans)).Msg("orphan live symbols reattached")

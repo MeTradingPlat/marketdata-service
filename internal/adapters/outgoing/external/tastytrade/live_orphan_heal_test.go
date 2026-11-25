@@ -2,11 +2,57 @@ package tastytrade
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 )
+
+func TestReattachOrphans_StopsAfterConsecutiveFailures(t *testing.T) {
+	wsURL := startFakeDxLinkServer(t)
+	factory, _ := newTestConnFactory(t, wsURL)
+	p := newTestPool()
+	p.dispatch = make(map[string]dispatchEntry)
+	p.allocator = newChannelAllocator(factory, p.wireChannel, p.handleConnectionReconnect, 1)
+	p.SetMaxChannelsPerConn(1)
+
+	ctx := context.Background()
+	if err := p.WarmUp(ctx); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+	for _, full := range p.allocator.allChannels() {
+		for i := 0; i < channelCapacity; i++ {
+			full.occupy(fmt.Sprintf("FILL%03d", i))
+		}
+	}
+
+	symbols := []string{"AAA", "BBB", "CCC", "DDD", "EEE", "FFF"}
+	for _, sym := range symbols {
+		p.liveSubs[sym] = func(domain.Candle) {}
+		p.liveTicks[sym] = func(domain.Candle) {}
+	}
+
+	base := time.Date(2026, 11, 23, 15, 0, 0, 0, time.UTC)
+	p.ReattachOrphans(ctx, base, 10)
+	later := base.Add(orphanReattachGrace + time.Second)
+	if got := p.ReattachOrphans(ctx, later, 10); got != 0 {
+		t.Fatalf("expected 0 reattached, got %d", got)
+	}
+
+	retried := 0
+	for _, since := range p.orphanSince {
+		if since.Equal(later) {
+			retried++
+		}
+	}
+	if retried != orphanReattachMaxConsecutiveFailures {
+		t.Fatalf("expected %d attempts in one tick, got %d", orphanReattachMaxConsecutiveFailures, retried)
+	}
+	if got := len(p.orphanedLiveSymbols()); got != len(symbols) {
+		t.Fatalf("expected %d orphans still, got %d", len(symbols), got)
+	}
+}
 
 func TestReattachOrphans_RespectsGraceAndLimit(t *testing.T) {
 	wsURL := startFakeDxLinkServer(t)
