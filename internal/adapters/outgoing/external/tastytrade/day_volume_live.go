@@ -1,5 +1,7 @@
 package tastytrade
 
+import "time"
+
 // liveDayVolumeEntry: Regular es Trade.dayVolume (volumen oficial de sesion
 // regular), Extended es TradeETH.dayVolumeAsDouble (SOLO pre/post-market,
 // campo separado que dxFeed mantiene aparte -- ver trade_eth_event.go). Los
@@ -22,10 +24,17 @@ func (p *CandlePool) handleLiveTradeVolume(ev rawTradeEvent) {
 		return
 	}
 	p.liveDayVolumeMu.Lock()
-	defer p.liveDayVolumeMu.Unlock()
+	if p.liveDayVolume == nil {
+		p.liveDayVolume = make(map[string]liveDayVolumeEntry)
+	}
 	entry := p.liveDayVolume[ev.Symbol]
+	increased := entry.Regular != nil && *ev.DayVolume > *entry.Regular
 	entry.Regular = ev.DayVolume
 	p.liveDayVolume[ev.Symbol] = entry
+	p.liveDayVolumeMu.Unlock()
+	if increased {
+		p.noteTrade(ev.Symbol, time.Now())
+	}
 }
 
 func (p *CandlePool) handleLiveTradeETHVolume(ev rawTradeETHEvent) {

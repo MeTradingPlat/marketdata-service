@@ -94,10 +94,16 @@ type CandlePool struct {
 	liveDayVolumeMu sync.RWMutex
 	liveDayVolume   map[string]liveDayVolumeEntry
 
-	activityMu    sync.Mutex
-	lastEventAt   map[string]time.Time
-	pendingRevive map[string]reviveState
-	orphanSince   map[string]time.Time
+	activityMu        sync.Mutex
+	lastEventAt       map[string]time.Time
+	pendingRevive     map[string]reviveState
+	orphanSince       map[string]time.Time
+	lastRoutedAt      map[string]time.Time
+	lastTradeAt       map[string]time.Time
+	lastNewBarAt      map[string]time.Time
+	lastBarTS         map[string]time.Time
+	subscribedAt      map[string]time.Time
+	silentHealHistory map[string][]time.Time
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
@@ -106,15 +112,21 @@ func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), m
 
 func NewCandlePoolWithChannels(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections, maxChannelsPerConn int) *CandlePool {
 	p := &CandlePool{
-		dispatch:      make(map[string]dispatchEntry),
-		liveSubs:      make(map[string]func(domain.Candle)),
-		liveTicks:     make(map[string]func(domain.Candle)),
-		current:       make(map[string]domain.Candle),
-		lastClosed:    make(map[string]domain.Candle),
-		liveDayVolume: make(map[string]liveDayVolumeEntry),
-		lastEventAt:   make(map[string]time.Time),
-		pendingRevive: make(map[string]reviveState),
-		orphanSince:   make(map[string]time.Time),
+		dispatch:          make(map[string]dispatchEntry),
+		liveSubs:          make(map[string]func(domain.Candle)),
+		liveTicks:         make(map[string]func(domain.Candle)),
+		current:           make(map[string]domain.Candle),
+		lastClosed:        make(map[string]domain.Candle),
+		liveDayVolume:     make(map[string]liveDayVolumeEntry),
+		lastEventAt:       make(map[string]time.Time),
+		pendingRevive:     make(map[string]reviveState),
+		orphanSince:       make(map[string]time.Time),
+		lastRoutedAt:      make(map[string]time.Time),
+		lastTradeAt:       make(map[string]time.Time),
+		lastNewBarAt:      make(map[string]time.Time),
+		lastBarTS:         make(map[string]time.Time),
+		subscribedAt:      make(map[string]time.Time),
+		silentHealHistory: make(map[string][]time.Time),
 	}
 	p.allocator = newChannelAllocator(connFactory, p.wireChannel, p.handleConnectionReconnect, maxConnections)
 	p.allocator.setMaxChannelsPerConn(maxChannelsPerConn)

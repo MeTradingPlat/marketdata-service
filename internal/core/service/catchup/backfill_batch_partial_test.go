@@ -33,7 +33,7 @@ func TestBackfillBatchWithRetry_PartialHistory(t *testing.T) {
 	ingest := &fakeSweepIngest{}
 
 	jobs := []job{{symbol: "AAPL", tf: domain.D1}, {symbol: "MSFT", tf: domain.D1}}
-	got, partial := backfillBatchWithRetry(context.Background(), gw, repo, ingest, jobs, domain.D1, 24*time.Hour)
+	got, partial, _ := backfillBatchWithRetry(context.Background(), gw, repo, ingest, jobs, domain.D1, 24*time.Hour)
 	if !partial {
 		t.Errorf("partial = false, want true")
 	}

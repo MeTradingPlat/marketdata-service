@@ -69,9 +69,11 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	cleanup := func() {
 		ch.release(key)
 		_ = ch.channel.unsubscribe(symbol, tf)
-		time.AfterFunc(unsubscribeDrainPeriod, func() {
-			p.unregisterDispatchIfCurrent(symbol, tf, dispatchID, "history")
-		})
+		if dispatchID != 0 {
+			time.AfterFunc(unsubscribeDrainPeriod, func() {
+				p.unregisterDispatchIfCurrent(symbol, tf, dispatchID, "history")
+			})
+		}
 	}
 
 	if err := ch.channel.subscribeHistory(symbol, tf, from); err != nil {

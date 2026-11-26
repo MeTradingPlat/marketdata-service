@@ -30,6 +30,7 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 		emptyMu        sync.Mutex
 		empty          []string
 		partialBatches int
+		skippedLive    int
 		wg             sync.WaitGroup
 	)
 	queue := make(chan job, len(uncovered))
@@ -69,8 +70,8 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 		go func() {
 			defer wg.Done()
 			for batch := range batches {
-				batchEmpty, partial := backfillBatchWithRetry(ctx, gateway, candles, ingest, batch, tf, duration)
-				if len(batchEmpty) > 0 || partial {
+				batchEmpty, partial, skipped := backfillBatchWithRetry(ctx, gateway, candles, ingest, batch, tf, duration)
+				if len(batchEmpty) > 0 || partial || skipped > 0 {
 					emptyMu.Lock()
 					if len(batchEmpty) > 0 {
 						empty = append(empty, batchEmpty...)
@@ -78,6 +79,7 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 					if partial {
 						partialBatches++
 					}
+					skippedLive += skipped
 					emptyMu.Unlock()
 				}
 			}
@@ -98,6 +100,7 @@ func runPhase(ctx context.Context, gateway out.MarketDataGateway, candles out.Ca
 	ev.Str("timeframe", string(tf)).
 		Int("symbols", len(uncovered)+len(covered)).
 		Int("empty", len(empty)).
+		Int("skipped_live", skippedLive).
 		Int("partialBatches", partialBatches).
 		Dur("elapsed", time.Since(start)).
 		Msg("universe sweep phase finished")

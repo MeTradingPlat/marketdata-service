@@ -736,3 +736,31 @@ degradado.
 Fix: HealMuteChannels solo actua en sesion regular 09:30-16:00 ET
 (isRegularSessionET, session_regular.go) y ReattachOrphans corta el tick tras
 3 fallos consecutivos (orphanReattachMaxConsecutiveFailures).
+
+## 2026-11-25: Simbolos liquidos mudos tras barrido M1 (incidente NVDA)
+
+Confirmado en vivo el 2026-11-25: tras el arranque (16:52Z), el barrido M1 de
+`history-batch` cubrio NVDA (17:23:23Z), NVDX (17:21:57Z) y WULF (17:21:58Z).
+El rollout live termino a las 17:34:25Z con 12.436 simbolos, pero a las 20:00Z
+NVDA, NVDX y WULF seguian mudos desde las 17:20-17:22Z (~8 de cada 101
+liquidos afectados, solo 5.341 con M1 reciente). El servidor dxLink deja de
+entregar velas tras el Remove del batch y el Add posterior en otro canal, y el
+refresh cada minuto por el mismo canal no lo repara.
+
+Fix:
+- Observabilidad (`candle_live_activity.go`, `live_health_log.go`):
+  `lastRoutedAt`, `lastTradeAt`, `lastNewBarAt` (solo avanza con timestamp
+  mayor al ultimo visto) y log `live health` cada minuto en `StartLiveHealLoop`.
+- Proteccion de dispatch y batch (`candle_dispatch.go`, `candle_history.go`,
+  `daily_catchup_backfill.go`): `dispatchEntry.source` impide que otro origen
+  pise o borre un dispatch `live`; `FetchHistoryBatch` M1 excluye
+  `LiveSubscribed` y `catchup` los cuenta aparte como `skipped_live`.
+- `SubscribeLive` transaccional e idempotente (`candle_live.go`): revierte
+  `liveTicks`, dispatch y ocupacion si falla el envio (conservando `liveSubs`).
+- `HealSilentSymbols` (`live_silent_heal.go`, `live_silent_move.go`,
+  `live_heal_loop.go`): en sesion regular y con el pool recibiendo eventos,
+  repara el dispatch si falta o mueve el simbolo a un canal distinto
+  (`allocateExcluding`) si lleva >5m sin barra nueva y tiene trade propio
+  (DayVolume creciente <=5m), priorizando por volumen del dia descendente,
+  con presupuesto 100/tick, corte tras 3 fallos y maximo 3 reparaciones/hora
+  por simbolo.

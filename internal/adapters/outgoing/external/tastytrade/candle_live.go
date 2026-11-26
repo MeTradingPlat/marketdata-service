@@ -15,6 +15,9 @@ import (
 // separado antes ni un remove/add de por medio -- ver el comentario de
 // subscribeLive sobre por que esa secuencia dejaba el streaming mudo.
 func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time.Time, onClosed func(domain.Candle), onTick func(domain.Candle)) error {
+	if p.liveChannelFor(symbol) != nil && p.hasLiveDispatch(symbol) {
+		return nil
+	}
 	if from.IsZero() {
 		from = time.Now().Add(-5 * time.Minute)
 	}
@@ -24,19 +27,26 @@ func (p *CandlePool) SubscribeLive(ctx context.Context, symbol string, from time
 	}
 
 	p.liveMu.Lock()
+	prevTick, hadTick := p.liveTicks[symbol]
 	p.liveSubs[symbol] = onClosed
 	p.liveTicks[symbol] = onTick
 	p.liveMu.Unlock()
 
-	_ = p.registerDispatch(symbol, domain.M1, "live", func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
+	dispatchID := p.registerDispatch(symbol, domain.M1, "live", func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
 
 	if err := ch.channel.subscribeLive(symbol, domain.M1, from); err != nil {
+		p.liveMu.Lock()
+		if hadTick {
+			p.liveTicks[symbol] = prevTick
+		} else {
+			delete(p.liveTicks, symbol)
+		}
+		p.liveMu.Unlock()
+		p.unregisterDispatchIfCurrent(symbol, domain.M1, dispatchID, "live")
+		ch.release(candleKey(symbol, domain.M1))
 		return fmt.Errorf("subscribing live M1 for %s: %w", symbol, err)
 	}
-	// subscribeLiveDayVolume va sobre el MISMO canal, sin ocupar un slot de
-	// cupo nuevo (ver day_volume_live.go) -- un fallo aca no debe tumbar la
-	// suscripcion M1 que ya quedo activa, solo loguea y sigue: el volumen
-	// del dia tiene el batch FetchDayVolumes como respaldo.
+	p.noteSubscribed(symbol, time.Now())
 	if err := ch.channel.subscribeLiveDayVolume(symbol); err != nil {
 		log.Warn().Err(err).Str("symbol", symbol).Msg("failed to subscribe live day volume (Trade/TradeETH), falling back to batch fetch")
 	}

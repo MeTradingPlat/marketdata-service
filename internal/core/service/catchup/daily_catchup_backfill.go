@@ -20,36 +20,44 @@ const noWatermarkM1Fallback = 24 * time.Hour
 // y pide el resto en UNA suscripcion con el margen incremental de cada uno.
 // Si el fetch del lote falla, cae al backfill individual con reintentos --
 // peor lento que dejar un lote sin datos.
-func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) ([]string, bool) {
+func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) ([]string, bool, int) {
 	symbols := make([]string, 0, len(batch))
+	skippedLive := 0
 	for _, j := range batch {
+		if tf == domain.M1 && gateway.LiveSubscribed(j.symbol) {
+			skippedLive++
+			continue
+		}
 		symbols = append(symbols, j.symbol)
+	}
+	if len(symbols) == 0 {
+		return nil, false, skippedLive
 	}
 	watermarks, err := candles.GetWatermarksBatch(ctx, symbols, tf)
 	if err != nil {
-		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(batch)).
+		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(symbols)).
 			Msg("universe sweep watermark batch failed, falling back to per-symbol backfill")
-		for _, j := range batch {
-			backfillWithRetry(ctx, ingest, j)
+		for _, sym := range symbols {
+			backfillWithRetry(ctx, ingest, job{symbol: sym, tf: tf})
 		}
-		return nil, false
+		return nil, false, skippedLive
 	}
-	froms := make(map[string]time.Time, len(batch))
-	for _, j := range batch {
-		newest, ok := watermarks[j.symbol]
+	froms := make(map[string]time.Time, len(symbols))
+	for _, sym := range symbols {
+		newest, ok := watermarks[sym]
 		if ok {
 			if !ingestion.HasNewClosedBar(newest, duration) {
 				continue
 			}
-			froms[j.symbol] = newest.Add(-ingestion.IncrementalMargin * duration)
+			froms[sym] = newest.Add(-ingestion.IncrementalMargin * duration)
 			continue
 		}
 		if tf == domain.M1 {
-			froms[j.symbol] = time.Now().Add(-noWatermarkM1Fallback)
+			froms[sym] = time.Now().Add(-noWatermarkM1Fallback)
 		}
 	}
 	if len(froms) == 0 {
-		return nil, false
+		return nil, false, skippedLive
 	}
 
 	result, err := gateway.GetCandlesBatch(ctx, tf, froms)
@@ -64,14 +72,14 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 				}
 			}
 			saveBatchSweep(ctx, candles, ingest, result, tf, false)
-			return empty, true
+			return empty, true, skippedLive
 		}
 		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(froms)).
 			Msg("universe sweep batch fetch failed, falling back to per-symbol backfill")
 		for symbol := range froms {
 			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
 		}
-		return nil, false
+		return nil, false, skippedLive
 	}
 
 	var empty []string
@@ -82,7 +90,7 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 	}
 
 	saveBatchSweep(ctx, candles, ingest, result, tf, true)
-	return empty, false
+	return empty, false, skippedLive
 }
 
 // saveBatchSweep junta las velas cerradas de TODOS los simbolos del lote en un solo Save(); si falla, cae al backfill individual.

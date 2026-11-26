@@ -12,10 +12,9 @@ const (
 	muteChannelHealEvery   = 5 * time.Minute
 	muteChannelHealPerPass = 3
 	orphanReattachPerPass  = 500
+	silentHealPerPass      = 100
 )
 
-// StartLiveHealLoop reengancha simbolos huerfanos y recicla canales dxLink
-// mudos en horario extendido.
 func StartLiveHealLoop(ctx context.Context, healer out.LiveHealer) {
 	go func() {
 		ticker := time.NewTicker(liveHealInterval)
@@ -27,6 +26,8 @@ func StartLiveHealLoop(ctx context.Context, healer out.LiveHealer) {
 				return
 			case <-ticker.C:
 				now := time.Now()
+				healer.LogLiveHealth(now)
+				healer.HealSilentSymbols(ctx, now, silentHealPerPass)
 				healer.ReattachOrphans(ctx, now, orphanReattachPerPass)
 				if now.Sub(lastChannelHeal) >= muteChannelHealEvery {
 					lastChannelHeal = now

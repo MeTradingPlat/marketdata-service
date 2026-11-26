@@ -63,10 +63,7 @@ func (p *CandlePool) StopAllLive(ctx context.Context) {
 	p.lastClosed = make(map[string]domain.Candle)
 	p.currentMu.Unlock()
 
-	p.activityMu.Lock()
-	p.lastEventAt = make(map[string]time.Time)
-	p.pendingRevive = make(map[string]reviveState)
-	p.activityMu.Unlock()
+	p.resetActivityMaps()
 
 	log.Info().Int("symbols", len(stopped)).Msg("stopped all live M1 subscriptions for the maintenance window")
 }

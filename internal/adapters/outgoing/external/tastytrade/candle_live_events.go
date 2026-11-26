@@ -11,6 +11,7 @@ func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 	now := time.Now()
 	p.lastLiveEventAtUnixNano.Store(now.UnixNano())
 	p.noteLiveEvent(symbol, now)
+	p.noteNewBar(symbol, ev.Timestamp, now)
 	p.currentMu.Lock()
 	prev, exists := p.current[symbol]
 	last, hasLast := p.lastClosed[symbol]

@@ -74,7 +74,13 @@ func (p *CandlePool) FetchHistoryBatch(ctx context.Context, tf domain.Timeframe,
 	}
 	symbols := make([]string, 0, len(froms))
 	for symbol := range froms {
+		if tf == domain.M1 && p.LiveSubscribed(symbol) {
+			continue
+		}
 		symbols = append(symbols, symbol)
+	}
+	if len(symbols) == 0 {
+		return map[string][]domain.Candle{}, nil
 	}
 	sort.Strings(symbols)
 
@@ -98,30 +104,40 @@ func (p *CandlePool) FetchHistoryBatch(ctx context.Context, tf domain.Timeframe,
 		return nil, fmt.Errorf("allocating channel for %s history batch: %w", tf, err)
 	}
 
+	collector := newBatchHistoryCollector(tf)
+	dispatchIDs := make(map[string]uint64, len(symbols))
+	active := make([]string, 0, len(symbols))
 	for _, symbol := range symbols {
+		sym := symbol
+		id := p.registerDispatch(symbol, tf, "history-batch", func(ev rawCandleEvent) { collector.onCandle(sym, ev) })
+		if id == 0 {
+			continue
+		}
+		dispatchIDs[symbol] = id
+		active = append(active, symbol)
+	}
+	if len(active) == 0 {
+		unlockAll()
+		return map[string][]domain.Candle{}, nil
+	}
+
+	for _, symbol := range active {
 		ch.occupy(candleKey(symbol, tf))
 	}
 
-	collector := newBatchHistoryCollector(tf)
-	dispatchIDs := make(map[string]uint64, len(symbols))
-	for _, symbol := range symbols {
-		sym := symbol
-		dispatchIDs[symbol] = p.registerDispatch(symbol, tf, "history-batch", func(ev rawCandleEvent) { collector.onCandle(sym, ev) })
-	}
-
 	cleanup := func() {
-		for _, symbol := range symbols {
+		for _, symbol := range active {
 			ch.release(candleKey(symbol, tf))
 		}
-		_ = ch.channel.unsubscribeHistoryBatch(symbols, tf)
+		_ = ch.channel.unsubscribeHistoryBatch(active, tf)
 		time.AfterFunc(unsubscribeDrainPeriod, func() {
-			for _, symbol := range symbols {
+			for _, symbol := range active {
 				p.unregisterDispatchIfCurrent(symbol, tf, dispatchIDs[symbol], "history-batch")
 			}
 		})
 	}
 
-	if err := ch.channel.subscribeHistoryBatch(symbols, tf, froms); err != nil {
+	if err := ch.channel.subscribeHistoryBatch(active, tf, froms); err != nil {
 		cleanup()
 		unlockAll()
 		return nil, fmt.Errorf("subscribing history batch: %w", err)
