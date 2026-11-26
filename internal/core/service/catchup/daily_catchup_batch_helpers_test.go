@@ -36,25 +36,25 @@ func TestBatchHelpers_AndBackfillBatchWithRetry(t *testing.T) {
 	ingest := &fakeSweepIngest{}
 	jobs := []job{{symbol: "NVDA", tf: domain.M1}, {symbol: "AAPL", tf: domain.M1}}
 
-	syms, skipped := filterBatchNonLive(gw, jobs, domain.M1)
-	if !reflect.DeepEqual(syms, []string{"AAPL"}) || skipped != 1 {
-		t.Fatalf("filterBatchNonLive = (%v, %d), want ([AAPL], 1)", syms, skipped)
+	syms, skipped := filterBatchNonLiveSymbols(gw, jobs, domain.M1)
+	if !reflect.DeepEqual(syms, []string{"AAPL"}) || !reflect.DeepEqual(skipped, []string{"NVDA"}) {
+		t.Fatalf("filterBatchNonLiveSymbols = (%v, %v), want ([AAPL], [NVDA])", syms, skipped)
 	}
-	froms := buildBatchFroms([]string{"AAPL", "NEW"}, repo.watermarks, domain.M1, time.Minute)
+	froms, _, _ := partitionBatchWatermarks([]string{"AAPL", "NEW"}, repo.watermarks, domain.M1, time.Minute)
 	if len(froms) != 2 {
-		t.Fatalf("len(buildBatchFroms) = %d, want 2", len(froms))
+		t.Fatalf("len(partitionBatchWatermarks) = %d, want 2", len(froms))
 	}
 	if empty := emptyBatchSymbols(froms, gw.result); !reflect.DeepEqual(empty, []string{"NEW"}) {
 		t.Fatalf("emptyBatchSymbols = %v, want [NEW]", empty)
 	}
 
-	empty, partial, gotSkipped := backfillBatchWithRetry(context.Background(), gw, repo, ingest, jobs, domain.M1, time.Minute)
-	if partial || gotSkipped != 1 || len(empty) != 0 || repo.saveCalls != 1 {
-		t.Fatalf("backfillBatchWithRetry = (%v, %v, %d, saves=%d)", empty, partial, gotSkipped, repo.saveCalls)
+	o := backfillBatchWithOutcome(context.Background(), gw, repo, ingest, jobs, domain.M1, time.Minute)
+	if o.partial || o.skippedLive != 1 || len(o.empty) != 0 || repo.saveCalls != 1 {
+		t.Fatalf("backfillBatchWithOutcome = (%+v, saves=%d)", o, repo.saveCalls)
 	}
 
 	gw.err = errors.New("boom")
-	backfillBatchWithRetry(context.Background(), gw, repo, ingest, []job{{symbol: "AAPL", tf: domain.D1}}, domain.D1, 24*time.Hour)
+	backfillBatchWithOutcome(context.Background(), gw, repo, ingest, []job{{symbol: "AAPL", tf: domain.D1}}, domain.D1, 24*time.Hour)
 	if len(ingest.backfillCalls) == 0 {
 		t.Fatal("expected fallback to per-symbol backfill on error")
 	}

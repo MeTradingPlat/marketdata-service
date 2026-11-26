@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -86,42 +85,14 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 	}
 	latestDailies := latestDailyBySymbol(candles)
 	return execWithDeadlockRetry(ctx, func(ctx context.Context) error {
-		batch := &pgx.Batch{}
-		for _, c := range candles {
-			query := upsertCandleSQLCandles
-			if candleTable(c.Timeframe) == "candles_history" {
-				query = upsertCandleSQLCandlesHistory
-			}
-			batch.Queue(query, c.Symbol, string(c.Timeframe), c.Timestamp,
-				c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source, withWatermark)
-			if withWatermark {
-				batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
-			}
-		}
-		for _, c := range latestDailies {
-			batch.Queue(updateLastVolumeSQL, c.Symbol, c.Volume, c.Timestamp)
-		}
+		batch := buildCandleSaveBatch(candles, latestDailies, withWatermark)
 		results := r.writePool.SendBatch(ctx, batch)
 		defer results.Close()
-		var affected int64
-		for range candles {
-			tag, err := results.Exec()
-			if err != nil {
-				return fmt.Errorf("upserting candle batch: %w", err)
-			}
-			affected += tag.RowsAffected()
-			if withWatermark {
-				if _, err := results.Exec(); err != nil {
-					return fmt.Errorf("upserting watermark batch: %w", err)
-				}
-			}
+		affected, err := readCandleBatchResults(results, len(candles), len(latestDailies), withWatermark)
+		if err != nil {
+			return err
 		}
 		checkBatchRowsAffected(int64(len(candles)), affected, withWatermark)
-		for range latestDailies {
-			if _, err := results.Exec(); err != nil {
-				return fmt.Errorf("updating last volume: %w", err)
-			}
-		}
 		return nil
 	})
 }

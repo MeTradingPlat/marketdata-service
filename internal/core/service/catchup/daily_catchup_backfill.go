@@ -17,11 +17,6 @@ const (
 	outcomeErrored        = "errored"
 )
 
-func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) ([]string, bool, int) {
-	o := backfillBatchWithOutcome(ctx, gateway, candles, ingest, batch, tf, duration)
-	return o.empty, o.partial, o.skippedLive
-}
-
 func backfillBatchWithOutcome(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) batchOutcome {
 	var o batchOutcome
 	symbols, skippedSyms := filterBatchNonLiveSymbols(gateway, batch, tf)

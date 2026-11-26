@@ -42,34 +42,39 @@ func runUncoveredPhaseOutcome(ctx context.Context, ingest in.IngestCandlesServic
 	return outcome
 }
 
-func mergeBatchResult(mu *sync.Mutex, empty *[]string, partialBatches, skippedLive *int, batchEmpty []string, partial bool, skipped int) {
-	if len(batchEmpty) == 0 && !partial && skipped == 0 {
-		return
+type phaseSummaryFields struct {
+	warn               bool
+	emptySample        []string
+	includeSkippedLive bool
+}
+
+func buildPhaseSummaryFields(tf domain.Timeframe, s *phaseSummary, missingCount int) phaseSummaryFields {
+	var emptySample []string
+	if len(s.empty) > 0 {
+		emptySample = append([]string(nil), s.empty...)
+		sort.Strings(emptySample)
+		emptySample = emptySample[:min(len(emptySample), 50)]
 	}
-	mu.Lock()
-	if len(batchEmpty) > 0 {
-		*empty = append(*empty, batchEmpty...)
+	return phaseSummaryFields{
+		warn:               len(s.empty) > 0 || s.errored > 0 || missingCount > 0,
+		emptySample:        emptySample,
+		includeSkippedLive: tf == domain.M1 || s.skippedLive > 0,
 	}
-	if partial {
-		*partialBatches++
-	}
-	*skippedLive += skipped
-	mu.Unlock()
 }
 
 func logPhaseSummary(tf domain.Timeframe, s *phaseSummary, missingCount int, missingSample []string, elapsed time.Duration) {
+	fields := buildPhaseSummaryFields(tf, s, missingCount)
 	ev := log.Info()
-	if len(s.empty) > 0 || s.errored > 0 || missingCount > 0 {
+	if fields.warn {
 		ev = log.Warn()
 	}
-	if len(s.empty) > 0 {
-		sort.Strings(s.empty)
-		ev = ev.Strs("emptySample", s.empty[:min(len(s.empty), 50)])
+	if len(fields.emptySample) > 0 {
+		ev = ev.Strs("emptySample", fields.emptySample)
 	}
 	if missingCount > 0 {
 		ev = ev.Strs("missingSample", missingSample)
 	}
-	if tf == domain.M1 || s.skippedLive > 0 {
+	if fields.includeSkippedLive {
 		ev = ev.Int("skipped_live", s.skippedLive)
 	}
 	ev.Str("timeframe", string(tf)).

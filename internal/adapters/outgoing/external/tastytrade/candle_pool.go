@@ -79,8 +79,11 @@ type CandlePool struct {
 	// del unsubscribe (ver unsubscribeDrainPeriod), no una fuga.
 	orphanEvents int64
 
-	lateEvents int64
-	retired    retiredDispatch
+	lateEvents             int64
+	retired                retiredDispatch
+	futureLiveDiscards     sampledDiscardCounter
+	incompleteLiveDiscards sampledDiscardCounter
+	lateUnchangedDiscards  sampledDiscardCounter
 
 	// refreshCycle alterna que mitad de canales se refresca en cada llamada
 	// a RefreshLiveSubscriptions -- ver el comentario ahi mismo sobre por

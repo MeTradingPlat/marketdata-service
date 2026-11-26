@@ -1,6 +1,8 @@
 package tastytrade
 
 import (
+	"time"
+
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 )
 
@@ -29,5 +31,7 @@ func (p *CandlePool) handleLateCorrection(symbol string, ev rawCandleEvent, last
 	// sin ningun dato nuevo real.
 	if !unchanged {
 		p.dispatchClosed(symbol, corrected)
+		return
 	}
+	p.lateUnchangedDiscards.record(symbol, time.Now(), "discarded unchanged late candle correction")
 }

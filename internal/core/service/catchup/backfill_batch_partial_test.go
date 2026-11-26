@@ -33,8 +33,8 @@ func TestBackfillBatchWithRetry_PartialHistory(t *testing.T) {
 	ingest := &fakeSweepIngest{}
 
 	jobs := []job{{symbol: "AAPL", tf: domain.D1}, {symbol: "MSFT", tf: domain.D1}}
-	got, partial, _ := backfillBatchWithRetry(context.Background(), gw, repo, ingest, jobs, domain.D1, 24*time.Hour)
-	if !partial {
+	o := backfillBatchWithOutcome(context.Background(), gw, repo, ingest, jobs, domain.D1, 24*time.Hour)
+	if !o.partial {
 		t.Errorf("partial = false, want true")
 	}
 
@@ -44,8 +44,8 @@ func TestBackfillBatchWithRetry_PartialHistory(t *testing.T) {
 	if repo.lastWithWatermark != false {
 		t.Errorf("repo.lastWithWatermark = %v, want false", repo.lastWithWatermark)
 	}
-	if !reflect.DeepEqual(got, []string{"MSFT"}) {
-		t.Errorf("got %v, want [MSFT]", got)
+	if !reflect.DeepEqual(o.empty, []string{"MSFT"}) {
+		t.Errorf("got %v, want [MSFT]", o.empty)
 	}
 	if len(ingest.backfillCalls) != 0 {
 		t.Errorf("len(ingest.backfillCalls) = %d, want 0", len(ingest.backfillCalls))

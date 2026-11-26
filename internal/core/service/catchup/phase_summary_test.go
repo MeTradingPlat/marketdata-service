@@ -40,3 +40,15 @@ func TestBackfillBatchWithOutcome_D1CoveredWithoutWatermarkReprocesses(t *testin
 		t.Fatalf("backfillCalls = %v, want [NOWM]", ingest.backfillCalls)
 	}
 }
+
+func TestBuildPhaseSummaryFields(t *testing.T) {
+	s := &phaseSummary{empty: []string{"Z", "A"}, errored: 0, skippedLive: 0}
+	f := buildPhaseSummaryFields(domain.D1, s, 0)
+	if !f.warn || f.includeSkippedLive || len(f.emptySample) != 2 || f.emptySample[0] != "A" {
+		t.Fatalf("unexpected fields for D1: %+v", f)
+	}
+	fM1 := buildPhaseSummaryFields(domain.M1, &phaseSummary{}, 0)
+	if fM1.warn || !fM1.includeSkippedLive || len(fM1.emptySample) != 0 {
+		t.Fatalf("unexpected fields for M1: %+v", fM1)
+	}
+}

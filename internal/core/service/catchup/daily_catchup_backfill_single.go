@@ -5,21 +5,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
-	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/ingestion"
 	"github.com/rs/zerolog/log"
 )
-
-func saveBatchSweep(ctx context.Context, candles out.CandleRepository, ingest in.IngestCandlesService, result map[string][]domain.Candle, tf domain.Timeframe, withWatermark bool) {
-	var o batchOutcome
-	saveBatchOutcome(ctx, candles, ingest, result, tf, withWatermark, &o)
-}
-
-func backfillWithRetry(ctx context.Context, ingest in.IngestCandlesService, j job) bool {
-	return backfillOutcome(ctx, ingest, j) == outcomeEmpty
-}
 
 func backfillOutcome(ctx context.Context, ingest in.IngestCandlesService, j job) string {
 	var err error

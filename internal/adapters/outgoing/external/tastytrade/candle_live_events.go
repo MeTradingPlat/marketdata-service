@@ -6,9 +6,18 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 )
 
+const futureEventSkew = 2 * time.Minute
+
 // handleLiveEvent distingue actualizacion de la vela en formacion, cierre organico y correccion tardia de una vela ya cerrada (via dispatchClosed, fusionada contra lastClosed).
 func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
-	now := time.Now()
+	p.handleLiveEventAt(symbol, ev, time.Now())
+}
+
+func (p *CandlePool) handleLiveEventAt(symbol string, ev rawCandleEvent, now time.Time) {
+	if ev.Timestamp.After(now.Add(futureEventSkew)) {
+		p.futureLiveDiscards.record(symbol, now, "discarded live candle event with future timestamp")
+		return
+	}
 	p.lastLiveEventAtUnixNano.Store(now.UnixNano())
 	p.noteLiveEvent(symbol, now)
 	p.noteNewBar(symbol, ev.Timestamp, now)
@@ -101,6 +110,7 @@ func (p *CandlePool) flushFormingCandles() {
 
 func (p *CandlePool) dispatchClosed(symbol string, c domain.Candle) {
 	if !c.IsComplete() {
+		p.incompleteLiveDiscards.record(symbol, time.Now(), "discarded incomplete live candle")
 		return
 	}
 	p.liveMu.Lock()

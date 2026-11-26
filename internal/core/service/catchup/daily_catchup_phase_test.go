@@ -2,7 +2,6 @@ package catchup
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -35,17 +34,14 @@ func TestRunPhase_CoversUncoveredAndCovered(t *testing.T) {
 func TestRunPhase_InvalidTimeframeAndMergeBatchResult(t *testing.T) {
 	runPhase(context.Background(), &fakeBatchGateway{}, &fakeSweepCandleRepo{}, &fakeSweepIngest{}, nil, nil, domain.Timeframe("BAD"), 1)
 
-	var mu sync.Mutex
-	var empty []string
-	var partial, skipped int
-	mergeBatchResult(&mu, &empty, &partial, &skipped, []string{"A"}, true, 2)
-	if len(empty) != 1 || partial != 1 || skipped != 2 {
-		t.Fatalf("mergeBatchResult = (%v, %d, %d), want ([A], 1, 2)", empty, partial, skipped)
-	}
-	mergeBatchResult(&mu, &empty, &partial, &skipped, nil, false, 0)
-	if len(empty) != 1 || partial != 1 || skipped != 2 {
-		t.Fatalf("no-op mergeBatchResult changed state: (%v, %d, %d)", empty, partial, skipped)
-	}
 	s := newPhaseSummary([]job{{symbol: "A"}}, nil)
+	s.merge(batchOutcome{empty: []string{"A"}, partial: true, skippedLive: 2})
+	if len(s.empty) != 1 || s.partialBatches != 1 || s.skippedLive != 2 {
+		t.Fatalf("merge = (%v, %d, %d), want ([A], 1, 2)", s.empty, s.partialBatches, s.skippedLive)
+	}
+	s.merge(batchOutcome{})
+	if len(s.empty) != 1 || s.partialBatches != 1 || s.skippedLive != 2 {
+		t.Fatalf("no-op merge changed state: (%v, %d, %d)", s.empty, s.partialBatches, s.skippedLive)
+	}
 	logPhaseSummary(domain.D1, s, 1, []string{"A"}, time.Second)
 }
