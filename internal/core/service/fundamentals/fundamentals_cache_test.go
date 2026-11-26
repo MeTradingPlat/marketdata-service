@@ -153,13 +153,14 @@ func TestFundamentalsCache_MergeMarketMetrics_UpdatesOnlyMetricsFields(t *testin
 	cache := NewFundamentalsCache(&fakeFundamentalsRepo{}, &fakeSymbolRepo{}, nil)
 	cache.MergeDividends([]domain.Fundamentals{{Symbol: "AAPL", DividendAmount: 0.25}})
 
-	cache.MergeMarketMetrics([]domain.Fundamentals{{Symbol: "AAPL", MarketCap: 100, Eps: 3.5}})
+	eps := 3.5
+	cache.MergeMarketMetrics([]domain.Fundamentals{{Symbol: "AAPL", MarketCap: 100, Eps: &eps}})
 
 	got := cache.GetBatch([]string{"AAPL"})["AAPL"]
 	if got.DividendAmount != 0.25 {
 		t.Errorf("expected existing dividends to be preserved, got %+v", got)
 	}
-	if got.MarketCap != 100 || got.Eps != 3.5 {
+	if got.MarketCap != 100 || got.Eps == nil || *got.Eps != 3.5 {
 		t.Errorf("expected metrics to apply, got %+v", got)
 	}
 	if got.MetricsUpdatedAt == nil {

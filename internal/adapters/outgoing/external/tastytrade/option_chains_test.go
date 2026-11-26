@@ -79,9 +79,9 @@ func TestOpenInterest_PrefersRegularMonthlyAndSendsOnlyMonthlySymbols(t *testing
 		}
 	})
 
-	val, ok := g.OpenInterest(context.Background(), "SPY")
-	if !ok || val != 200 {
-		t.Fatalf("OpenInterest = (%v, %v), want (200, true)", val, ok)
+	val, ok, err := g.OpenInterest(context.Background(), "SPY")
+	if err != nil || !ok || val != 200 {
+		t.Fatalf("OpenInterest = (%v, %v, %v), want (200, true, nil)", val, ok, err)
 	}
 	wantQueries := [][]string{{"MONTHLY_C", "MONTHLY_P"}}
 	if !reflect.DeepEqual(gotByType, wantQueries) {
@@ -128,11 +128,11 @@ func TestOpenInterest_CacheHitsAvoidDuplicateRequests(t *testing.T) {
 		}
 	})
 
-	val1, ok1 := g.OpenInterest(context.Background(), "AAPL")
-	val2, ok2 := g.OpenInterest(context.Background(), "AAPL")
+	val1, ok1, err1 := g.OpenInterest(context.Background(), "AAPL")
+	val2, ok2, err2 := g.OpenInterest(context.Background(), "AAPL")
 
-	if !ok1 || val1 != 75 || !ok2 || val2 != 75 {
-		t.Fatalf("got (%v,%v) and (%v,%v), want (75,true)", val1, ok1, val2, ok2)
+	if err1 != nil || err2 != nil || !ok1 || val1 != 75 || !ok2 || val2 != 75 {
+		t.Fatalf("got (%v,%v,%v) and (%v,%v,%v), want (75,true,nil)", val1, ok1, err1, val2, ok2, err2)
 	}
 	if chainCalls != 1 || quoteCalls != 1 {
 		t.Fatalf("chainCalls=%d quoteCalls=%d, want 1 and 1", chainCalls, quoteCalls)
@@ -155,9 +155,9 @@ func TestOpenInterest_EmptyChainReturnsFalseWithoutCallingByType(t *testing.T) {
 		}
 	})
 
-	val, ok := g.OpenInterest(context.Background(), "NOOPT")
-	if ok || val != 0 {
-		t.Fatalf("OpenInterest = (%v, %v), want (0, false)", val, ok)
+	val, ok, err := g.OpenInterest(context.Background(), "NOOPT")
+	if err != nil || ok || val != 0 {
+		t.Fatalf("OpenInterest = (%v, %v, %v), want (0, false, nil)", val, ok, err)
 	}
 	if quoteCalls != 0 {
 		t.Fatalf("quoteCalls = %d, want 0", quoteCalls)
@@ -214,9 +214,9 @@ func TestOpenInterest_SplitsMoreThan100ContractsIntoChunks(t *testing.T) {
 		}
 	})
 
-	val, ok := g.OpenInterest(context.Background(), "QQQ")
-	if !ok || val != 2400 {
-		t.Fatalf("OpenInterest = (%v, %v), want (2400, true)", val, ok)
+	val, ok, err := g.OpenInterest(context.Background(), "QQQ")
+	if err != nil || !ok || val != 2400 {
+		t.Fatalf("OpenInterest = (%v, %v, %v), want (2400, true, nil)", val, ok, err)
 	}
 	wantSizes := []int{100, 100, 40}
 	if !reflect.DeepEqual(chunkSizes, wantSizes) {
@@ -268,9 +268,9 @@ func TestOpenInterest_WeekliesOnlyFallsBackToNearestFuture(t *testing.T) {
 		}
 	})
 
-	val, ok := g.OpenInterest(context.Background(), "WEEK")
-	if !ok || val != 30 {
-		t.Fatalf("OpenInterest = (%v, %v), want (30, true)", val, ok)
+	val, ok, err := g.OpenInterest(context.Background(), "WEEK")
+	if err != nil || !ok || val != 30 {
+		t.Fatalf("OpenInterest = (%v, %v, %v), want (30, true, nil)", val, ok, err)
 	}
 	if !reflect.DeepEqual(gotSymbols, []string{"NEAR_C", "NEAR_P"}) {
 		t.Fatalf("equity-option symbols = %v, want [NEAR_C NEAR_P]", gotSymbols)

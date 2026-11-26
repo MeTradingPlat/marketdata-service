@@ -19,6 +19,9 @@ type FundamentalRealtime struct {
 
 	DayVolume         *int64   `json:"dayVolume,omitempty"`
 	DaysUntilEarnings *int     `json:"daysUntilEarnings,omitempty"`
+	NextEarningsDate  *string  `json:"nextEarningsDate,omitempty"`
+	LastPrice         *float64 `json:"lastPrice,omitempty"`
+	OpenInterest      *float64 `json:"openInterest,omitempty"`
 	PreMarketVolume   *int64   `json:"preMarketVolume,omitempty"`
 	PostMarketVolume  *int64   `json:"postMarketVolume,omitempty"`
 	// PrevPostMarketVolume: postmarket de la sesion ANTERIOR -- ver

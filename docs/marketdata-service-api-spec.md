@@ -15,6 +15,7 @@ El servicio opera bajo un modelo **Híbrido de Alta Performance**:
 - **`GET /marketdata/quote/{symbol}`**: Precio real-time (Bid/Ask/Last).
 - **`GET /marketdata/options/chain/{symbol}`**: Cadena de opciones jerárquica con Griegas en vivo.
 - **`GET /marketdata/fundamentals/{symbol}`**: Datos fundamentales con predicción de Earnings.
+- **`POST /marketdata/fundamentals/realtime`**: Snapshot realtime de fundamentales e intradía para múltiples símbolos (Body: `["AAPL", "MSFT", ...]`).
 - **`POST /marketdata/fundamentals/batch`**: Hidratación masiva de fundamentales (Body: `["AAPL", "MSFT", ...]`).
 
 ### 2. Datos Históricos (Candles)
@@ -67,6 +68,21 @@ El servicio opera bajo un modelo **Híbrido de Alta Performance**:
   "tradingHalted": false
 }
 ```
+
+### FundamentalRealtime (`POST /marketdata/fundamentals/realtime`)
+Campos opcionales se omiten cuando no hay dato (`omitempty` -> `null`).
+```json
+{
+  "symbol": "AAPL",
+  "lastPrice": 195.4,
+  "openInterest": 125000,
+  "eps": 6.42,
+  "nextEarningsDate": "2024-08-01",
+  "daysUntilEarnings": 14,
+  "tradingStatus": "ACTIVE"
+}
+```
+`tradingStatus` es `"ACTIVE"` o `"HALTED"` (si el proveedor omite el estado de halt se considera `"ACTIVE"`) y se omite si aun no hay dato. `eps` distingue `0` real de ausencia de dato (`null`/omitido).
 
 ---
 

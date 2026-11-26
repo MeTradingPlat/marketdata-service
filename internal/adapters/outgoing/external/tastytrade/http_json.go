@@ -41,7 +41,7 @@ func getJSONOnce[T any](ctx context.Context, g *Gateway, url, token string) (T, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return out, resp.StatusCode, fmt.Errorf("%s returned status %d", url, resp.StatusCode)
+		return out, resp.StatusCode, &httpStatusError{url: url, status: resp.StatusCode}
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {

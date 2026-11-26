@@ -41,6 +41,8 @@ func RefreshOpenInterest(ctx context.Context, gateway out.OpenInterestGateway, f
 		mu            sync.Mutex
 		found         = make(map[string]float64)
 		attemptedOnly []string
+		errCount      int
+		lastErr       error
 		wg            sync.WaitGroup
 	)
 
@@ -52,9 +54,12 @@ func RefreshOpenInterest(ctx context.Context, gateway out.OpenInterestGateway, f
 				if ctx.Err() != nil {
 					return
 				}
-				val, ok := gateway.OpenInterest(ctx, symbol)
+				val, ok, err := gateway.OpenInterest(ctx, symbol)
 				mu.Lock()
-				if ok && val > 0 {
+				if err != nil {
+					errCount++
+					lastErr = err
+				} else if ok && val > 0 {
 					found[symbol] = val
 				} else {
 					attemptedOnly = append(attemptedOnly, symbol)
@@ -70,10 +75,20 @@ func RefreshOpenInterest(ctx context.Context, gateway out.OpenInterestGateway, f
 	}
 	fundamentalsCache.MergeOpenInterest(found, attemptedOnly)
 
-	log.Info().
-		Int("checked", len(stale)).
-		Int("found", len(found)).
-		Dur("elapsed", time.Since(start)).
-		Msg("open interest refresh finished")
+	if errCount > 0 {
+		log.Warn().
+			Err(lastErr).
+			Int("checked", len(stale)).
+			Int("found", len(found)).
+			Int("errors", errCount).
+			Dur("elapsed", time.Since(start)).
+			Msg("open interest refresh finished with errors")
+	} else {
+		log.Info().
+			Int("checked", len(stale)).
+			Int("found", len(found)).
+			Dur("elapsed", time.Since(start)).
+			Msg("open interest refresh finished")
+	}
 	return nil
 }

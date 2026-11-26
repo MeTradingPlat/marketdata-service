@@ -3,6 +3,7 @@ package tastytrade
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,7 +58,7 @@ func (g *Gateway) fetchMarketMetricsChunk(ctx context.Context, symbols []string)
 		f := domain.Fundamentals{
 			Symbol:                      item.Symbol,
 			Beta:                        parseFloatOrZero(item.Beta),
-			Eps:                         parseFloatOrZero(item.EarningsPerShare),
+			Eps:                         parseFloatPtr(item.EarningsPerShare),
 			BorrowRate:                  parseFloatOrZero(item.BorrowRate),
 			Liquidity:                   parseFloatOrZero(item.LiquidityValue),
 			ImpliedVolatilityIndex:      parseFloatOrZero(item.ImpliedVolatilityIndex),
@@ -79,4 +80,15 @@ func (g *Gateway) fetchMarketMetricsChunk(ctx context.Context, symbols []string)
 		result = append(result, f)
 	}
 	return result, nil
+}
+
+func parseFloatPtr(s *string) *float64 {
+	if s == nil {
+		return nil
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(*s), 64)
+	if err != nil {
+		return nil
+	}
+	return &v
 }

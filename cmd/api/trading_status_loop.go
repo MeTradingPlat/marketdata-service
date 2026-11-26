@@ -40,8 +40,9 @@ func StartTradingStatusLoop(ctx context.Context, gateway out.MarketDataGateway, 
 				// MergeDividends) apenas Postgres confirma -- un HALT nuevo se
 				// ve en /marketdata/fundamentals/realtime al instante, no hay
 				// que esperar ni un ReloadAll aparte.
-				catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache)
-				lastTradingStatusAtUnix.Store(time.Now().Unix())
+				if err := catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentalsRepo, fundamentalsCache); err == nil {
+					lastTradingStatusAtUnix.Store(time.Now().Unix())
+				}
 			}
 		}
 	}()

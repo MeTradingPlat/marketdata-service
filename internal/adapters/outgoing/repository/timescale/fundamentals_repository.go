@@ -23,7 +23,7 @@ const fundamentalsSelectSQL = `
 	COALESCE(d.dividend_amount, 0), COALESCE(d.dividend_frequency, 0),
 	COALESCE(d.trading_status, ''), COALESCE(d.halt_start_time, -1), COALESCE(d.halt_end_time, -1),
 	d.market_data_updated_at,
-	COALESCE(d.market_cap, 0), COALESCE(d.eps, 0), COALESCE(d.beta, 0),
+	COALESCE(d.market_cap, 0), d.eps, COALESCE(d.beta, 0),
 	COALESCE(d.lendability, ''), COALESCE(d.borrow_rate, 0),
 	COALESCE(d.liquidity, 0), COALESCE(d.liquidity_rating, 0),
 	COALESCE(d.implied_volatility_index, 0), COALESCE(d.implied_volatility_rank, 0),

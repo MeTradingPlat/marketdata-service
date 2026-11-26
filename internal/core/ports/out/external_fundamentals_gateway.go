@@ -68,5 +68,5 @@ type DayVolumeGateway interface {
 // adaptador) -- devuelve (0, false) cuando el simbolo no tiene opciones,
 // para que el llamador omita el campo en vez de escribir un 0.
 type OpenInterestGateway interface {
-	OpenInterest(ctx context.Context, symbol string) (float64, bool)
+	OpenInterest(ctx context.Context, symbol string) (float64, bool, error)
 }

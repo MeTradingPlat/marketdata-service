@@ -2,6 +2,7 @@ package catchup
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -19,11 +20,11 @@ import (
 // cmd/api/trading_status_loop.go). fundamentalsCache se actualiza al toque
 // (MergeDividends) apenas Postgres confirma -- no hace falta esperar al
 // proximo ReloadAll para que un halt recien detectado se vea reflejado.
-func RefreshTradingStatus(ctx context.Context, gateway out.MarketDataGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache) {
+func RefreshTradingStatus(ctx context.Context, gateway out.MarketDataGateway, symbolsRepo out.SymbolRepository, fundamentalsRepo out.FundamentalsRepository, fundamentalsCache *fundamentalscache.FundamentalsCache) error {
 	tracked, err := symbolsRepo.Tracked(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("trading status refresh: failed to list tracked symbols")
-		return
+		return fmt.Errorf("listing tracked symbols for trading status: %w", err)
 	}
 	symbols := toSymbolStrings(tracked)
 
@@ -31,14 +32,15 @@ func RefreshTradingStatus(ctx context.Context, gateway out.MarketDataGateway, sy
 	dividends, err := gateway.DividendInfo(ctx, symbols)
 	if err != nil {
 		log.Error().Err(err).Msg("dividend/halt refresh failed")
-		return
+		return fmt.Errorf("fetching dividend/halt info: %w", err)
 	}
 	if err := fundamentalsRepo.UpsertDividends(ctx, dividends); err != nil {
 		log.Error().Err(err).Msg("upserting dividend/halt refresh failed")
-		return
+		return fmt.Errorf("upserting dividend/halt info: %w", err)
 	}
 	fundamentalsCache.MergeDividends(dividends)
 	log.Info().Int("symbols", len(symbols)).Dur("elapsed", time.Since(start)).Msg("trading status refresh finished")
+	return nil
 }
 
 // RefreshMarketMetrics trae market-cap/beta/liquidez/IV/proximo earnings

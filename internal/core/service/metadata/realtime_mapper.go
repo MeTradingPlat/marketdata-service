@@ -47,6 +47,10 @@ func toRealtime(symbol string, equity domain.Symbol, f domain.Fundamentals, snap
 	if f.PrevPostMarketVolumeUpdatedAt != nil {
 		out.PrevPostMarketVolume = f.PrevPostMarketVolume
 	}
+	if f.OpenInterest != nil {
+		oi := *f.OpenInterest
+		out.OpenInterest = &oi
+	}
 
 	return out
 }
@@ -87,6 +91,10 @@ func applyIntraday(out *dto.FundamentalRealtime, snap domain.IntradaySnapshot) {
 		v := snap.PostMarketClose
 		out.PostMarketClose = &v
 	}
+	if snap.CurrentPrice != 0 {
+		v := snap.CurrentPrice
+		out.LastPrice = &v
+	}
 }
 
 func applyDividendAndHalt(out *dto.FundamentalRealtime, f domain.Fundamentals) {
@@ -94,8 +102,10 @@ func applyDividendAndHalt(out *dto.FundamentalRealtime, f domain.Fundamentals) {
 	out.DividendAmount = &amount
 	freq := strconv.FormatFloat(f.DividendFrequency, 'f', -1, 64)
 	out.DividendFrequency = &freq
-	status := f.TradingStatus
-	out.TradingStatus = &status
+	if f.TradingStatus != "" {
+		status := f.TradingStatus
+		out.TradingStatus = &status
+	}
 	if f.HaltStartTime >= 0 {
 		out.HaltStartTime = &f.HaltStartTime
 	}
@@ -104,7 +114,7 @@ func applyDividendAndHalt(out *dto.FundamentalRealtime, f domain.Fundamentals) {
 	}
 }
 
-// marketCap/eps/beta/liquidity/IV en 0 no son un dato real (confirmado en
+// marketCap/beta/liquidity/IV en 0 no son un dato real (confirmado en
 // vivo con MSTU, un ETF apalancado sin market cap ni EPS de TastyTrade) --
 // mismo criterio "0 no es un dato" que applyIntraday de arriba, que estos
 // campos no tenian: un MARKET_CAP MENOR_QUE en signal-processing-service
@@ -115,8 +125,8 @@ func applyMarketMetrics(out *dto.FundamentalRealtime, f domain.Fundamentals, sna
 	if marketCap := domain.MarketCapLive(f.MarketCap, f.SharesOutstanding, snap); marketCap != 0 {
 		out.MarketCap = &marketCap
 	}
-	if f.Eps != 0 {
-		eps := f.Eps
+	if f.Eps != nil {
+		eps := *f.Eps
 		out.Eps = &eps
 	}
 	if f.Beta != 0 {
@@ -147,5 +157,7 @@ func applyMarketMetrics(out *dto.FundamentalRealtime, f domain.Fundamentals, sna
 	if domain.IsFutureOrToday(f.NextEarningsDate) {
 		days := domain.DaysUntil(f.NextEarningsDate)
 		out.DaysUntilEarnings = &days
+		next := f.NextEarningsDate
+		out.NextEarningsDate = &next
 	}
 }

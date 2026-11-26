@@ -68,7 +68,7 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 			TradingStatus: fundamentals.TradingStatus,
 
 			MarketCap:                   nonzeroOrNil(domain.MarketCapLive(fundamentals.MarketCap, fundamentals.SharesOutstanding, snapshot)),
-			Eps:                         nonzeroOrNil(fundamentals.Eps),
+			Eps:                         fundamentals.Eps,
 			Beta:                        nonzeroOrNil(fundamentals.Beta),
 			OpenInterest:                fundamentals.OpenInterest,
 			Lendability:                 fundamentals.Lendability,

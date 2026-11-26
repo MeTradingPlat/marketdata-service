@@ -4,8 +4,6 @@ import (
 	"context"
 	"strconv"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // OpenInterest suma el open interest del vencimiento mensual mas cercano
@@ -15,32 +13,32 @@ import (
 // error: no es un fallo del servicio, es un dato que no existe -- el
 // detalle lo omite y el frontend muestra N/A (misma disciplina null-vs-0
 // del resto de fundamentales).
-func (g *Gateway) OpenInterest(ctx context.Context, symbol string) (float64, bool) {
-	if value, found, ok := g.openInterestCache.get(symbol); ok {
-		return value, found
+func (g *Gateway) OpenInterest(ctx context.Context, symbol string) (float64, bool, error) {
+	if value, found, err, ok := g.openInterestCache.get(symbol); ok {
+		return value, found, err
 	}
 
 	expirations, err := g.optionExpirations(ctx, symbol)
 	if err != nil {
-		log.Debug().Err(err).Str("symbol", symbol).Msg("open interest: no option chain available")
-		g.openInterestCache.put(symbol, 0, false)
-		return 0, false
+		if isNotFoundError(err) {
+			g.openInterestCache.put(symbol, 0, false)
+			return 0, false, nil
+		}
+		return g.openInterestFailure(ctx, symbol, "open interest: failed to load option chain", err)
 	}
 
 	expiration, ok := frontMonthlyExpiration(expirations, time.Now())
 	if !ok {
 		g.openInterestCache.put(symbol, 0, false)
-		return 0, false
+		return 0, false, nil
 	}
 
 	total, err := g.sumOpenInterest(ctx, expiration)
 	if err != nil {
-		log.Debug().Err(err).Str("symbol", symbol).Msg("open interest: failed to load front month quotes")
-		g.openInterestCache.put(symbol, 0, false)
-		return 0, false
+		return g.openInterestFailure(ctx, symbol, "open interest: failed to load front month quotes", err)
 	}
 	g.openInterestCache.put(symbol, total, total > 0)
-	return total, total > 0
+	return total, total > 0, nil
 }
 
 // openInterestValue tolera el numero crudo o en string -- TastyTrade

@@ -55,7 +55,7 @@ type Fundamentals struct {
 	PrevPostMarketVolumeUpdatedAt *time.Time `json:"-"`
 
 	MarketCap                   float64    `json:"marketCap"`
-	Eps                         float64    `json:"eps"`
+	Eps                         *float64   `json:"eps"`
 	Beta                        float64    `json:"beta"`
 	Lendability                 string     `json:"lendability"`
 	BorrowRate                  float64    `json:"borrowRate"`
