@@ -8,12 +8,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func (p *CandlePool) HealSilentSymbols(ctx context.Context, now time.Time, limit int) int {
+func (p *CandlePool) canHealSilent(now time.Time, limit int) bool {
 	if limit <= 0 || !p.Connected() || !isRegularSessionET(now) {
-		return 0
+		return false
 	}
 	age := p.LastLiveEventAge()
-	if age == 0 || age > liveDataSilenceThreshold {
+	return age > 0 && age <= liveDataSilenceThreshold
+}
+
+func (p *CandlePool) HealSilentSymbols(ctx context.Context, now time.Time, limit int) int {
+	if !p.canHealSilent(now, limit) {
 		return 0
 	}
 	healed := 0

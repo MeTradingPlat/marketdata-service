@@ -2,10 +2,7 @@ package tastytrade
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"sort"
-	"sync"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -72,86 +69,21 @@ func (p *CandlePool) FetchHistoryBatch(ctx context.Context, tf domain.Timeframe,
 	if len(froms) == 0 {
 		return map[string][]domain.Candle{}, nil
 	}
-	symbols := make([]string, 0, len(froms))
-	for symbol := range froms {
-		if tf == domain.M1 && p.LiveSubscribed(symbol) {
-			continue
-		}
-		symbols = append(symbols, symbol)
-	}
+	symbols := p.batchTargetSymbols(tf, froms)
 	if len(symbols) == 0 {
 		return map[string][]domain.Candle{}, nil
 	}
-	sort.Strings(symbols)
-
-	// Mismo lock por clave que FetchHistory, en orden lexicografico para
-	// no interbloquearse con un FetchHistory por-simbolo concurrente.
-	unlockAll := func() {
-		for _, symbol := range symbols {
-			if lockVal, ok := p.historyLocks.Load(candleKey(symbol, tf)); ok {
-				lockVal.(*sync.Mutex).Unlock()
-			}
-		}
-	}
-	for _, symbol := range symbols {
-		lockVal, _ := p.historyLocks.LoadOrStore(candleKey(symbol, tf), &sync.Mutex{})
-		lockVal.(*sync.Mutex).Lock()
-	}
+	unlockAll := p.lockHistorySymbols(symbols, tf)
+	defer unlockAll()
 
 	ch, err := p.allocator.allocate(ctx)
 	if err != nil {
-		unlockAll()
 		return nil, fmt.Errorf("allocating channel for %s history batch: %w", tf, err)
 	}
-
 	collector := newBatchHistoryCollector(tf)
-	dispatchIDs := make(map[string]uint64, len(symbols))
-	active := make([]string, 0, len(symbols))
-	for _, symbol := range symbols {
-		sym := symbol
-		id := p.registerDispatch(symbol, tf, "history-batch", func(ev rawCandleEvent) { collector.onCandle(sym, ev) })
-		if id == 0 {
-			continue
-		}
-		dispatchIDs[symbol] = id
-		active = append(active, symbol)
-	}
+	active, dispatchIDs := p.registerBatchDispatch(symbols, tf, collector)
 	if len(active) == 0 {
-		unlockAll()
 		return map[string][]domain.Candle{}, nil
 	}
-
-	for _, symbol := range active {
-		ch.occupy(candleKey(symbol, tf))
-	}
-
-	cleanup := func() {
-		for _, symbol := range active {
-			ch.release(candleKey(symbol, tf))
-		}
-		_ = ch.channel.unsubscribeHistoryBatch(active, tf)
-		time.AfterFunc(unsubscribeDrainPeriod, func() {
-			for _, symbol := range active {
-				p.unregisterDispatchIfCurrent(symbol, tf, dispatchIDs[symbol], "history-batch")
-			}
-		})
-	}
-
-	if err := ch.channel.subscribeHistoryBatch(active, tf, froms); err != nil {
-		cleanup()
-		unlockAll()
-		return nil, fmt.Errorf("subscribing history batch: %w", err)
-	}
-	if err := waitForData(ctx, collector.settled, batchHistoryWait(froms)); err != nil {
-		cleanup()
-		unlockAll()
-		if errors.Is(err, domain.ErrPartialHistory) {
-			return collector.complete(), err
-		}
-		return nil, err
-	}
-	result := collector.complete()
-	cleanup()
-	unlockAll()
-	return result, nil
+	return p.fetchBatchOnChannel(ctx, ch, active, tf, froms, collector, dispatchIDs)
 }

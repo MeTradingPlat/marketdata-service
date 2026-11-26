@@ -22,27 +22,8 @@ func (p *CandlePool) handleLiveEvent(symbol string, ev rawCandleEvent) {
 	// un tick a tiempo, pero lastClosed s? tiene ese minuto). En los dos
 	// casos hay que fusionar contra lastClosed, no arrancar una vela "nueva"
 	// para un minuto que el sistema ya dio por cerrado y publico.
-	isLateCorrection := (exists && ev.Timestamp.Before(prev.Timestamp)) ||
-		(!exists && hasLast && !ev.Timestamp.After(last.Timestamp))
-	if isLateCorrection {
-		base := domain.Candle{}
-		if hasLast && last.Timestamp.Equal(ev.Timestamp) {
-			base = last
-		}
-		corrected := mergeCandle(base, ev, symbol, domain.M1)
-		unchanged := candleValuesEqual(corrected, base)
-		p.lastClosed[symbol] = corrected
-		p.currentMu.Unlock()
-		// unchanged descarta el replay del refresco periodico de suscripcion
-		// (RefreshLiveSubscriptions pide el historial de los ultimos 2 min por
-		// canal cada minuto para TODO simbolo en vivo, no solo los que de
-		// verdad tuvieron una correccion) -- sin este filtro, cada vuelta
-		// reencolaba en liveSaveBuffer las mismas velas ya guardadas de los
-		// ~13k simbolos en vivo, multiplicando el tamaño del lote de guardado
-		// sin ningun dato nuevo real.
-		if !unchanged {
-			p.dispatchClosed(symbol, corrected)
-		}
+	if isLateCandleEvent(ev, prev, last, exists, hasLast) {
+		p.handleLateCorrection(symbol, ev, last, hasLast)
 		return
 	}
 

@@ -93,7 +93,7 @@ func TestHealMuteChannels_SkipsMuteChannelOutsideRegularSession(t *testing.T) {
 		p.liveSubs[sym] = func(domain.Candle) {}
 		p.noteLiveEvent(sym, now.Add(-20*time.Minute))
 	}
-	p.lastLiveEventAtUnixNano.Store(time.Now().UnixNano())
+	p.lastLiveEventAtUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
 
 	if got := p.HealMuteChannels(ctx, now, 3); got != 0 {
 		t.Fatalf("HealMuteChannels = %d, want 0", got)
@@ -123,7 +123,7 @@ func TestHealMuteChannels_RecyclesMuteChannel(t *testing.T) {
 		p.liveSubs[sym] = func(domain.Candle) {}
 		p.noteLiveEvent(sym, now.Add(-20*time.Minute))
 	}
-	p.lastLiveEventAtUnixNano.Store(time.Now().UnixNano())
+	p.lastLiveEventAtUnixNano.Store(time.Now().Add(-time.Second).UnixNano())
 
 	if got := p.HealMuteChannels(ctx, now, 3); got != 1 {
 		t.Fatalf("HealMuteChannels = %d, want 1", got)

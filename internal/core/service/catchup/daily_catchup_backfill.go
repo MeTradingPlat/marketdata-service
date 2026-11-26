@@ -21,15 +21,7 @@ const noWatermarkM1Fallback = 24 * time.Hour
 // Si el fetch del lote falla, cae al backfill individual con reintentos --
 // peor lento que dejar un lote sin datos.
 func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, batch []job, tf domain.Timeframe, duration time.Duration) ([]string, bool, int) {
-	symbols := make([]string, 0, len(batch))
-	skippedLive := 0
-	for _, j := range batch {
-		if tf == domain.M1 && gateway.LiveSubscribed(j.symbol) {
-			skippedLive++
-			continue
-		}
-		symbols = append(symbols, j.symbol)
-	}
+	symbols, skippedLive := filterBatchNonLive(gateway, batch, tf)
 	if len(symbols) == 0 {
 		return nil, false, skippedLive
 	}
@@ -42,55 +34,33 @@ func backfillBatchWithRetry(ctx context.Context, gateway out.MarketDataGateway, 
 		}
 		return nil, false, skippedLive
 	}
-	froms := make(map[string]time.Time, len(symbols))
-	for _, sym := range symbols {
-		newest, ok := watermarks[sym]
-		if ok {
-			if !ingestion.HasNewClosedBar(newest, duration) {
-				continue
-			}
-			froms[sym] = newest.Add(-ingestion.IncrementalMargin * duration)
-			continue
-		}
-		if tf == domain.M1 {
-			froms[sym] = time.Now().Add(-noWatermarkM1Fallback)
-		}
-	}
+	froms := buildBatchFroms(symbols, watermarks, tf, duration)
 	if len(froms) == 0 {
 		return nil, false, skippedLive
 	}
+	return fetchAndSaveBatch(ctx, gateway, candles, ingest, froms, tf, skippedLive)
+}
 
+func fetchAndSaveBatch(ctx context.Context, gateway out.MarketDataGateway, candles out.CandleRepository, ingest in.IngestCandlesService, froms map[string]time.Time, tf domain.Timeframe, skippedLive int) ([]string, bool, int) {
 	result, err := gateway.GetCandlesBatch(ctx, tf, froms)
-	if err != nil {
-		if errors.Is(err, domain.ErrPartialHistory) {
-			log.Warn().Str("timeframe", string(tf)).Int("symbols", len(froms)).
-				Msg("universe sweep batch cut by timeout, saving without watermark")
-			var empty []string
-			for symbol := range froms {
-				if len(result[symbol]) == 0 {
-					empty = append(empty, symbol)
-				}
-			}
-			saveBatchSweep(ctx, candles, ingest, result, tf, false)
-			return empty, true, skippedLive
-		}
-		log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(froms)).
-			Msg("universe sweep batch fetch failed, falling back to per-symbol backfill")
-		for symbol := range froms {
-			backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
-		}
-		return nil, false, skippedLive
+	if err == nil {
+		empty := emptyBatchSymbols(froms, result)
+		saveBatchSweep(ctx, candles, ingest, result, tf, true)
+		return empty, false, skippedLive
 	}
-
-	var empty []string
+	if errors.Is(err, domain.ErrPartialHistory) {
+		log.Warn().Str("timeframe", string(tf)).Int("symbols", len(froms)).
+			Msg("universe sweep batch cut by timeout, saving without watermark")
+		empty := emptyBatchSymbols(froms, result)
+		saveBatchSweep(ctx, candles, ingest, result, tf, false)
+		return empty, true, skippedLive
+	}
+	log.Warn().Err(err).Str("timeframe", string(tf)).Int("symbols", len(froms)).
+		Msg("universe sweep batch fetch failed, falling back to per-symbol backfill")
 	for symbol := range froms {
-		if len(result[symbol]) == 0 {
-			empty = append(empty, symbol)
-		}
+		backfillWithRetry(ctx, ingest, job{symbol: symbol, tf: tf})
 	}
-
-	saveBatchSweep(ctx, candles, ingest, result, tf, true)
-	return empty, false, skippedLive
+	return nil, false, skippedLive
 }
 
 // saveBatchSweep junta las velas cerradas de TODOS los simbolos del lote en un solo Save(); si falla, cae al backfill individual.

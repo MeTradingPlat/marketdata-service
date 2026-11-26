@@ -5,25 +5,11 @@ import (
 	"fmt"
 )
 
-func (p *pooledConnection) channelWithRoomExcluding(exclude *pooledChannel) *pooledChannel {
-	if !p.conn.Connected() {
-		return nil
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, ch := range p.channels {
-		if ch != exclude && ch.hasRoom() {
-			return ch
-		}
-	}
-	return nil
-}
-
 func (a *channelAllocator) findRoomExcluding(exclude *pooledChannel) *pooledChannel {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, pc := range a.connections {
-		if ch := pc.channelWithRoomExcluding(exclude); ch != nil {
+		if ch := pc.channelWithRoom(exclude); ch != nil {
 			return ch
 		}
 	}

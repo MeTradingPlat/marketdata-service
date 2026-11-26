@@ -30,14 +30,14 @@ func newPooledConnection(conn *DxLinkConn) *pooledConnection {
 // ~39 disponibles, dejando simbolos completos sin poder engancharse hasta
 // que esa conexion en particular terminara de reconectar por su cuenta -- o,
 // si eso nunca pasaba, hasta un reinicio manual del contenedor.
-func (p *pooledConnection) channelWithRoom() *pooledChannel {
+func (p *pooledConnection) channelWithRoom(exclude *pooledChannel) *pooledChannel {
 	if !p.conn.Connected() {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, ch := range p.channels {
-		if ch.hasRoom() {
+		if ch != exclude && ch.hasRoom() {
 			return ch
 		}
 	}

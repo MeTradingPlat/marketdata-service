@@ -3,52 +3,37 @@ package tastytrade
 import "time"
 
 func (p *CandlePool) ensureActivityMaps() {
-	if p.lastEventAt == nil {
-		p.lastEventAt = make(map[string]time.Time)
+	for _, m := range []*map[string]time.Time{
+		&p.lastEventAt, &p.orphanSince, &p.lastRoutedAt,
+		&p.lastTradeAt, &p.lastNewBarAt, &p.lastBarTS, &p.subscribedAt,
+	} {
+		if *m == nil {
+			*m = make(map[string]time.Time)
+		}
 	}
 	if p.pendingRevive == nil {
 		p.pendingRevive = make(map[string]reviveState)
-	}
-	if p.orphanSince == nil {
-		p.orphanSince = make(map[string]time.Time)
-	}
-	if p.lastRoutedAt == nil {
-		p.lastRoutedAt = make(map[string]time.Time)
-	}
-	if p.lastTradeAt == nil {
-		p.lastTradeAt = make(map[string]time.Time)
-	}
-	if p.lastNewBarAt == nil {
-		p.lastNewBarAt = make(map[string]time.Time)
-	}
-	if p.lastBarTS == nil {
-		p.lastBarTS = make(map[string]time.Time)
-	}
-	if p.subscribedAt == nil {
-		p.subscribedAt = make(map[string]time.Time)
 	}
 	if p.silentHealHistory == nil {
 		p.silentHealHistory = make(map[string][]time.Time)
 	}
 }
 
-func (p *CandlePool) noteLiveEvent(symbol string, now time.Time) {
+func (p *CandlePool) noteActivity(target func() map[string]time.Time, symbol string, now time.Time) {
 	p.activityMu.Lock()
 	p.ensureActivityMaps()
-	p.lastEventAt[symbol] = now
+	target()[symbol] = now
 	p.activityMu.Unlock()
+}
+
+func (p *CandlePool) noteLiveEvent(symbol string, now time.Time) {
+	p.noteActivity(func() map[string]time.Time { return p.lastEventAt }, symbol, now)
 }
 
 func (p *CandlePool) noteRouted(symbol string, now time.Time) {
-	p.activityMu.Lock()
-	p.ensureActivityMaps()
-	p.lastRoutedAt[symbol] = now
-	p.activityMu.Unlock()
+	p.noteActivity(func() map[string]time.Time { return p.lastRoutedAt }, symbol, now)
 }
 
 func (p *CandlePool) noteTrade(symbol string, now time.Time) {
-	p.activityMu.Lock()
-	p.ensureActivityMaps()
-	p.lastTradeAt[symbol] = now
-	p.activityMu.Unlock()
+	p.noteActivity(func() map[string]time.Time { return p.lastTradeAt }, symbol, now)
 }

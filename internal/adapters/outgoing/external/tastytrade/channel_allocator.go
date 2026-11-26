@@ -95,17 +95,6 @@ func (a *channelAllocator) openChannelOn(ctx context.Context, pc *pooledConnecti
 	return pooled, nil
 }
 
-func (a *channelAllocator) findRoom() *pooledChannel {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, pc := range a.connections {
-		if ch := pc.channelWithRoom(); ch != nil {
-			return ch
-		}
-	}
-	return nil
-}
-
 func (a *channelAllocator) connectionWithRoomForChannel() *pooledConnection {
 	a.mu.Lock()
 	defer a.mu.Unlock()

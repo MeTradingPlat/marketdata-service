@@ -16,10 +16,7 @@ func (p *CandlePool) noteNewBar(symbol string, barTS, now time.Time) {
 }
 
 func (p *CandlePool) noteSubscribed(symbol string, now time.Time) {
-	p.activityMu.Lock()
-	p.ensureActivityMaps()
-	p.subscribedAt[symbol] = now
-	p.activityMu.Unlock()
+	p.noteActivity(func() map[string]time.Time { return p.subscribedAt }, symbol, now)
 }
 
 func (p *CandlePool) resetActivityMaps() {
