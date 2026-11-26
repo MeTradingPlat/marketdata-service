@@ -22,7 +22,7 @@ const (
 )
 
 type poolHealth interface {
-	Connected() bool
+	CanSubscribeLive() bool
 }
 
 // StartLiveReconcileLoop resuscribe cada 5 minutos los simbolos cuyo stream
@@ -62,7 +62,7 @@ func StartLiveReconcileLoop(ctx context.Context, ingest in.IngestCandlesService,
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if !pool.Connected() {
+				if !pool.CanSubscribeLive() {
 					log.Warn().Msg("live reconcile: no dxlink connection available, skipping tick")
 					continue
 				}

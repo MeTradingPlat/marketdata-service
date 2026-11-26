@@ -145,7 +145,7 @@ func main() {
 		StartDayVolumeRefreshLoop(ctx, dayVolumeGateway, dayVolumeRepo, symbols, dayVolumeTracker)
 		StartDayVolumeExtendedLoop(ctx, dayVolumeGateway, symbols, dayVolumeTracker)
 		StartBeneficialOwnersLoop(ctx, beneficialOwners, fundamentalsRepo, fundamentalsCache)
-		StartSessionResetLoop(ctx, cfg, oauth, gateway)
+		StartSessionResetLoop(ctx, cfg, oauth)
 		StartRuntimeStatsLoop(ctx)
 		StartPprofServer()
 
@@ -170,6 +170,7 @@ func main() {
 		// limite ("number of user sessions has exceeded the configured
 		// limit", confirmado en vivo el 2026-08-18 con 5 swaps en una hora).
 		gateway.ResetLiveConnections()
+		flushSavesOnShutdown(ingest, shutdownFlushTimeout)
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()

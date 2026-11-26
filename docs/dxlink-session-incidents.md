@@ -764,3 +764,23 @@ Fix:
   (DayVolume creciente <=5m), priorizando por volumen del dia descendente,
   con presupuesto 100/tick, corte tras 3 fallos y maximo 3 reparaciones/hora
   por simbolo.
+
+## 2026-11-25: SESSION_RESET cerraba conexiones en vivo y pérdida de buffer al apagar
+
+Causa y evidencia: `SESSION_RESET` (default 00:05 UTC = 19:05 ET en invierno,
+dentro del post-market) llamaba a `ResetLiveConnections` (`CloseAllConnections`,
+vaciando `liveSubs`) aunque `ResetSessions` solo renueva el token. A las 00:05Z
+cerró 13 conexiones; a las 00:07Z el reconciler saltó el tick por `'no dxlink
+connection available'` y después recuperó solo 100 símbolos cada 5 min hasta el
+rollout nocturno (02:11Z, 12.437 símbolos). Además, al apagar el proceso no se
+vaciaban los buffers de guardado en memoria.
+
+Fix:
+- `StartSessionResetLoop` (`cmd/api/session_reset_loop.go`) solo rota la sesión
+  y ya no cierra conexiones DxLink.
+- `CandlePool.CanSubscribeLive` (`live_availability.go`: alguna conexión
+  conectada o pool vacío) sustituye a `Connected()` en `StartLiveReconcileLoop`
+  (`cmd/api/live_reconcile.go`) y `ReattachOrphans` (`live_orphan_heal.go`).
+- `flushSavesOnShutdown` (`cmd/api/shutdown_flush.go`, llamado en `cmd/api/main.go`
+  con `shutdownFlushTimeout` = 8 s) vacía `liveSaveBuffer` y `retryBuffer` al
+  apagar.

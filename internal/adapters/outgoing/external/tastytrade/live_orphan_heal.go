@@ -14,7 +14,7 @@ const orphanReattachGrace = 2 * time.Minute
 const orphanReattachMaxConsecutiveFailures = 3
 
 func (p *CandlePool) ReattachOrphans(ctx context.Context, now time.Time, limit int) int {
-	if limit <= 0 || !p.Connected() {
+	if limit <= 0 || !p.CanSubscribeLive() {
 		return 0
 	}
 	orphans := p.orphanedLiveSymbols()

@@ -9,15 +9,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// StartSessionResetLoop cierra proactivamente todas las sesiones de
-// TastyTrade una vez al dia a la hora configurada (default 22:15 UTC, con el
-// mercado US ya cerrado) -- las sesiones huerfanas de swaps/kills se acumulan
-// server-side y saturan el limite del usuario ("number of user sessions has
-// exceeded the configured limit"), asi que el reset diario garantiza una mesa
-// limpia cada manana aunque la limpieza reactiva del reconnect hubiera
-// fallado el dia anterior. Se ejecuta con el mercado cerrado para no cortar
-// streams en vivo en horario de trading.
-func StartSessionResetLoop(ctx context.Context, cfg *configs.Config, resetter out.SessionResetter, gateway out.MarketDataGateway) {
+// StartSessionResetLoop rota el access token una vez al dia a la hora
+// configurada (default 00:05 UTC, que en horario de invierno cae a las 19:05
+// ET, todavia dentro del post-market). No toca las conexiones DxLink:
+// ResetSessions ya no hace DELETE /sessions, asi que cerrarlas solo dejaba el
+// live apagado hasta el rollout nocturno (confirmado en vivo el 2026-11-25).
+// El pool arranca desde cero en el ciclo nocturno (ver universe_cycle.go).
+func StartSessionResetLoop(ctx context.Context, cfg *configs.Config, resetter out.SessionResetter) {
 	go func() {
 		for {
 			next := nextResetTime(time.Now(), cfg.SessionResetHour, cfg.SessionResetMinute)
@@ -26,16 +24,17 @@ func StartSessionResetLoop(ctx context.Context, cfg *configs.Config, resetter ou
 				return
 			case <-time.After(time.Until(next)):
 			}
-			if err := resetter.ResetSessions(ctx); err != nil {
-				log.Error().Err(err).Msg("scheduled session reset failed")
-				continue
-			}
-			// El DELETE /sessions mato tambien las conexiones vivas de este
-			// proceso: el pool reabre al proximo uso con el token fresco.
-			gateway.ResetLiveConnections()
-			log.Info().Msg("scheduled session reset finished")
+			runScheduledReset(ctx, resetter)
 		}
 	}()
+}
+
+func runScheduledReset(ctx context.Context, resetter out.SessionResetter) {
+	if err := resetter.ResetSessions(ctx); err != nil {
+		log.Error().Err(err).Msg("scheduled session reset failed")
+		return
+	}
+	log.Info().Msg("scheduled session reset finished")
 }
 
 // nextResetTime devuelve la proxima ocurrencia de la hora configurada en
