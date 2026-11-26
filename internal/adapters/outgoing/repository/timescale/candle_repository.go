@@ -103,16 +103,20 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 		}
 		results := r.writePool.SendBatch(ctx, batch)
 		defer results.Close()
+		var affected int64
 		for range candles {
-			if _, err := results.Exec(); err != nil {
+			tag, err := results.Exec()
+			if err != nil {
 				return fmt.Errorf("upserting candle batch: %w", err)
 			}
+			affected += tag.RowsAffected()
 			if withWatermark {
 				if _, err := results.Exec(); err != nil {
 					return fmt.Errorf("upserting watermark batch: %w", err)
 				}
 			}
 		}
+		checkBatchRowsAffected(int64(len(candles)), affected, withWatermark)
 		for range latestDailies {
 			if _, err := results.Exec(); err != nil {
 				return fmt.Errorf("updating last volume: %w", err)

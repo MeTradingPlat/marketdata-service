@@ -46,5 +46,6 @@ func TestRunPhase_InvalidTimeframeAndMergeBatchResult(t *testing.T) {
 	if len(empty) != 1 || partial != 1 || skipped != 2 {
 		t.Fatalf("no-op mergeBatchResult changed state: (%v, %d, %d)", empty, partial, skipped)
 	}
-	logPhaseFinished(domain.D1, 1, []string{"A"}, 0, 0, time.Second)
+	s := newPhaseSummary([]job{{symbol: "A"}}, nil)
+	logPhaseSummary(domain.D1, s, 1, []string{"A"}, time.Second)
 }

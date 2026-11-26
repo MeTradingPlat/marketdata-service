@@ -2,7 +2,9 @@ package ingestion
 
 import (
 	"sync"
+	"time"
 
+	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/alerts"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 )
 
@@ -12,51 +14,46 @@ import (
 // resuscripcion desde watermark).
 const saveRetryBufferLimit = 100000
 
+const retryOverflowAlertInterval = 15 * time.Minute
+
 // saveRetryBuffer guarda las velas en vivo que fallaron al guardarse -- la
 // suscripcion DxLink en si nunca se entera de un fallo de Postgres (sigue
 // sana, sigue mandando datos), asi que lo unico que de verdad se pierde es
 // el guardado puntual. Save() es UPSERT, reintentar de mas nunca duplica.
 type saveRetryBuffer struct {
-	mu      sync.Mutex
-	pending []domain.Candle
+	mu          sync.Mutex
+	pending     []domain.Candle
+	discarded   int64
+	lastAlertAt time.Time
+	now         func() time.Time
+	notify      func(level, message string, metadata map[string]any)
 }
 
 func newSaveRetryBuffer() *saveRetryBuffer {
-	return &saveRetryBuffer{}
+	return &saveRetryBuffer{now: time.Now, notify: alerts.Notify}
 }
 
 func (b *saveRetryBuffer) add(c domain.Candle) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(b.pending) >= saveRetryBufferLimit {
-		return
-	}
-	b.pending = append(b.pending, c)
+	b.requeue([]domain.Candle{c})
 }
 
 func (b *saveRetryBuffer) requeue(candles []domain.Candle) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	room := saveRetryBufferLimit - len(b.pending)
-	if room <= 0 {
+	room := max(0, saveRetryBufferLimit-len(b.pending))
+	accepted := min(room, len(candles))
+	b.pending = append(b.pending, candles[:accepted]...)
+	dropped := candles[accepted:]
+	if len(dropped) == 0 {
+		b.mu.Unlock()
 		return
 	}
-	if room > len(candles) {
-		room = len(candles)
+	b.discarded += int64(len(dropped))
+	if !b.shouldAlertLocked() {
+		b.mu.Unlock()
+		return
 	}
-	b.pending = append(b.pending, candles[:room]...)
-}
-
-func (b *saveRetryBuffer) size() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.pending)
-}
-
-func (b *saveRetryBuffer) drain() []domain.Candle {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := b.pending
-	b.pending = nil
-	return out
+	total := b.discarded
+	notify := b.notify
+	b.mu.Unlock()
+	reportRetryOverflow(len(dropped), total, sampleCandleSymbols(dropped, 20), notify)
 }

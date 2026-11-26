@@ -18,9 +18,7 @@ func (s *ingestCandlesService) FlushLiveSaves(ctx context.Context) bool {
 	}
 	if remainder, err := s.saveInChunks(ctx, pending); err != nil {
 		log.Error().Err(err).Int("candles", len(pending)).Msg("flushing live save batch failed, buffering for retry")
-		for _, c := range remainder {
-			s.retryBuffer.add(c)
-		}
+		s.retryBuffer.requeue(remainder)
 		return false
 	}
 	return true

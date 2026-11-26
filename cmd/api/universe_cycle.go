@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
@@ -125,7 +126,12 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// el cache al dia para responder GetSymbolDetails en 0ms.
 	go func() {
 		refreshFundamentalsOnce(ctx, fundamentals, "open interest", windowStart, func() error {
-			return catchup.RefreshOpenInterest(ctx, gateway.(out.OpenInterestGateway), fundamentals, fundamentalsCache, windowStart)
+			oiGateway, ok := gateway.(out.OpenInterestGateway)
+			if !ok {
+				log.Error().Msg("market data gateway does not implement OpenInterestGateway, skipping open interest refresh")
+				return errors.New("gateway does not implement OpenInterestGateway")
+			}
+			return catchup.RefreshOpenInterest(ctx, oiGateway, fundamentals, fundamentalsCache, windowStart)
 		})
 	}()
 
