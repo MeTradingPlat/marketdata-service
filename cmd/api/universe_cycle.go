@@ -90,9 +90,7 @@ func runUniverseCycle(ctx context.Context, cfg *configs.Config, gateway out.Mark
 	// dependen de velas propias: RefreshBeta (D1) y RefreshPrevClose/
 	// RefreshPrevPostMarketVolume (M1), ver mas abajo.
 	if last := lastTradingStatusAtUnix.Load(); time.Since(time.Unix(last, 0)) > 10*time.Minute {
-		if err := catchup.RefreshTradingStatus(ctx, gateway, symbols, fundamentals, fundamentalsCache); err == nil {
-			lastTradingStatusAtUnix.Store(time.Now().Unix())
-		}
+		refreshTradingStatusStep(ctx, gateway, symbols, fundamentals, fundamentalsCache)
 	}
 	refreshFundamentalsOnce(ctx, fundamentals, "market metrics", windowStart, func() error {
 		catchup.RefreshMarketMetrics(ctx, gateway, symbols, fundamentals, fundamentalsCache)

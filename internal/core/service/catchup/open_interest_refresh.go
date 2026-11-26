@@ -3,7 +3,6 @@ package catchup
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
@@ -31,64 +30,20 @@ func RefreshOpenInterest(ctx context.Context, gateway out.OpenInterestGateway, f
 	}
 
 	start := time.Now()
-	jobs := make(chan string, len(stale))
-	for _, s := range stale {
-		jobs <- s
-	}
-	close(jobs)
+	res := fetchOpenInterestBatch(ctx, gateway, stale)
 
-	var (
-		mu            sync.Mutex
-		found         = make(map[string]float64)
-		attemptedOnly []string
-		errCount      int
-		lastErr       error
-		wg            sync.WaitGroup
-	)
-
-	for i := 0; i < openInterestWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for symbol := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				val, ok, err := gateway.OpenInterest(ctx, symbol)
-				mu.Lock()
-				if err != nil {
-					errCount++
-					lastErr = err
-				} else if ok && val > 0 {
-					found[symbol] = val
-				} else {
-					attemptedOnly = append(attemptedOnly, symbol)
-				}
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-
-	if err := fundamentalsRepo.UpsertOpenInterestBatch(ctx, found, attemptedOnly); err != nil {
+	if err := fundamentalsRepo.UpsertOpenInterestBatch(ctx, res.found, res.attemptedOnly); err != nil {
 		return fmt.Errorf("upserting open interest batch: %w", err)
 	}
-	fundamentalsCache.MergeOpenInterest(found, attemptedOnly)
-
-	if errCount > 0 {
-		log.Warn().
-			Err(lastErr).
-			Int("checked", len(stale)).
-			Int("found", len(found)).
-			Int("errors", errCount).
-			Dur("elapsed", time.Since(start)).
-			Msg("open interest refresh finished with errors")
-	} else {
-		log.Info().
-			Int("checked", len(stale)).
-			Int("found", len(found)).
-			Dur("elapsed", time.Since(start)).
-			Msg("open interest refresh finished")
-	}
+	fundamentalsCache.MergeOpenInterest(res.found, res.attemptedOnly)
+	logOpenInterestSummary(start, len(stale), res)
 	return nil
+}
+
+func logOpenInterestSummary(start time.Time, checked int, res openInterestBatchResult) {
+	if res.errCount > 0 {
+		log.Warn().Err(res.lastErr).Int("checked", checked).Int("found", len(res.found)).Int("errors", res.errCount).Dur("elapsed", time.Since(start)).Msg("open interest refresh finished with errors")
+		return
+	}
+	log.Info().Int("checked", checked).Int("found", len(res.found)).Dur("elapsed", time.Since(start)).Msg("open interest refresh finished")
 }
