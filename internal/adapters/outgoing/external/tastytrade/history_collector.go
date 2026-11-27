@@ -30,6 +30,7 @@ type historyCollector struct {
 	data            map[int64]domain.Candle
 	lastUpdate      time.Time
 	sawSnapshotDone bool
+	snipped         bool
 }
 
 func newHistoryCollector(symbol string, tf domain.Timeframe) *historyCollector {
@@ -45,11 +46,11 @@ func (h *historyCollector) onCandle(ev rawCandleEvent) {
 
 	if !h.sawSnapshotDone && ev.snapshotDone() {
 		h.sawSnapshotDone = true
-		snipped := ev.EventFlags&eventFlagSnapshotSnip != 0
-		log.Debug().Str("symbol", h.symbol).Str("timeframe", string(h.tf)).Bool("snipped", snipped).
+		h.snipped = ev.EventFlags&eventFlagSnapshotSnip != 0
+		log.Debug().Str("symbol", h.symbol).Str("timeframe", string(h.tf)).Bool("snipped", h.snipped).
 			Msg("dxlink marked historical snapshot done via eventFlags")
 		eventFlagsConfirmedOnce.Do(func() {
-			log.Info().Str("symbol", h.symbol).Str("timeframe", string(h.tf)).Bool("snipped", snipped).
+			log.Info().Str("symbol", h.symbol).Str("timeframe", string(h.tf)).Bool("snipped", h.snipped).
 				Msg("confirmed: dxlink populates eventFlags for Candle, snapshot completion no longer guessed by timeout alone")
 		})
 	}
@@ -66,37 +67,35 @@ func (h *historyCollector) hasData() bool {
 	return false
 }
 
-// settled es verdadero cuando ya hay al menos una vela Y (a) dxLink marco
-// el final real de la rafaga via eventFlags (SNAPSHOT_END/SNAPSHOT_SNIP,
-// ver rawCandleEvent.snapshotDone) o, si ese campo no llega poblado para
-// este feed, (b) paso un periodo sin recibir nada nuevo -- dxLink puede
-// repartir una rafaga historica en varios mensajes FEED_DATA separados en
-// el tiempo (no necesariamente uno solo atomico), asi que "ya hay datos"
-// no es lo mismo que "ya llego toda la rafaga" (confirmado en vivo: cortar
-// en la primera vela completa daba solo 2 filas de D1 en vez de años de
-// historia). (b) es el respaldo original -- un timeout de reloj fijo
-// (historyDeepWait) puede cortar a mitad de una rafaga todavia activa para
-// un simbolo de mucho volumen, confirmado en vivo el 2026-08-31 con
-// FXI/PFE/IBIT (profundidad M1 mucho mas corta que el resto del universo,
-// cada uno cortado en una fecha distinta). (a) evita ese corte prematuro
-// cuando dxFeed si puebla el campo.
+// settled es verdadero cuando (a) dxLink marco el final real de la rafaga
+// via eventFlags (SNAPSHOT_END/SNAPSHOT_SNIP, ver rawCandleEvent.snapshotDone)
+// aunque no haya velas completas (p. ej. snapshot vacio) o, si ese campo no
+// llega poblado para este feed, (b) ya hay al menos una vela completa Y paso
+// un periodo sin recibir nada nuevo -- dxLink puede repartir una rafaga
+// historica en varios mensajes FEED_DATA separados en el tiempo (no
+// necesariamente uno solo atomico), asi que "ya hay datos" no es lo mismo que
+// "ya llego toda la rafaga" (confirmado en vivo: cortar en la primera vela
+// completa daba solo 2 filas de D1 en vez de años de historia). (b) es el
+// respaldo original -- un timeout de reloj fijo (historyDeepWait) puede
+// cortar a mitad de una rafaga todavia activa para un simbolo de mucho
+// volumen, confirmado en vivo el 2026-08-31 con FXI/PFE/IBIT (profundidad M1
+// mucho mas corta que el resto del universo, cada uno cortado en una fecha
+// distinta). (a) evita ese corte prematuro cuando dxFeed si puebla el campo.
 func (h *historyCollector) settled() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.sawSnapshotDone {
+		return true
+	}
 	if h.lastUpdate.IsZero() {
 		return false
 	}
-	hasComplete := false
 	for _, c := range h.data {
 		if c.IsComplete() {
-			hasComplete = true
-			break
+			return time.Since(h.lastUpdate) >= historyQuietPeriod
 		}
 	}
-	if !hasComplete {
-		return false
-	}
-	return h.sawSnapshotDone || time.Since(h.lastUpdate) >= historyQuietPeriod
+	return false
 }
 
 func (h *historyCollector) complete() []domain.Candle {

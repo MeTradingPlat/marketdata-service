@@ -49,12 +49,14 @@ func parseCandleBatch(data []interface{}) []rawCandleEvent {
 	for start < len(data) {
 		end := start + 1
 		for end < len(data) {
-			if _, isString := data[end].(string); isString {
+			if s, isString := data[end].(string); isString && !isNonFiniteString(s) {
 				break
 			}
 			end++
 		}
-		if ev, ok := parseCandleRecord(data[start:end]); ok {
+		record := data[start:end]
+		logNonFiniteRecordOnce(record)
+		if ev, ok := parseCandleRecord(record); ok {
 			events = append(events, ev)
 		}
 		start = end

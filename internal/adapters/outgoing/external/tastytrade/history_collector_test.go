@@ -60,3 +60,45 @@ func TestHistoryCollector_SettledFallsBackToQuietPeriodWithoutFlags(t *testing.T
 		t.Fatal("expected settled() to be true once historyQuietPeriod elapsed with no further updates")
 	}
 }
+
+func TestHistoryCollector_SettledOnEmptySnapshotEnd(t *testing.T) {
+	h := newHistoryCollector("TEST", domain.M1)
+	h.onCandle(rawCandleEvent{Timestamp: time.Now(), EventFlags: eventFlagSnapshotEnd})
+
+	if !h.settled() {
+		t.Fatal("expected settled() to be true on SNAPSHOT_END even with no complete candles")
+	}
+	if h.snipped {
+		t.Fatal("expected snipped to be false on SNAPSHOT_END")
+	}
+}
+
+func TestHistoryCollector_NotSettledOnSnapshotEndWithTxPending(t *testing.T) {
+	h := newHistoryCollector("TEST", domain.M1)
+	h.onCandle(rawCandleEvent{Timestamp: time.Now(), EventFlags: eventFlagSnapshotEnd | eventFlagTxPending})
+
+	if h.settled() {
+		t.Fatal("expected settled() to be false when TX_PENDING is set")
+	}
+}
+
+func TestHistoryCollector_SettledAndSnippedOnSnapshotSnip(t *testing.T) {
+	h := newHistoryCollector("TEST", domain.M1)
+	h.onCandle(rawCandleEvent{Timestamp: time.Now(), EventFlags: eventFlagSnapshotSnip})
+
+	if !h.settled() {
+		t.Fatal("expected settled() to be true on SNAPSHOT_SNIP even with no complete candles")
+	}
+	if !h.snipped {
+		t.Fatal("expected snipped to be true on SNAPSHOT_SNIP")
+	}
+}
+
+func TestHistoryCollector_NotSettledWithoutSignalOrCompleteCandle(t *testing.T) {
+	h := newHistoryCollector("TEST", domain.M1)
+	h.onCandle(rawCandleEvent{Timestamp: time.Now(), EventFlags: 0})
+
+	if h.settled() {
+		t.Fatal("expected settled() to be false without snapshot signal or complete candle")
+	}
+}
