@@ -18,7 +18,7 @@ func (p *CandlePool) handleLiveEventAt(symbol string, ev rawCandleEvent, now tim
 		p.futureLiveDiscards.record(symbol, now, "discarded live candle event with future timestamp")
 		return
 	}
-	p.noteResumeData(symbol, now)
+	p.noteResumeData(symbol, ev.Timestamp, now)
 	p.lastLiveEventAtUnixNano.Store(now.UnixNano())
 	p.noteLiveEvent(symbol, now)
 	p.noteNewBar(symbol, ev.Timestamp, now)

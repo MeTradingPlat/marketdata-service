@@ -14,8 +14,8 @@ func TestCandlePool_Resume_SecondDropBeforeSettleKeepsOldest(t *testing.T) {
 	newer := t0.Add(-2 * time.Minute)
 
 	p.holdResume("AAPL", older, t0)
-	p.noteResumeData("AAPL", t0)
-	p.noteResumeData("AAPL", t0.Add(time.Minute))
+	p.noteResumeData("AAPL", t0, t0)
+	p.noteResumeData("AAPL", t0.Add(time.Minute), t0.Add(time.Minute))
 	p.holdResume("AAPL", newer, t0.Add(time.Minute))
 
 	got := p.resolveResume("AAPL", time.Time{}, t0.Add(time.Minute))
@@ -30,8 +30,8 @@ func TestCandlePool_Resume_ForgetsAfterSettleWithData(t *testing.T) {
 	older := t0.Add(-20 * time.Minute)
 
 	p.holdResume("AAPL", older, t0)
-	p.noteResumeData("AAPL", t0)
-	p.noteResumeData("AAPL", t0.Add(resumeSettle+time.Second))
+	p.noteResumeData("AAPL", t0, t0)
+	p.noteResumeData("AAPL", t0.Add(resumeSettle+time.Second), t0.Add(resumeSettle+time.Second))
 
 	now := t0.Add(3 * time.Minute)
 	got := p.resolveResume("AAPL", time.Time{}, now)
@@ -48,9 +48,9 @@ func TestCandlePool_Resume_DropBeforeSettleResetsFirstDataAt(t *testing.T) {
 	newer := t0.Add(-2 * time.Minute)
 
 	p.holdResume("AAPL", older, t0)
-	p.noteResumeData("AAPL", t0)
+	p.noteResumeData("AAPL", t0, t0)
 	p.holdResume("AAPL", newer, t0.Add(time.Minute))
-	p.noteResumeData("AAPL", t0.Add(3*time.Minute))
+	p.noteResumeData("AAPL", t0.Add(3*time.Minute), t0.Add(3*time.Minute))
 
 	got := p.resolveResume("AAPL", time.Time{}, t0.Add(3*time.Minute))
 	if !got.Equal(older) {
@@ -65,7 +65,7 @@ func TestCandlePool_Resume_SettledEntryIgnoredWithoutMoreEvents(t *testing.T) {
 	newer := t0.Add(-2 * time.Minute)
 
 	p.holdResume("AAPL", older, t0)
-	p.noteResumeData("AAPL", t0)
+	p.noteResumeData("AAPL", t0, t0)
 
 	later := t0.Add(3 * time.Minute)
 	got := p.resolveResume("AAPL", time.Time{}, later)
@@ -87,7 +87,7 @@ func TestCandlePool_Resume_DropAfterDataAndLongPauseClearsOnlyOnSecondData(t *te
 	newer := t0.Add(-2 * time.Minute)
 
 	p.holdResume("AAPL", older, t0)
-	p.noteResumeData("AAPL", t0)
+	p.noteResumeData("AAPL", t0, t0)
 
 	later := t0.Add(10 * time.Minute)
 	p.holdResume("AAPL", newer, later)
@@ -95,8 +95,8 @@ func TestCandlePool_Resume_DropAfterDataAndLongPauseClearsOnlyOnSecondData(t *te
 		t.Fatalf("expected %v kept after 10m drop, got %v", older, got)
 	}
 
-	p.noteResumeData("AAPL", later)
-	p.noteResumeData("AAPL", later.Add(resumeSettle+time.Second))
+	p.noteResumeData("AAPL", later, later)
+	p.noteResumeData("AAPL", later.Add(resumeSettle+time.Second), later.Add(resumeSettle+time.Second))
 
 	after := later.Add(3 * time.Minute)
 	want := after.Add(-5 * time.Minute)
@@ -117,5 +117,77 @@ func TestCandlePool_Resume_FormingCandleFallbackWithoutReconnect(t *testing.T) {
 	got := p.resolveResume("AAPL", time.Time{}, t0)
 	if !got.Equal(formingTS) {
 		t.Fatalf("expected forming timestamp %v, got %v", formingTS, got)
+	}
+}
+
+func TestCandlePool_Resume_LongReplayBeforeSecondDropKeepsOldest(t *testing.T) {
+	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	older := t0.Add(-20 * time.Minute)
+	newer := t0.Add(-2 * time.Minute)
+
+	cases := []struct {
+		name      string
+		replayTSs []time.Duration
+	}{
+		{
+			name:      "oldest_to_newest",
+			replayTSs: []time.Duration{-10 * time.Minute, -8 * time.Minute, -5 * time.Minute, -1 * time.Minute},
+		},
+		{
+			name:      "newest_to_oldest",
+			replayTSs: []time.Duration{-1 * time.Minute, -5 * time.Minute, -8 * time.Minute, -10 * time.Minute},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestPool()
+			p.holdResume("AAPL", older, t0)
+			for i, offset := range tc.replayTSs {
+				at := t0.Add(time.Duration(i) * time.Minute)
+				p.noteResumeData("AAPL", t0.Add(offset), at)
+			}
+			dropAt := t0.Add(3 * time.Minute)
+			p.holdResume("AAPL", newer, dropAt)
+
+			got := p.resolveResume("AAPL", time.Time{}, dropAt)
+			if !got.Equal(older) {
+				t.Fatalf("expected %v kept after >2m replay, got %v", older, got)
+			}
+		})
+	}
+}
+
+func TestCandlePool_Resume_ClearsAfterSettleWithoutReplays(t *testing.T) {
+	p := newTestPool()
+	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	older := t0.Add(-20 * time.Minute)
+
+	p.holdResume("AAPL", older, t0)
+	p.noteResumeData("AAPL", t0.Add(-time.Minute), t0.Add(time.Minute))
+	p.noteResumeData("AAPL", t0.Add(3*time.Minute), t0.Add(3*time.Minute))
+	p.noteResumeData("AAPL", t0.Add(3*time.Minute+time.Second), t0.Add(3*time.Minute+time.Second))
+
+	after := t0.Add(4 * time.Minute)
+	want := after.Add(-5 * time.Minute)
+	if got := p.resolveResume("AAPL", time.Time{}, after); !got.Equal(want) {
+		t.Fatalf("expected fallback %v after settle without replays, got %v", want, got)
+	}
+}
+
+func TestCandlePool_Resume_LowLiquiditySymbolClearsOnLaterTrade(t *testing.T) {
+	p := newTestPool()
+	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	older := t0.Add(-20 * time.Minute)
+
+	p.holdResume("LOW", older, t0)
+	p.noteResumeData("LOW", t0.Add(-time.Minute), t0)
+
+	later := t0.Add(30 * time.Minute)
+	p.noteResumeData("LOW", later, later)
+
+	want := later.Add(-5 * time.Minute)
+	if got := p.resolveResume("LOW", time.Time{}, later); !got.Equal(want) {
+		t.Fatalf("expected fallback %v for low-liquidity symbol, got %v", want, got)
 	}
 }
