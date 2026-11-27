@@ -12,6 +12,16 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/livecandles"
 )
 
+func todayAtNoonET(t *testing.T) time.Time {
+	t.Helper()
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().In(loc)
+	return time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, loc)
+}
+
 func TestBackfill(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -71,7 +81,7 @@ func TestBackfill(t *testing.T) {
 // BD (hasta 20 min, confirmado en vivo el 2026-09-08 con SMH rankeando por
 // encima de NVDA/TSLL/GPRO por este mismo hueco).
 func TestBackfill_M1FeedsSnapshotTracker(t *testing.T) {
-	today := time.Now().Add(-2 * time.Minute)
+	today := todayAtNoonET(t)
 	gw := &fakeGateway{probeResult: []domain.Candle{{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: today, Close: 5, Volume: 1234}}}
 	repo := &fakeRepo{}
 	tracker := intraday.NewSnapshotTracker()
@@ -96,16 +106,15 @@ func TestBackfill_OldCandlesDoNotResetTracker(t *testing.T) {
 	gw := &fakeGateway{probeResult: []domain.Candle{{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: old, Close: 5, Volume: 999}}}
 	repo := &fakeRepo{}
 	tracker := intraday.NewSnapshotTracker()
-	tracker.RecordClosedCandle(domain.Candle{Symbol: "MSFT", Timeframe: domain.M1, Timestamp: time.Now(), Close: 1, Volume: 42})
+	tracker.RecordClosedCandle(domain.Candle{Symbol: "MSFT", Timeframe: domain.M1, Timestamp: todayAtNoonET(t), Close: 1, Volume: 42})
 	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), tracker, livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.Backfill(context.Background(), "AAPL", domain.M1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Suma las 3 sesiones en vez de solo DayVolume -- a que sesion cae
-	// time.Now() (pre/regular/post) depende de la hora real a la que corra
-	// el test, no es parte de lo que este test verifica.
+	// Suma las 3 sesiones en vez de solo DayVolume -- a que sesion cae la
+	// vela (pre/regular/post) no es parte de lo que este test verifica.
 	snap := tracker.SnapshotBatch([]string{"MSFT"})["MSFT"]
 	if got := snap.PreMarketVolume + snap.DayVolume + snap.PostMarketVolume; got != 42 {
 		t.Fatalf("expected MSFT's today volume to survive AAPL's old backfill, got %+v", snap)
@@ -338,4 +347,3 @@ func TestBackfill_PartialHistorySavesWithoutWatermark(t *testing.T) {
 		t.Fatalf("expected Save with withWatermark=false, got %v", repo.savedWithWatermark)
 	}
 }
-
