@@ -21,6 +21,7 @@ type ingestCandlesService struct {
 	snapshotBroadcaster *livecandles.Broadcaster[domain.IntradaySnapshot]
 	tracker             *intraday.SnapshotTracker
 	recentCache         *livecandles.RecentCache
+	spool               out.CandleSpool
 	liveSaveBuffer      *liveSaveBuffer
 	retryBuffer         *saveRetryBuffer
 	liveMu              sync.RWMutex
@@ -28,8 +29,8 @@ type ingestCandlesService struct {
 	attempted           map[string]bool
 }
 
-func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster[domain.Candle], snapshotBroadcaster *livecandles.Broadcaster[domain.IntradaySnapshot], tracker *intraday.SnapshotTracker, recentCache *livecandles.RecentCache) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, snapshotBroadcaster: snapshotBroadcaster, tracker: tracker, recentCache: recentCache, liveSaveBuffer: newLiveSaveBuffer(), retryBuffer: newSaveRetryBuffer(), live: make(map[string]bool), attempted: make(map[string]bool)}
+func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster[domain.Candle], snapshotBroadcaster *livecandles.Broadcaster[domain.IntradaySnapshot], tracker *intraday.SnapshotTracker, recentCache *livecandles.RecentCache, spool out.CandleSpool) in.IngestCandlesService {
+	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, snapshotBroadcaster: snapshotBroadcaster, tracker: tracker, recentCache: recentCache, spool: spool, liveSaveBuffer: newLiveSaveBuffer(), retryBuffer: newSaveRetryBuffer(spool), live: make(map[string]bool), attempted: make(map[string]bool)}
 }
 
 var ErrEmptyBackfill = errors.New("backfill returned no candles")

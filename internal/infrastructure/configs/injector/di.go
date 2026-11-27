@@ -6,6 +6,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/incoming/handler"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/external/tastytrade"
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/repository/timescale"
+	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/spool"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
@@ -35,6 +36,7 @@ func BuildContainer() *dig.Container {
 	checkErr(container.Provide(provideTimescaleWritePool))
 	checkErr(container.Provide(provideTimescaleSnapshotPool))
 	checkErr(container.Provide(provideCandleRepository))
+	checkErr(container.Provide(provideCandleSpool))
 	checkErr(container.Provide(provideSymbolRepository))
 	checkErr(container.Provide(provideFundamentalsRepository))
 	checkErr(container.Provide(provideVolumeProfileRepository))
@@ -130,6 +132,10 @@ func provideTimescaleSnapshotPool(cfg *configs.Config) snapshotPool {
 
 func provideCandleRepository(pool *pgxpool.Pool, writePool writePool, snapshotPool snapshotPool) out.CandleRepository {
 	return timescale.NewCandleRepository(pool, writePool.pool, snapshotPool.pool)
+}
+
+func provideCandleSpool(cfg *configs.Config) out.CandleSpool {
+	return spool.NewFileSpool(cfg.SpoolDir, int64(cfg.SpoolMaxMB)*1024*1024)
 }
 
 func provideSymbolRepository(pool *pgxpool.Pool) out.SymbolRepository {

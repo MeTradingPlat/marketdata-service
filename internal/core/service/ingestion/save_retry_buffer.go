@@ -6,12 +6,13 @@ import (
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/alerts"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
+	"github.com/rs/zerolog/log"
 )
 
 // saveRetryBufferLimit acota la memoria si Postgres tarda en volver -- pasado
-// esto se descartan velas nuevas en vez de crecer sin limite (un apagon tan
-// largo ya se resuelve solo en la siguiente ventana de mantenimiento, via
-// resuscripcion desde watermark).
+// esto el sobrante pasa al spool en disco y solo se descarta si no hay spool
+// o falla al escribir.
 const saveRetryBufferLimit = 100000
 
 const retryOverflowAlertInterval = 15 * time.Minute
@@ -25,12 +26,13 @@ type saveRetryBuffer struct {
 	pending     []domain.Candle
 	discarded   int64
 	lastAlertAt time.Time
+	spool       out.CandleSpool
 	now         func() time.Time
 	notify      func(level, message string, metadata map[string]any)
 }
 
-func newSaveRetryBuffer() *saveRetryBuffer {
-	return &saveRetryBuffer{now: time.Now, notify: alerts.Notify}
+func newSaveRetryBuffer(spool out.CandleSpool) *saveRetryBuffer {
+	return &saveRetryBuffer{spool: spool, now: time.Now, notify: alerts.Notify}
 }
 
 func (b *saveRetryBuffer) add(c domain.Candle) {
@@ -42,11 +44,25 @@ func (b *saveRetryBuffer) requeue(candles []domain.Candle) {
 	room := max(0, saveRetryBufferLimit-len(b.pending))
 	accepted := min(room, len(candles))
 	b.pending = append(b.pending, candles[:accepted]...)
-	dropped := candles[accepted:]
-	if len(dropped) == 0 {
-		b.mu.Unlock()
+	overflow := candles[accepted:]
+	spool := b.spool
+	b.mu.Unlock()
+	if len(overflow) == 0 {
 		return
 	}
+	if spool != nil {
+		if err := spool.Write(overflow); err == nil {
+			log.Warn().Int("candles", len(overflow)).Msg("save retry buffer overflow, spooled candles to disk")
+			return
+		} else {
+			log.Error().Err(err).Int("candles", len(overflow)).Msg("writing candle overflow to disk spool failed")
+		}
+	}
+	b.recordDiscarded(overflow)
+}
+
+func (b *saveRetryBuffer) recordDiscarded(dropped []domain.Candle) {
+	b.mu.Lock()
 	b.discarded += int64(len(dropped))
 	if !b.shouldAlertLocked() {
 		b.mu.Unlock()

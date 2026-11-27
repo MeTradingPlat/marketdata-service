@@ -265,6 +265,8 @@ jobs:
           # "permission denied" (confirmado en vivo 2026-08-18).
           docker volume create secedgar_cache 2>/dev/null || true
           docker run --rm -v secedgar_cache:/cache alpine chown -R 100:101 /cache
+          docker volume create marketdata_spool 2>/dev/null || true
+          docker run --rm -v marketdata_spool:/spool alpine chown -R 100:101 /spool
 
       - name: Delete Old Application Container
         run: |
@@ -324,6 +326,7 @@ jobs:
             -e EUREKA_HOST="directory" \
             -e MAX_CONCURRENT_BATCH_RESPONSES="10" \
             -v secedgar_cache:/tmp/secedgar-cache \
+            -v marketdata_spool:/tmp/candle-spool \
             virtud142/metradingplat_marketdata_service:latest
 
       - name: Clean Old Images of This Service

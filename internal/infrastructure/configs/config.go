@@ -35,6 +35,8 @@ type Config struct {
 	EurekaPort string
 
 	SecEdgarCacheDir string
+	SpoolDir         string
+	SpoolMaxMB       int
 }
 
 func envOr(key, fallback string) string {
@@ -104,5 +106,7 @@ func Load() *Config {
 		// no-op para las 13k+ simbolos del universo) -- /tmp si es escribible
 		// para cualquier usuario (sticky bit 1777).
 		SecEdgarCacheDir: envOr("SEC_EDGAR_CACHE_DIR", "/tmp/secedgar-cache"),
+		SpoolDir:         envOr("SPOOL_DIR", "/tmp/candle-spool"),
+		SpoolMaxMB:       positiveOr(envIntOr("SPOOL_MAX_MB", 1024), 1024),
 	}
 }

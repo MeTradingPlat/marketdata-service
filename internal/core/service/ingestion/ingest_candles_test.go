@@ -42,7 +42,7 @@ func TestBackfill(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gw := &fakeGateway{probeResult: tt.probeResult, probeErr: tt.probeErr}
 			repo := &fakeRepo{}
-			svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+			svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 			err := svc.Backfill(context.Background(), "AAPL", domain.D1)
 
@@ -75,7 +75,7 @@ func TestBackfill_M1FeedsSnapshotTracker(t *testing.T) {
 	gw := &fakeGateway{probeResult: []domain.Candle{{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: today, Close: 5, Volume: 1234}}}
 	repo := &fakeRepo{}
 	tracker := intraday.NewSnapshotTracker()
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), tracker, livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), tracker, livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.Backfill(context.Background(), "AAPL", domain.M1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -97,7 +97,7 @@ func TestBackfill_OldCandlesDoNotResetTracker(t *testing.T) {
 	repo := &fakeRepo{}
 	tracker := intraday.NewSnapshotTracker()
 	tracker.RecordClosedCandle(domain.Candle{Symbol: "MSFT", Timeframe: domain.M1, Timestamp: time.Now(), Close: 1, Volume: 42})
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), tracker, livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), tracker, livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.Backfill(context.Background(), "AAPL", domain.M1); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -118,7 +118,7 @@ func TestBackfill_OldCandlesDoNotResetTracker(t *testing.T) {
 func TestStreamLive(t *testing.T) {
 	gw := &fakeGateway{}
 	repo := &fakeRepo{}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -143,7 +143,7 @@ func TestStreamLive(t *testing.T) {
 func TestStreamLive_BuffersFailedSaveForRetry(t *testing.T) {
 	gw := &fakeGateway{}
 	repo := &fakeRepo{saveErr: errors.New("db down")}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -177,7 +177,7 @@ func TestStreamLive_BuffersFailedSaveForRetry(t *testing.T) {
 func TestFlushLiveSaves_BatchesMultipleClosedCandles(t *testing.T) {
 	gw := &fakeGateway{}
 	repo := &fakeRepo{}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -200,7 +200,7 @@ func TestFlushLiveSaves_BatchesMultipleClosedCandles(t *testing.T) {
 
 func TestFlushLiveSaves_NothingPendingDoesNotCallSave(t *testing.T) {
 	repo := &fakeRepo{}
-	svc := ingestion.NewIngestCandlesService(&fakeGateway{}, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(&fakeGateway{}, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	if ok := svc.FlushLiveSaves(context.Background()); !ok {
 		t.Fatal("expected true when nothing is pending")
@@ -213,7 +213,7 @@ func TestFlushLiveSaves_NothingPendingDoesNotCallSave(t *testing.T) {
 func TestFlushLiveSaves_Chunking(t *testing.T) {
 	gw := &fakeGateway{}
 	repo := &fakeRepo{}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -244,7 +244,7 @@ func TestFlushLiveSaves_Chunking(t *testing.T) {
 func TestFlushLiveSaves_FailsOnSecondChunk(t *testing.T) {
 	gw := &fakeGateway{}
 	repo := &fakeRepo{failOnCall: 2}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -273,7 +273,7 @@ func TestFlushLiveSaves_FailsOnSecondChunk(t *testing.T) {
 func TestPendingSaves_CountsLiveAndRetry(t *testing.T) {
 	gw := &fakeGateway{}
 	repo := &fakeRepo{saveErr: errors.New("db down")}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.StreamLive(context.Background(), "AAPL"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -304,7 +304,7 @@ func TestBackfill_M1LiveSubscribedSkipsFetch(t *testing.T) {
 		live: map[string]bool{"AAPL": true},
 	}
 	repo := &fakeRepo{watermark: &watermark}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	if err := svc.Backfill(context.Background(), "AAPL", domain.M1); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
@@ -325,7 +325,7 @@ func TestBackfill_PartialHistorySavesWithoutWatermark(t *testing.T) {
 		getCandlesErr: domain.ErrPartialHistory,
 	}
 	repo := &fakeRepo{watermark: &watermark}
-	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache())
+	svc := ingestion.NewIngestCandlesService(gw, repo, livecandles.NewBroadcaster[domain.Candle](), livecandles.NewBroadcaster[domain.IntradaySnapshot](), intraday.NewSnapshotTracker(), livecandles.NewDefaultRecentCache(), nil)
 
 	err := svc.Backfill(context.Background(), "AAPL", domain.H1)
 	if !errors.Is(err, domain.ErrPartialHistory) {
