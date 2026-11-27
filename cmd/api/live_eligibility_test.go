@@ -47,6 +47,26 @@ func TestLiveEligible(t *testing.T) {
 			symbol:   domain.Symbol{Symbol: "SPY", IsEtf: true, Description: "SPDR S&P 500 ETF Trust"},
 			expected: true,
 		},
+		{
+			name:     "ET common units kept",
+			symbol:   domain.Symbol{Symbol: "ET", Description: "Energy Transfer LP Common Units"},
+			expected: true,
+		},
+		{
+			name:     "BEP limited partnership units kept",
+			symbol:   domain.Symbol{Symbol: "BEP", Description: "Brookfield Renewable Partners L.P. Limited Partnership Units"},
+			expected: true,
+		},
+		{
+			name:     "NEEpT corporate units kept",
+			symbol:   domain.Symbol{Symbol: "NEEpT", Description: "NextEra Energy, Inc. 7.375% Corporate Units"},
+			expected: true,
+		},
+		{
+			name:     "SPAC units with /U suffix out",
+			symbol:   domain.Symbol{Symbol: "GHLXU", Description: "Gores Holdings X, Inc. - Units"},
+			expected: false,
+		},
 	}
 
 	for _, tc := range tests {
