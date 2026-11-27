@@ -3,8 +3,6 @@ package tastytrade
 import (
 	"context"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // handleConnectionReconnect corre cuando UNA conexion del pool se
@@ -13,10 +11,10 @@ import (
 // resetea (no se saca del pool) y se vuelve a pedir un slot para cada
 // simbolo en vivo que tenia.
 func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledConnection) {
-	pc.resubMu.Lock()
-	defer pc.resubMu.Unlock()
-
-	symbols := pc.takeLiveSymbols()
+	symbols := p.unattachedLiveSymbols(pc.takeRetiredSymbols())
+	if len(symbols) == 0 {
+		return
+	}
 
 	// La vela a medio formar de cada simbolo queda incompleta -- le faltan
 	// los ticks de los segundos que la conexion estuvo caida -- asi que se
@@ -37,35 +35,12 @@ func (p *CandlePool) handleConnectionReconnect(ctx context.Context, pc *pooledCo
 	p.currentMu.Unlock()
 
 	now := time.Now()
-	p.activityMu.Lock()
-	p.ensureActivityMaps()
-	for _, symbol := range symbols {
-		if last, ok := p.lastEventAt[symbol]; ok && now.Sub(last) <= 10*time.Minute {
-			p.pendingRevive[symbol] = reviveState{reconnectedAt: now}
-		}
+	for symbol, ts := range resumeFrom {
+		p.holdResume(symbol, ts, now)
 	}
-	p.activityMu.Unlock()
 
-	retriesLeft := resubscribeRetryBudget
-	for _, symbol := range symbols {
-		p.liveMu.Lock()
-		cb := p.liveSubs[symbol]
-		tick := p.liveTicks[symbol]
-		p.liveMu.Unlock()
-		if cb == nil {
-			continue
-		}
-		subscribe := func() error { return p.SubscribeLive(ctx, symbol, resumeFrom[symbol], cb, tick) }
-		if err := resubscribeWithRetry(ctx, subscribe, &retriesLeft, resubscribeRetryDelay); err != nil {
-			// La entrada en liveSubs es la memoria de que el simbolo debe estar
-			// vivo y ReattachOrphans lo reengancha; borrarla dejaba al
-			// reconciliador (100 simbolos/5 min) como unico camino.
-			p.activityMu.Lock()
-			delete(p.pendingRevive, symbol)
-			p.activityMu.Unlock()
-			log.Error().Err(err).Str("symbol", symbol).Msg("failed to resubscribe live candle after reconnect, leaving it for orphan heal")
-		}
-	}
+	p.markPendingRevive(symbols, now)
+	p.resubscribeReconnectSymbols(ctx, symbols, resumeFrom)
 }
 
 // ForceReconnectAll cierra y reconecta CADA conexion del pool, sin importar

@@ -2,26 +2,47 @@ package tastytrade
 
 import (
 	"context"
-	"fmt"
+	"time"
 )
 
 func (a *channelAllocator) findRoomExcluding(exclude *pooledChannel) *pooledChannel {
+	return a.findRoomExcludingFiltered(exclude, false)
+}
+
+func (a *channelAllocator) findRoomExcludingFiltered(exclude *pooledChannel, allowQuarantined bool) *pooledChannel {
+	now := time.Now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	var best *pooledChannel
+	var bestStrikes int
+	var bestUntil time.Time
 	for _, pc := range a.connections {
-		if ch := pc.channelWithRoom(exclude); ch != nil {
+		if !allowQuarantined && pc.isQuarantined(now) {
+			continue
+		}
+		ch := pc.channelWithRoom(exclude)
+		if ch == nil {
+			continue
+		}
+		if !allowQuarantined {
 			return ch
 		}
+		strikes, until := pc.quarantineRank()
+		if best == nil || lessQuarantineRank(strikes, until, bestStrikes, bestUntil) {
+			best, bestStrikes, bestUntil = ch, strikes, until
+		}
 	}
-	return nil
+	return best
 }
 
 func (a *channelAllocator) allocateExcluding(ctx context.Context, exclude *pooledChannel) (*pooledChannel, error) {
 	if ch := a.findRoomExcluding(exclude); ch != nil {
 		return ch, nil
 	}
-	a.growMu.Lock()
-	defer a.growMu.Unlock()
+	if err := a.lockGrow(ctx); err != nil {
+		return nil, err
+	}
+	defer a.unlockGrow()
 	if ch := a.findRoomExcluding(exclude); ch != nil {
 		return ch, nil
 	}
@@ -29,12 +50,12 @@ func (a *channelAllocator) allocateExcluding(ctx context.Context, exclude *poole
 		return a.openChannelOn(ctx, pc)
 	}
 	if a.connectionCount() >= a.maxConnections {
-		return nil, fmt.Errorf("candle pool at connection ceiling (%d)", a.maxConnections)
+		return a.allocateAtCeiling(ctx, exclude)
 	}
 	a.staggerBeforeNewConnection(ctx)
 	conn, err := a.connFactory(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("opening new pool connection: %w", err)
+		return a.fallbackToQuarantinedOnFactoryError(ctx, exclude, err)
 	}
 	pc := newPooledConnection(conn)
 	if a.onReconnect != nil {

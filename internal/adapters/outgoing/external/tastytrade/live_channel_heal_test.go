@@ -62,6 +62,9 @@ func TestIsRegularSessionET(t *testing.T) {
 		{"09:30 ET", time.Date(2026, 11, 25, 14, 30, 0, 0, time.UTC), true},
 		{"12:00 ET", time.Date(2026, 11, 25, 17, 0, 0, 0, time.UTC), true},
 		{"16:00 ET", time.Date(2026, 11, 25, 21, 0, 0, 0, time.UTC), false},
+		{"thanksgiving 12:00 ET", time.Date(2026, 11, 26, 17, 0, 0, 0, time.UTC), false},
+		{"early close 12:59 ET", time.Date(2026, 11, 27, 17, 59, 0, 0, time.UTC), true},
+		{"early close 13:00 ET", time.Date(2026, 11, 27, 18, 0, 0, 0, time.UTC), false},
 		{"sabado 12:00 ET", time.Date(2026, 11, 28, 17, 0, 0, 0, time.UTC), false},
 	}
 	for _, tc := range cases {

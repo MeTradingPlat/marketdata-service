@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -18,7 +19,32 @@ func (p *CandlePool) DropExpiredRevive(now time.Time) {
 	p.activityMu.Unlock()
 }
 
+const reviveMaxConsecutiveFailures = 3
+
 func (p *CandlePool) ReviveSilentLive(ctx context.Context, now time.Time) {
+	targets := p.selectReviveTargets(now)
+	revived := 0
+	consecutiveFailures := 0
+	for _, sym := range targets {
+		if ctx.Err() != nil || consecutiveFailures >= reviveMaxConsecutiveFailures {
+			break
+		}
+		ok, failed := p.reviveSilentSymbol(ctx, sym, now)
+		if failed {
+			consecutiveFailures++
+			continue
+		}
+		if ok {
+			consecutiveFailures = 0
+			revived++
+		}
+	}
+	if revived > 0 {
+		log.Info().Int("count", revived).Msg("revived silent live symbols")
+	}
+}
+
+func (p *CandlePool) selectReviveTargets(now time.Time) []string {
 	var targets []string
 	p.activityMu.Lock()
 	for sym, st := range p.pendingRevive {
@@ -29,39 +55,39 @@ func (p *CandlePool) ReviveSilentLive(ctx context.Context, now time.Time) {
 		}
 	}
 	p.activityMu.Unlock()
-	revived := 0
-	for _, sym := range targets {
-		p.liveMu.Lock()
-		cb, tick := p.liveSubs[sym], p.liveTicks[sym]
-		p.liveMu.Unlock()
-		if cb == nil {
-			p.activityMu.Lock()
-			delete(p.pendingRevive, sym)
-			p.activityMu.Unlock()
-			continue
-		}
-		p.allocator.releaseKey(candleKey(sym, domain.M1))
-		var resumeFrom time.Time
-		p.currentMu.Lock()
-		if last, ok := p.lastClosed[sym]; ok {
-			resumeFrom = last.Timestamp
-		}
-		p.currentMu.Unlock()
-		err := p.SubscribeLive(ctx, sym, resumeFrom, cb, tick)
+	return targets
+}
+
+func (p *CandlePool) reviveSilentSymbol(ctx context.Context, sym string, now time.Time) (bool, bool) {
+	cb, tick, epoch, stopping := p.readLiveSubForHeal(sym)
+	if stopping {
+		return false, false
+	}
+	if cb == nil {
 		p.activityMu.Lock()
-		st := p.pendingRevive[sym]
-		st.attempts++
-		st.lastAttemptAt = now
-		p.pendingRevive[sym] = st
+		delete(p.pendingRevive, sym)
 		p.activityMu.Unlock()
-		if err != nil {
-			log.Warn().Err(err).Str("symbol", sym).Msg("failed to revive silent live symbol")
-			continue
-		}
-		revived++
-		log.Info().Str("symbol", sym).Msg("revived silent live symbol")
+		return false, false
 	}
-	if revived > 0 {
-		log.Info().Int("count", revived).Msg("revived silent live symbols")
+	p.allocator.releaseKey(candleKey(sym, domain.M1))
+	err := p.subscribeLiveAtEpoch(ctx, sym, p.lastClosedTimestamp(sym), cb, tick, epoch)
+	if errors.Is(err, context.Canceled) || (err != nil && ctx.Err() != nil) {
+		return false, false
 	}
+	p.recordReviveAttempt(sym, now)
+	if err != nil {
+		log.Warn().Err(err).Str("symbol", sym).Msg("failed to revive silent live symbol")
+		return false, true
+	}
+	log.Info().Str("symbol", sym).Msg("revived silent live symbol")
+	return true, false
+}
+
+func (p *CandlePool) recordReviveAttempt(sym string, now time.Time) {
+	p.activityMu.Lock()
+	st := p.pendingRevive[sym]
+	st.attempts++
+	st.lastAttemptAt = now
+	p.pendingRevive[sym] = st
+	p.activityMu.Unlock()
 }

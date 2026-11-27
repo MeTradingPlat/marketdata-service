@@ -33,7 +33,7 @@ type channelAllocator struct {
 	mu          sync.Mutex // solo contabilidad -- nunca sostenido durante I/O de red
 	connections []*pooledConnection
 
-	// growMu serializa UNICAMENTE el camino lento (abrir conexion/canal
+	// growSem serializa UNICAMENTE el camino lento (abrir conexion/canal
 	// nuevo -- I/O de red real: handshake TCP/TLS + SETUP/AUTH de dxLink).
 	// Mismo motivo por el que CandleChannelAllocator.java usa ReentrantLock
 	// en vez de synchronized: sostener un lock compartido mientras se
@@ -44,11 +44,12 @@ type channelAllocator struct {
 	// mientras esta espera), pero el mismo error de diseño -- I/O bajo un
 	// lock compartido -- igual serializa el onboarding de miles de simbolos
 	// detras de un solo handshake lento si no se separa del lock rapido.
-	growMu sync.Mutex
+	growSem chan struct{}
 
-	// lastConnectionOpenedAt: protegido por growMu, no por su propio candado
-	// -- solo se lee/escribe dentro del tramo que ya tiene growMu tomado.
+	// lastConnectionOpenedAt: protegido por growSem, no por su propio candado
+	// -- solo se lee/escribe dentro del tramo que ya tiene growSem tomado.
 	lastConnectionOpenedAt time.Time
+	lastForcedReconnectAt  time.Time
 }
 
 func newChannelAllocator(connFactory func(ctx context.Context) (*DxLinkConn, error), onNewChannel func(*dxLinkChannel), onReconnect func(ctx context.Context, pc *pooledConnection), maxConnections int) *channelAllocator {
@@ -59,7 +60,28 @@ func newChannelAllocator(connFactory func(ctx context.Context) (*DxLinkConn, err
 		connFactory: connFactory, onNewChannel: onNewChannel, onReconnect: onReconnect,
 		maxConnections:     maxConnections,
 		maxChannelsPerConn: maxChannelsPerConnection,
+		growSem:            make(chan struct{}, 1),
 	}
+}
+
+func (a *channelAllocator) lockGrow(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case a.growSem <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-a.growSem
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (a *channelAllocator) unlockGrow() {
+	<-a.growSem
 }
 
 func (a *channelAllocator) allocate(ctx context.Context) (*pooledChannel, error) {
@@ -68,7 +90,7 @@ func (a *channelAllocator) allocate(ctx context.Context) (*pooledChannel, error)
 
 // staggerBeforeNewConnection espera lo que falte para completar
 // connectionStaggerDelay desde que se abrio la ultima conexion nueva --
-// llamada ya con growMu tomado, asi que solo un caller a la vez puede
+// llamada ya con growSem tomado, asi que solo un caller a la vez puede
 // estar esperando/abriendo, nunca dos en paralelo.
 func (a *channelAllocator) staggerBeforeNewConnection(ctx context.Context) {
 	if !a.lastConnectionOpenedAt.IsZero() {
@@ -84,6 +106,7 @@ func (a *channelAllocator) staggerBeforeNewConnection(ctx context.Context) {
 
 func (a *channelAllocator) openChannelOn(ctx context.Context, pc *pooledConnection) (*pooledChannel, error) {
 	ch, err := pc.conn.OpenChannel(ctx)
+	a.recordOpenResult(ctx, pc, err)
 	if err != nil {
 		return nil, fmt.Errorf("opening dxlink channel: %w", err)
 	}
@@ -96,12 +119,30 @@ func (a *channelAllocator) openChannelOn(ctx context.Context, pc *pooledConnecti
 }
 
 func (a *channelAllocator) connectionWithRoomForChannel() *pooledConnection {
+	return a.connectionWithRoomForChannelFiltered(false)
+}
+
+func (a *channelAllocator) connectionWithRoomForChannelFiltered(allowQuarantined bool) *pooledConnection {
+	now := time.Now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	var best *pooledConnection
+	var bestStrikes int
+	var bestUntil time.Time
 	for _, pc := range a.connections {
-		if pc.hasRoomForNewChannel(a.maxChannelsPerConn) {
+		if !allowQuarantined && pc.isQuarantined(now) {
+			continue
+		}
+		if !pc.hasRoomForNewChannel(a.maxChannelsPerConn) {
+			continue
+		}
+		if !allowQuarantined {
 			return pc
 		}
+		strikes, until := pc.quarantineRank()
+		if best == nil || lessQuarantineRank(strikes, until, bestStrikes, bestUntil) {
+			best, bestStrikes, bestUntil = pc, strikes, until
+		}
 	}
-	return nil
+	return best
 }

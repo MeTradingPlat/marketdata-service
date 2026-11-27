@@ -41,8 +41,10 @@ type CandlePool struct {
 	// crecer, a diferencia de la rafaga acotada de unsubscribeDrainPeriod).
 	historyLocks sync.Map // map[string]*sync.Mutex
 
-	liveMu   sync.Mutex
-	liveSubs map[string]func(domain.Candle)
+	liveMu       sync.Mutex
+	liveStopping int
+	liveEpoch    uint64
+	liveSubs     map[string]func(domain.Candle)
 	// liveTicks reenvia la vela M1 EN FORMACION tras cada tick -- el canal
 	// que alimenta la vela en formacion de los graficos (M1 directo, H1/D1
 	// por agregacion en candle_ws_session.go). Nil para simbolos sin
@@ -107,6 +109,10 @@ type CandlePool struct {
 	lastBarTS         map[string]time.Time
 	subscribedAt      map[string]time.Time
 	silentHealHistory map[string][]time.Time
+
+	resumeMu      sync.Mutex
+	resume        map[string]resumeState
+	reviveRunning atomic.Bool
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {

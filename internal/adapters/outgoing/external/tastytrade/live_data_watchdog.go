@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/adapters/outgoing/alerts"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/rs/zerolog/log"
 )
 
@@ -47,26 +48,27 @@ func StartLiveDataWatchdog(ctx context.Context, pool *CandlePool) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				checkOpenSessions(&lastSessionsAlertAt)
-				checkLiveData(ctx, pool, &lastTriggeredAt)
-				if isExtendedSessionET(time.Now()) {
-					pool.ReviveSilentLive(ctx, time.Now())
-				} else {
-					pool.DropExpiredRevive(time.Now())
-				}
+				runWatchdogTick(ctx, pool, time.Now(), &lastSessionsAlertAt, &lastTriggeredAt)
 			}
 		}
 	}()
 }
 
-func checkLiveData(ctx context.Context, pool *CandlePool, lastTriggeredAt *time.Time) {
-	if !isExtendedSessionET(time.Now()) {
+func runWatchdogTick(ctx context.Context, pool *CandlePool, now time.Time, lastSessionsAlertAt, lastTriggeredAt *time.Time) {
+	checkOpenSessions(lastSessionsAlertAt)
+	checkLiveData(ctx, pool, now, lastTriggeredAt)
+	if isExtendedSessionET(now) {
+		pool.StartReviveSilentLive(ctx, now)
+	} else {
+		pool.DropExpiredRevive(now)
+	}
+}
+
+func checkLiveData(ctx context.Context, pool *CandlePool, now time.Time, lastTriggeredAt *time.Time) {
+	if !isExtendedSessionET(now) || sinceExtendedOpenET(now) < liveDataSilenceThreshold {
 		return
 	}
-	if pool.LiveSubscribedCount() == 0 {
-		return
-	}
-	if time.Since(*lastTriggeredAt) < liveDataRetriggerCooldown {
+	if pool.LiveSubscribedCount() == 0 || (!lastTriggeredAt.IsZero() && now.Sub(*lastTriggeredAt) < liveDataRetriggerCooldown) {
 		return
 	}
 	age := pool.LastLiveEventAge()
@@ -77,8 +79,17 @@ func checkLiveData(ctx context.Context, pool *CandlePool, lastTriggeredAt *time.
 	log.Error().Dur("silence", age).Int("live_symbols", pool.LiveSubscribedCount()).
 		Msg("live data watchdog: no candles from any symbol in too long, forcing full pool reconnect")
 	alerts.Notify("ERROR", "Sin velas M1 en vivo durante horario de mercado; forzando reconexion", map[string]any{"silencioSeg": int(age.Seconds()), "simbolosVivos": pool.LiveSubscribedCount()})
-	*lastTriggeredAt = time.Now()
+	*lastTriggeredAt = now
 	pool.ForceReconnectAll(ctx)
+}
+
+func sinceExtendedOpenET(now time.Time) time.Duration {
+	nowET, ok := nyseTimeET(now)
+	if !ok {
+		return 0
+	}
+	openET := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 4, 0, 0, 0, nowET.Location())
+	return nowET.Sub(openET)
 }
 
 // isExtendedSessionET: mismo horario extendido (4am-8pm ET) que ya usa
@@ -86,14 +97,14 @@ func checkLiveData(ctx context.Context, pool *CandlePool, lastTriggeredAt *time.
 // fin de semana) el silencio es esperado (StopAllLive del barrido nocturno
 // incluido), no una falla.
 func isExtendedSessionET(now time.Time) bool {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
+	nowET, ok := nyseTimeET(now)
+	if !ok {
 		return false
 	}
-	nowET := now.In(loc)
-	if nowET.Weekday() == time.Saturday || nowET.Weekday() == time.Sunday {
-		return false
+	closeHour := 20
+	if domain.IsNYSEEarlyClose(nowET) {
+		closeHour = 17
 	}
 	hour := nowET.Hour()
-	return hour >= 4 && hour < 20
+	return hour >= 4 && hour < closeHour
 }

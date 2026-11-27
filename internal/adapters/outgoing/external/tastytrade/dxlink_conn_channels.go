@@ -39,6 +39,7 @@ func (c *DxLinkConn) send(v interface{}) error {
 	err = conn.WriteMessage(websocket.TextMessage, body)
 	c.writeMu.Unlock()
 	if err != nil {
+		c.noteCloseReason(fmt.Sprintf("send_error: %v", err))
 		if ctx == nil {
 			ctx = context.Background()
 		}
@@ -57,6 +58,9 @@ func logOutgoingMessageSize(v interface{}, bytes int) {
 }
 
 func (c *DxLinkConn) OpenChannel(ctx context.Context) (*dxLinkChannel, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !c.Connected() {
 		return nil, fmt.Errorf("dxlink connection not authenticated")
 	}
@@ -67,7 +71,14 @@ func (c *DxLinkConn) OpenChannel(ctx context.Context) (*dxLinkChannel, error) {
 	c.channels[id] = ch
 	c.mu.Unlock()
 
+	c.stats.opensRequested.Add(1)
 	if err := ch.open(ctx); err != nil {
+		if c.Connected() && !ch.retired.Load() {
+			if closeErr := ch.close(); closeErr == nil {
+				c.stats.cancelsSent.Add(1)
+			}
+		}
+		c.stats.recordAbandonedChannel(id, time.Now())
 		c.mu.Lock()
 		delete(c.channels, id)
 		c.mu.Unlock()

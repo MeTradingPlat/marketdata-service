@@ -24,7 +24,7 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) error {
 
 	c.mu.Lock()
 	if c.ctx == nil || c.ctx.Err() != nil {
-		c.ctx = ctx
+		c.ctx = context.WithoutCancel(ctx)
 	}
 	c.mu.Unlock()
 
@@ -39,17 +39,21 @@ func (c *DxLinkConn) performReconnect(ctx context.Context) error {
 	select {
 	case err := <-connDone:
 		if err != nil {
+			c.noteCloseReason(fmt.Sprintf("reconnect_connect_failed: %v", err))
 			c.cleanup()
 			return err
 		}
 	case <-connCtx.Done():
+		c.noteCloseReason(fmt.Sprintf("reconnect_connect_timeout: %v", connCtx.Err()))
 		c.cleanup()
 		return fmt.Errorf("dxlink connect step timed out: %w", connCtx.Err())
 	}
 
 	if c.onReconnect != nil {
 		go func() {
-			reconCtx, reconCancel := context.WithTimeout(ctx, reconnectResubscribeTimeout)
+			timeoutCtx, timeoutCancel := context.WithTimeout(ctx, reconnectResubscribeTimeout)
+			defer timeoutCancel()
+			reconCtx, reconCancel := c.withCloseCancel(timeoutCtx)
 			defer reconCancel()
 			c.onReconnect(reconCtx, c)
 			if !c.Connected() {

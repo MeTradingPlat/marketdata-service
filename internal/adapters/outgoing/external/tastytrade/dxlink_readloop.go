@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -35,6 +34,7 @@ func (c *DxLinkConn) readLoop(ctx context.Context) {
 		_ = conn.SetReadDeadline(time.Now().Add(idleReadTimeout))
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			c.noteCloseReason(formatReadErrorReason(err))
 			logReadError(ctx, err)
 			c.notifyHandshakeFailure(err)
 			c.cleanup()
@@ -94,59 +94,25 @@ func (c *DxLinkConn) handleMessage(ctx context.Context, raw []byte) {
 		return
 	}
 
-	switch env.Type {
-	case "SETUP":
-		if err := c.send(authMessage{Type: "AUTH", Channel: 0, Token: c.tokenFunc()}); err != nil {
-			log.Error().Err(err).Msg("dxlink: failed to send AUTH")
-		}
-	case "AUTH_STATE":
-		if env.State == "AUTHORIZED" {
-			c.markAuthenticated()
-		}
-	case "CHANNEL_OPENED":
-		if env.Service == "FEED" {
-			if ch := c.channel(env.Channel); ch != nil {
-				if err := ch.handleOpened(); err != nil {
-					log.Error().Err(err).Int("channel", env.Channel).Msg("dxlink: failed to send FEED_SETUP")
-				}
-			}
-		}
-	case "FEED_CONFIG":
-		if ch := c.channel(env.Channel); ch != nil {
-			ch.handleConfigured()
-		}
-	case "FEED_DATA":
-		if ch := c.channel(env.Channel); ch != nil {
-			ch.handleData(env.Data)
-		}
-	case "KEEPALIVE":
-		if err := c.send(keepaliveMessage{Type: "KEEPALIVE", Channel: 0}); err != nil {
-			log.Error().Err(err).Msg("dxlink: failed to reply KEEPALIVE")
-		}
-	case "ERROR":
-		c.handleError(ctx, env)
+	if c.dispatchChannelMessage(env) || c.dispatchControlMessage(ctx, env) {
+		return
 	}
+	c.handleUnknownMessage(env.Type)
 }
 
 func (c *DxLinkConn) handleError(ctx context.Context, env inboundEnvelope) {
+	c.stats.recordServerError(env.Error, time.Now())
 	switch env.Error {
 	case "BAD_ACTION":
-		log.Debug().Str("message", env.Message).Msg("dxlink BAD_ACTION")
+		log.Warn().Int64("connID", c.id).Int("channel", env.Channel).Str("message", env.Message).Msg("dxlink BAD_ACTION")
 	case "UNAUTHORIZED":
 		// El servidor puede invalidar la sesion sin cerrar el socket -- sin
 		// forzar authenticated=false aca, checkConnectionHealth nunca lo
 		// detecta y el servicio queda mudo hasta un restart manual.
-		log.Error().Str("message", env.Message).Msg("dxlink UNAUTHORIZED, forcing reconnect")
-		if strings.Contains(env.Message, "sessions") {
-			// "The number of user sessions has exceeded the configured limit":
-			// sesiones huerfanas de conexiones previas saturaron el limite --
-			// la reconexion debe limpiarlas via REST primero (OnSessionReset).
-			c.markSessionSaturated()
-		}
-		c.mu.Lock()
-		c.setAuthenticated(false)
-		c.mu.Unlock()
-		c.scheduleReconnect(ctx)
+		// "The number of user sessions has exceeded the configured limit":
+		// sesiones huerfanas de conexiones previas saturaron el limite --
+		// la reconexion debe limpiarlas via REST primero (OnSessionReset).
+		c.handleUnauthorizedError(ctx, env)
 	case "INVALID_MESSAGE":
 		// Un mensaje rechazado (ej. "content length exceeded 65536 bytes",
 		// limite documentado por dxFeed) deja la conexion en un estado que
@@ -157,12 +123,8 @@ func (c *DxLinkConn) handleError(ctx context.Context, env inboundEnvelope) {
 		// la ventana de silencio; el mensaje culpable ya quedo logueado por
 		// logOutgoingMessageSize (ver dxlink_conn.go) para diagnosticar cual
 		// suscripcion especifica lo causo.
-		log.Error().Str("error", env.Error).Str("message", env.Message).Msg("dxlink INVALID_MESSAGE, forcing reconnect")
-		c.mu.Lock()
-		c.setAuthenticated(false)
-		c.mu.Unlock()
-		c.scheduleReconnect(ctx)
+		c.handleInvalidMessageError(ctx, env)
 	default:
-		log.Error().Str("error", env.Error).Str("message", env.Message).Msg("dxlink error")
+		log.Error().Int64("connID", c.id).Int("channel", env.Channel).Str("error", env.Error).Str("message", env.Message).Msg("dxlink error")
 	}
 }

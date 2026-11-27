@@ -18,12 +18,11 @@ func (p *CandlePool) moveSilentSymbolChannel(ctx context.Context, symbol string,
 	_ = oldCh.channel.unsubscribeLiveDayVolume(symbol)
 	oldCh.release(key)
 
-	from := now.Add(-silentHealFallbackLookback)
-	p.currentMu.Lock()
-	if last, ok := p.lastClosed[symbol]; ok && !last.Timestamp.IsZero() {
-		from = last.Timestamp
+	from := p.knownBarTime(symbol)
+	if from.IsZero() {
+		from = now.Add(-silentHealFallbackLookback)
 	}
-	p.currentMu.Unlock()
+	from = p.resolveResume(symbol, from, now)
 
 	p.registerDispatch(symbol, domain.M1, "live", func(ev rawCandleEvent) { p.handleLiveEvent(symbol, ev) })
 	if err := newCh.channel.subscribeLive(symbol, domain.M1, from); err != nil {

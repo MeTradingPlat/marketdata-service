@@ -6,18 +6,27 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
 )
 
 func (c *DxLinkConn) Connect(ctx context.Context) error {
+	if c.closing.Load() {
+		return fmt.Errorf("dxlink connection closing")
+	}
+	dialCtx, dialCancel := c.withCloseCancel(ctx)
+	defer dialCancel()
 	if c.waitForSessionCooldown != nil {
-		release, err := c.waitForSessionCooldown(ctx)
+		release, err := c.waitForSessionCooldown(dialCtx)
 		if err != nil {
 			return fmt.Errorf("waiting for session cooldown: %w", err)
 		}
 		defer release()
+		if c.closing.Load() {
+			return fmt.Errorf("dxlink connection closing")
+		}
 	}
 
-	conn, _, err := dxLinkDialer.DialContext(ctx, c.urlFunc(), nil)
+	conn, _, err := dxLinkDialer.DialContext(dialCtx, c.urlFunc(), nil)
 	if err != nil {
 		return fmt.Errorf("dialing dxlink websocket: %w", err)
 	}
@@ -30,19 +39,10 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 	// sobra para cualquier lote.
 	conn.SetReadLimit(64 << 20)
 
-	handshakeDone := make(chan error, 1)
-	c.mu.Lock()
-	if c.ctx == nil || c.ctx.Err() != nil {
-		c.ctx = ctx
+	runCtx, handshakeDone, err := c.publishConn(ctx, conn)
+	if err != nil {
+		return err
 	}
-	runCtx := c.ctx
-	c.conn = conn
-	c.setAuthenticated(false)
-	c.handshakeDone = handshakeDone
-	c.channels = make(map[int]*dxLinkChannel)
-	c.connDone = make(chan struct{})
-	c.mu.Unlock()
-	c.touchLastMessage()
 
 	go c.readLoop(runCtx)
 
@@ -53,25 +53,14 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 		return fmt.Errorf("sending dxlink setup: %w", err)
 	}
 
-	select {
-	case err := <-handshakeDone:
-		if err != nil {
-			return err
-		}
-	case <-time.After(handshakeTimeout):
-		// Sin este cleanup, el socket recien abierto (AUTH nunca llego a
-		// AUTHORIZED) y su readLoop quedan colgando sin ningun vigia: el
-		// healthCheckLoop que detecta conexiones zombie solo arranca DESPUES
-		// de un handshake exitoso (mas abajo), asi que nadie mas los cierra.
-		c.cleanup()
-		return fmt.Errorf("dxlink handshake timed out")
-	case <-ctx.Done():
-		c.cleanup()
-		return ctx.Err()
+	if err := c.waitHandshake(ctx, handshakeDone); err != nil {
+		return err
 	}
 
-	go c.keepaliveLoop(runCtx)
-	go c.healthCheckLoop(runCtx)
+	c.watchLoopsOnce.Do(func() {
+		go c.keepaliveLoop(runCtx)
+		go c.healthCheckLoop(runCtx)
+	})
 	c.reconnectMu.Lock()
 	c.reconnectAttempts = 0
 	c.reconnectMu.Unlock()
@@ -84,6 +73,7 @@ func (c *DxLinkConn) Connect(ctx context.Context) error {
 // Se usa en las fronteras D1->H1->M1 del barrido para arrancar cada fase
 // con cero sesiones abiertas ante TastyTrade.
 func (c *DxLinkConn) Close() {
+	c.noteCloseReason("intentional_close")
 	c.closing.Store(true)
 	if c.closedCh != nil {
 		c.closeOnce.Do(func() { close(c.closedCh) })
@@ -104,16 +94,42 @@ func (c *DxLinkConn) sendCloseFrame() {
 }
 
 func (c *DxLinkConn) cleanup() {
+	hadSocket, wasAuth, channelCount := c.cleanupLocked()
+	if hadSocket {
+		log.Info().
+			Int64("connID", c.id).
+			Str("reason", c.closeReasonText()).
+			Bool("authenticated", wasAuth).
+			Dur("last_message_age", c.lastMessageAge()).
+			Dur("socket_lifetime", c.socketLifetime()).
+			Int("channels", channelCount).
+			Fields(c.stats.snapshot()).
+			Msg("dxlink socket closed")
+	}
+}
+
+func (c *DxLinkConn) cleanupLocked() (bool, bool, int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	hadSocket := c.conn != nil
+	wasAuth := c.authenticated
+	channelCount := len(c.channels)
 	c.setAuthenticated(false)
 	if c.conn != nil {
 		_ = c.conn.Close()
 	}
 	c.conn = nil
+	c.retireChannelsLocked()
 	c.channels = make(map[int]*dxLinkChannel)
 	if c.connDone != nil {
 		close(c.connDone)
 		c.connDone = nil
+	}
+	return hadSocket, wasAuth, channelCount
+}
+
+func (c *DxLinkConn) retireChannelsLocked() {
+	for _, ch := range c.channels {
+		ch.retired.Store(true)
 	}
 }

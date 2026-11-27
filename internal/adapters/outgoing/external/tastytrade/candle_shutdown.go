@@ -22,6 +22,10 @@ const closeAllConnectionsLimit = 5 * time.Second
 // llegue el add. Cada simbolo retoma solo desde su propio watermark al
 // resuscribirse, sin perder nada (el mercado estuvo cerrado mientras tanto).
 func (p *CandlePool) StopAllLive(ctx context.Context) {
+	p.liveMu.Lock()
+	p.liveStopping++
+	p.liveMu.Unlock()
+
 	p.allocator.mu.Lock()
 	conns := append([]*pooledConnection(nil), p.allocator.connections...)
 	p.allocator.mu.Unlock()
@@ -51,6 +55,8 @@ func (p *CandlePool) StopAllLive(ctx context.Context) {
 	p.flushFormingCandles()
 
 	p.liveMu.Lock()
+	p.liveStopping--
+	p.liveEpoch++
 	p.liveSubs = make(map[string]func(domain.Candle))
 	p.liveMu.Unlock()
 
@@ -79,6 +85,10 @@ func (p *CandlePool) StopAllLive(ctx context.Context) {
 // marca cada conexion como cierre intencional para que no dispare su
 // propia reconexion automatica.
 func (p *CandlePool) CloseAllConnections() {
+	p.liveMu.Lock()
+	p.liveStopping++
+	p.liveMu.Unlock()
+
 	start := time.Now()
 	conns := p.allocator.drainAll()
 	closeConnections(conns, closeAllConnectionsLimit)
@@ -98,12 +108,16 @@ func (p *CandlePool) CloseAllConnections() {
 	p.flushFormingCandles()
 
 	p.liveMu.Lock()
+	p.liveStopping--
+	p.liveEpoch++
 	p.liveSubs = make(map[string]func(domain.Candle))
 	p.liveMu.Unlock()
 
 	p.currentMu.Lock()
 	p.current = make(map[string]domain.Candle)
 	p.currentMu.Unlock()
+
+	p.clearResume()
 
 	log.Info().Int("connections", len(conns)).Int("goroutines", runtime.NumGoroutine()).
 		Dur("connectionsClosedIn", closedIn).Dur("total", time.Since(start)).

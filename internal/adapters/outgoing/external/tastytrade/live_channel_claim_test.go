@@ -20,7 +20,8 @@ func TestPooledConnection_TakeLiveSymbols(t *testing.T) {
 	if !pc.owns(ch) {
 		t.Fatal("expected owns true before take")
 	}
-	syms := pc.takeLiveSymbols()
+	ch.channel.retired.Store(true)
+	syms := pc.takeRetiredSymbols()
 	if len(syms) != 1 || syms[0] != "AAPL" {
 		t.Fatalf("expected [AAPL], got %v", syms)
 	}
@@ -42,7 +43,8 @@ func TestCandlePool_ClaimLiveChannel_OccupiesAndOwns(t *testing.T) {
 	if syms := ch1.liveSymbols(); len(syms) != 1 || syms[0] != "AAA" {
 		t.Fatalf("expected [AAA], got %v", syms)
 	}
-	if taken := p.allocator.connections[0].takeLiveSymbols(); len(taken) != 1 || taken[0] != "AAA" {
+	ch1.channel.retired.Store(true)
+	if taken := p.allocator.connections[0].takeRetiredSymbols(); len(taken) != 1 || taken[0] != "AAA" {
 		t.Fatalf("expected [AAA], got %v", taken)
 	}
 	ch2, err := p.claimLiveChannel(ctx, "BBB")

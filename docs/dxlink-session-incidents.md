@@ -784,3 +784,83 @@ Fix:
 - `flushSavesOnShutdown` (`cmd/api/shutdown_flush.go`, llamado en `cmd/api/main.go`
   con `shutdownFlushTimeout` = 8 s) vacía `liveSaveBuffer` y `retryBuffer` al
   apagar.
+
+## 2026-11-26: miles de símbolos sin canal sin recuperación propia
+
+### Evidencia (UTC, logs de producción)
+
+| Hecho | Dato |
+| --- | --- |
+| Conexión cerrada y no reabierta | 12:51:46 a 14:05:07 (73 min) |
+| Inicio del atasco de aperturas | 12:49 |
+| Primera apertura abandonada por contexto vencido | 12:54:36 (356 en la ventana) |
+| Timeouts de apertura de 45 s | 93, desde 12:56:07 |
+| Símbolos sin canal | 7.137 constantes |
+| Duración del ciclo de reparación | 405 s (9 aperturas de 45 s en cola) |
+
+La recuperación llegó por el vigilante de silencio global. Con mercado abierto ese
+vigilante no se dispara, porque las demás conexiones siguen recibiendo datos.
+
+### Causas confirmadas en el código
+
+- `Connect` pasaba el contexto del llamador a `readLoop`, `keepaliveLoop` y
+  `healthCheckLoop`: al vencer, la conexión quedaba sin vigilancia.
+- `OpenChannel` enviaba `CHANNEL_REQUEST` con el contexto vencido y, al fallar,
+  no enviaba `CHANNEL_CANCEL`.
+- La resuscripción tras reconectar seguía iterando con su plazo vencido.
+- Dos reconexiones solapadas permitían asignar símbolos a canales del socket
+  anterior.
+- `ReviveSilentLive` corría en la goroutine del vigilante y no cortaba tras
+  fallos.
+- La cola de aperturas (`growMu`) no se podía cancelar y el asignador elegía
+  siempre la primera conexión con hueco.
+
+Sin probar: qué inició el atasco a las 12:49, anterior al primer abandono.
+
+### Fix
+
+- Ciclo de vida: los canales se marcan retirados al caer su conexión
+  (`takeRetiredSymbols` separa lo que resuscribe cada manejador; desaparece
+  `resubMu`). En `Connect` el contexto del llamador solo gobierna la espera de
+  cooldown, el dial y el handshake; los bucles usan `context.WithoutCancel`,
+  arrancan una vez y paran con `Close()`.
+- Retomada (`live_resume.go`): cada símbolo conserva el punto más antiguo
+  pendiente hasta que llega un dato pasados 2 minutos del primero. El tiempo sin
+  datos no lo descarta.
+- `UNAUTHORIZED` e `INVALID_MESSAGE` retiran los canales al momento.
+- `Close()` cancela la espera de cooldown y la resuscripción en curso; la época
+  del pool (`liveEpoch`) impide registrar símbolos después de cerrar.
+- Asignador: espera cancelable (`growSem`); tras 3 timeouts de apertura seguidos,
+  cuarentena de 2, 4, 8, 16 y 30 minutos más cierre y reconexión, como máximo una
+  forzada por minuto. Con el pool en el tope, o si falla abrir una conexión
+  nueva, se usa la conexión apartada con menos fallos que tenga hueco.
+- Saneadores: `StartReviveSilentLive` no se solapa, tiene plazo de 3 minutos y
+  corta tras 3 fallos; cada llamada de `runLiveHealTick` tiene plazo de 3 minutos.
+  Durante `StopAllLive` y `CloseAllConnections` no suscriben.
+- Calendario NYSE: sin sesión en festivos; en cierre anticipado la sesión regular
+  acaba a las 13:00 ET y la extendida a las 17:00 ET. El vigilante ignora el
+  silencio hasta las 04:03 ET. No cubre cierres extraordinarios.
+- Trazas: `connID` en apertura, cierre, reconexión fallida, cuarentena y
+  `BAD_ACTION`, que pasa a aviso.
+
+### Diagnóstico: cómo identificar la causa
+
+| Qué buscar | Qué dice |
+| --- | --- |
+| `dxlink socket closed`, campo `reason` | Quién cerró primero: error de lectura, silencio, fallo de envío, cuarentena, vigilante, cierre intencional, handshake o error del servidor |
+| `dxlink channel open failed`, campo `probable_cause` | `network_silent`, `server_error`, `partial_response`, `server_slow` o `requests_ignored` |
+| `dxlink late response on unregistered channel` | El servidor contesta después de rendirnos; `abandoned_age` dice cuánto |
+| `dxlink server closed active channel` | El servidor corta un canal en uso; no se retira solo |
+| Alerta `dxlink connection quarantined after channel open timeouts` en `log-service` | Foto de contadores; sobrevive a la recreación del contenedor |
+
+`probable_cause` es una pista calculada, no una prueba. Los contadores son por
+socket y se ponen a cero al reconectar.
+
+### Comprobar tras desplegar
+
+- A los 10 minutos de recuperar la red: 0 símbolos sin canal.
+- Ninguna conexión con timeouts de apertura durante más de 5 minutos.
+- Ningún `dxlink error` provocado por `CHANNEL_CANCEL`.
+- Cada `dxlink session closed` no intencionado va seguido en 1 minuto de
+  `opened` o de `dxlink reconnect failed`.
+- Las goroutines no crecen con las reconexiones.

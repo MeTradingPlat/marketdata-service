@@ -137,7 +137,7 @@ func (c *DxLinkConn) reconnectLoop(ctx context.Context) {
 			return
 		}
 		if err := c.performReconnect(ctx); err != nil {
-			log.Error().Err(err).Msg("dxlink reconnect failed")
+			log.Error().Err(err).Int64("connID", c.id).Msg("dxlink reconnect failed")
 			continue
 		}
 		return

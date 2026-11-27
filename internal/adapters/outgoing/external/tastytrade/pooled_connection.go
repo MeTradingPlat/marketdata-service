@@ -1,18 +1,20 @@
 package tastytrade
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 const maxChannelsPerConnection = 8
 
 type pooledConnection struct {
 	conn *DxLinkConn
 
-	// resubMu serializa handleConnectionReconnect de la misma conexion; con la
-	// resubscripcion asincrona dos reconexiones pueden solaparse.
-	resubMu sync.Mutex
-
-	mu       sync.Mutex
-	channels []*pooledChannel
+	mu                      sync.Mutex
+	channels                []*pooledChannel
+	consecutiveOpenTimeouts int
+	quarantineStrikes       int
+	quarantinedUntil        time.Time
 }
 
 func newPooledConnection(conn *DxLinkConn) *pooledConnection {
@@ -37,7 +39,7 @@ func (p *pooledConnection) channelWithRoom(exclude *pooledChannel) *pooledChanne
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, ch := range p.channels {
-		if ch != exclude && ch.hasRoom() {
+		if ch != exclude && !ch.isRetired() && ch.hasRoom() {
 			return ch
 		}
 	}
@@ -53,7 +55,13 @@ func (p *pooledConnection) hasRoomForNewChannel(maxChannels int) bool {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.channels) < maxChannels
+	active := 0
+	for _, ch := range p.channels {
+		if !ch.isRetired() {
+			active++
+		}
+	}
+	return active < maxChannels
 }
 
 func (p *pooledConnection) addChannel(ch *pooledChannel) {
@@ -63,6 +71,9 @@ func (p *pooledConnection) addChannel(ch *pooledChannel) {
 }
 
 func (p *pooledConnection) owns(ch *pooledChannel) bool {
+	if ch.isRetired() {
+		return false
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, c := range p.channels {
@@ -85,14 +96,21 @@ func (p *pooledConnection) removeChannel(ch *pooledChannel) bool {
 	return false
 }
 
-func (p *pooledConnection) takeLiveSymbols() []string {
+func (p *pooledConnection) takeRetiredSymbols() []string {
 	p.mu.Lock()
-	channels := p.channels
-	p.channels = nil
+	var kept, retired []*pooledChannel
+	for _, ch := range p.channels {
+		if ch.isRetired() {
+			retired = append(retired, ch)
+			continue
+		}
+		kept = append(kept, ch)
+	}
+	p.channels = kept
 	p.mu.Unlock()
 
 	var symbols []string
-	for _, ch := range channels {
+	for _, ch := range retired {
 		symbols = append(symbols, ch.liveSymbols()...)
 	}
 	return symbols

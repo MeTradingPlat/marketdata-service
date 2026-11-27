@@ -30,4 +30,5 @@ func (p *CandlePool) resetActivityMaps() {
 	p.subscribedAt = make(map[string]time.Time)
 	p.silentHealHistory = make(map[string][]time.Time)
 	p.activityMu.Unlock()
+	p.clearResume()
 }

@@ -29,6 +29,7 @@ var dxLinkDialer = websocket.Dialer{
 }
 
 type DxLinkConn struct {
+	id        int64
 	urlFunc   func() string
 	tokenFunc func() string
 
@@ -77,9 +78,15 @@ type DxLinkConn struct {
 	onSessionSaturated     func()
 	waitForSessionCooldown func(ctx context.Context) (func(), error)
 
-	closing   atomic.Bool
-	closeOnce sync.Once
-	closedCh  chan struct{}
+	closing        atomic.Bool
+	closeOnce      sync.Once
+	closedCh       chan struct{}
+	watchLoopsOnce sync.Once
+
+	stats              dxLinkSocketStats
+	socketOpenedAtNano atomic.Int64
+	closeReasonMu      sync.Mutex
+	closeReason        string
 
 	// connDone se cierra en cleanup() -- es la señal de "esta conexion en
 	// particular ya murio" para cualquier goroutine bloqueada esperando algo
@@ -116,19 +123,23 @@ func (c *DxLinkConn) touchLastMessage() {
 }
 
 func (c *DxLinkConn) lastMessageAge() time.Duration {
-	last := c.lastMessageAtUnixNano.Load()
-	if last == 0 {
-		return 0
-	}
-	return time.Since(time.Unix(0, last))
+	return ageSinceUnixNano(c.lastMessageAtUnixNano.Load())
 }
+
+var nextDxLinkConnID atomic.Int64
 
 // urlFunc/tokenFunc se evaluan recien al conectar (y en cada reconexion),
 // no al construir -- el DxLinkConn se arma en el wiring de arranque, antes
 // de que exista un access token o un dxlink-url real (eso llega despues,
 // via OAuth.RefreshAccessToken + QuoteToken.Refresh).
 func NewDxLinkConn(urlFunc func() string, tokenFunc func() string) *DxLinkConn {
-	return &DxLinkConn{urlFunc: urlFunc, tokenFunc: tokenFunc, nextChannelID: -1, closedCh: make(chan struct{})}
+	return &DxLinkConn{id: nextDxLinkConnID.Add(1), urlFunc: urlFunc, tokenFunc: tokenFunc, nextChannelID: -1, closedCh: make(chan struct{})}
+}
+
+func (c *DxLinkConn) openChannelCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.channels)
 }
 
 func (c *DxLinkConn) OnReconnect(fn func(ctx context.Context, c *DxLinkConn)) {
@@ -171,10 +182,10 @@ func (c *DxLinkConn) setAuthenticated(authenticated bool) {
 	}
 	c.authenticated = authenticated
 	if authenticated {
-		log.Info().Int64("openSessions", openDxLinkSessions.Add(1)).Msg("dxlink session opened")
+		log.Info().Int64("connID", c.id).Int64("openSessions", openDxLinkSessions.Add(1)).Msg("dxlink session opened")
 		return
 	}
-	log.Info().Int64("openSessions", openDxLinkSessions.Add(-1)).Msg("dxlink session closed")
+	log.Info().Int64("connID", c.id).Int64("openSessions", openDxLinkSessions.Add(-1)).Str("reason", c.closeReasonText()).Msg("dxlink session closed")
 }
 
 func (c *DxLinkConn) Connected() bool {

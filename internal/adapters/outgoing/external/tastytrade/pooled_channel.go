@@ -37,6 +37,10 @@ func (p *pooledChannel) release(key string) {
 	delete(p.symbols, key)
 }
 
+func (p *pooledChannel) isRetired() bool {
+	return p == nil || (p.channel != nil && p.channel.retired.Load())
+}
+
 func (p *pooledChannel) liveSymbols() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()

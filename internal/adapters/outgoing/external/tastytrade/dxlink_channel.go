@@ -2,14 +2,19 @@ package tastytrade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-var channelOpenTimeout = 45 * time.Second
+var (
+	channelOpenTimeout    = 45 * time.Second
+	errChannelOpenTimeout = errors.New("dxlink channel open timed out")
+)
 
 // eventFlags al final (indice 9, ver candle_event.go): pedido nuevo,
 // defensivo -- dxFeed documenta Candle como IndexedEvent con esta propiedad
@@ -36,8 +41,10 @@ var candleEventFields = []string{"eventSymbol", "time", "open", "high", "low", "
 var profileEventFields = []string{"eventSymbol", "shares"}
 
 type dxLinkChannel struct {
-	id     int
-	client *DxLinkConn
+	id             int
+	client         *DxLinkConn
+	retired        atomic.Bool
+	openedReceived atomic.Bool
 
 	readyOnce sync.Once
 	ready     chan struct{}
@@ -62,6 +69,7 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 	}
 	select {
 	case <-c.ready:
+		c.client.stats.opensSucceeded.Add(1)
 		if elapsed := time.Since(start); elapsed > 5*time.Second {
 			log.Warn().Int("channel", c.id).Dur("elapsed", elapsed).Msg("opening dxlink channel slow")
 		}
@@ -75,14 +83,42 @@ func (c *dxLinkChannel) open(ctx context.Context) error {
 	case <-c.client.Done():
 		return fmt.Errorf("dxlink connection closed while opening channel %d", c.id)
 	case <-time.After(channelOpenTimeout):
-		elapsed := time.Since(start)
-		return fmt.Errorf("opening dxlink channel %d timed out after %s", c.id, elapsed)
+		return c.recordOpenTimeout(start, time.Since(start))
 	case <-ctx.Done():
+		c.client.stats.opensCanceled.Add(1)
 		return ctx.Err()
 	}
 }
 
+func (c *dxLinkChannel) recordOpenTimeout(sentAt time.Time, elapsed time.Duration) error {
+	timeouts := c.client.stats.opensTimedOut.Add(1)
+	canceled := c.client.stats.opensCanceled.Load()
+	openChannels := c.client.openChannelCount()
+	lastMsgAge := c.client.lastMessageAge()
+	cause := classifyOpenTimeout(
+		c.client.lastMessageAt(),
+		c.client.stats.lastErrorAt(),
+		sentAt,
+		c.openedReceived.Load(),
+		c.client.stats.lateResponses.Load(),
+	)
+	c.client.stats.setLastTimeoutCause(cause)
+	log.Warn().
+		Int64("connID", c.client.id).
+		Int("channel", c.id).
+		Int("open_channels", openChannels).
+		Dur("elapsed", elapsed).
+		Dur("last_message_age", lastMsgAge).
+		Int64("canceled", canceled).
+		Int64("timeouts", timeouts).
+		Str("probable_cause", cause).
+		Msg("dxlink channel open failed")
+	return fmt.Errorf("%w: channel %d connID %d open_channels %d elapsed %s last_message_age %s canceled %d timeouts %d cause %s",
+		errChannelOpenTimeout, c.id, c.client.id, openChannels, elapsed, lastMsgAge, canceled, timeouts, cause)
+}
+
 func (c *dxLinkChannel) handleOpened() error {
+	c.openedReceived.Store(true)
 	return c.client.send(feedSetupMessage{
 		Type: "FEED_SETUP", Channel: c.id, AcceptAggregationPeriod: 0.1, AcceptDataFormat: "COMPACT",
 		AcceptEventFields: map[string][]string{

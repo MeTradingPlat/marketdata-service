@@ -2,6 +2,7 @@ package tastytrade
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -21,6 +22,8 @@ func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-c.closedCh:
 			return
 		case <-ticker.C:
 			// Close() marca closing=true pero no cancela ctx (de vida larga,
@@ -45,6 +48,7 @@ func (c *DxLinkConn) healthCheckLoop(ctx context.Context) {
 			disconnectedSince = time.Time{}
 			if age := c.lastMessageAge(); age > staleConnectionThreshold {
 				log.Warn().Dur("silence", age).Msg("dxlink connection silent too long, forcing close to trigger reconnect")
+				c.noteCloseReason(fmt.Sprintf("stale_connection: silence=%s", age))
 				c.dropAndReconnect(ctx)
 			}
 		}
@@ -57,6 +61,8 @@ func (c *DxLinkConn) keepaliveLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-c.closedCh:
 			return
 		case <-ticker.C:
 			// Mismo motivo que en healthCheckLoop: Close() no cancela ctx.

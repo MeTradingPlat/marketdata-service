@@ -24,6 +24,7 @@ func (a *channelAllocator) forceReconnectAll(ctx context.Context) {
 	conns := append([]*pooledConnection(nil), a.connections...)
 	a.mu.Unlock()
 	for _, pc := range conns {
+		pc.conn.noteCloseReason("watchdog_forced_reconnect")
 		pc.conn.ForceReconnect(ctx)
 	}
 }
@@ -47,7 +48,11 @@ func (a *channelAllocator) allChannels() []*pooledChannel {
 	var channels []*pooledChannel
 	for _, pc := range conns {
 		pc.mu.Lock()
-		channels = append(channels, pc.channels...)
+		for _, ch := range pc.channels {
+			if !ch.isRetired() {
+				channels = append(channels, ch)
+			}
+		}
 		pc.mu.Unlock()
 	}
 	return channels
@@ -81,8 +86,8 @@ func (a *channelAllocator) setMaxChannelsPerConn(n int) {
 	if n <= 0 {
 		return
 	}
-	a.growMu.Lock()
-	defer a.growMu.Unlock()
+	_ = a.lockGrow(context.Background())
+	defer a.unlockGrow()
 	a.maxChannelsPerConn = n
 }
 
