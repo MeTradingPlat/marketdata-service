@@ -16,10 +16,11 @@ import (
 // por simbolo) para 8861 simbolos de una vez tarda 14s+; el fix real es no
 // pagar esa consulta en el camino caliente.
 type SnapshotTracker struct {
-	mu   sync.RWMutex
-	day  time.Time
-	data map[string]domain.IntradaySnapshot
-	last map[string]lastClose
+	mu      sync.RWMutex
+	day     time.Time
+	data    map[string]domain.IntradaySnapshot
+	last    map[string]lastClose
+	minutes minuteRegistry
 }
 
 // lastClose es el precio/volumen de la ultima M1 cerrada registrada, de
@@ -30,10 +31,15 @@ type SnapshotTracker struct {
 type lastClose struct {
 	Price  float64
 	Volume int64
+	At     time.Time
 }
 
 func NewSnapshotTracker() *SnapshotTracker {
-	return &SnapshotTracker{data: make(map[string]domain.IntradaySnapshot), last: make(map[string]lastClose)}
+	return &SnapshotTracker{
+		data:    make(map[string]domain.IntradaySnapshot),
+		last:    make(map[string]lastClose),
+		minutes: make(minuteRegistry),
+	}
 }
 
 // Seed carga una base inicial (desde la BD, una sola vez al arrancar o tras
@@ -59,6 +65,7 @@ func (t *SnapshotTracker) Seed(day time.Time, requested []string, snapshots map[
 		snapshots = make(map[string]domain.IntradaySnapshot, len(requested))
 	}
 	t.data = snapshots
+	t.minutes = make(minuteRegistry)
 	fillMissingWithEmpty(t.data, requested)
 }
 
@@ -101,9 +108,11 @@ func (t *SnapshotTracker) MergeReconcile(day time.Time, requested []string, snap
 	if !t.day.Equal(day) {
 		t.day = day
 		t.data = make(map[string]domain.IntradaySnapshot)
+		t.minutes = make(minuteRegistry)
 	}
 	for symbol, snap := range snapshots {
 		t.data[symbol] = snap
+		delete(t.minutes, symbol)
 	}
 	fillMissingWithEmpty(t.data, requested)
 }

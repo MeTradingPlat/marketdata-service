@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 	"github.com/rs/zerolog/log"
@@ -46,11 +47,15 @@ func dueDayBoundary(now time.Time) (intraday.DayBoundary, bool) {
 	if et.Weekday() == time.Saturday || et.Weekday() == time.Sunday {
 		return 0, false
 	}
-	seconds := et.Hour()*3600 + et.Minute()*60 + et.Second()
+	hours := domain.NYSESessionHoursFor(et)
+	preEndStart := hours.Open.Add(-4 * time.Minute)
+	preEndStop := hours.Open.Add(-2 * time.Minute)
+	regEndStart := hours.Close.Add(time.Minute)
+	regEndStop := hours.Close.Add(4 * time.Minute)
 	switch {
-	case seconds >= 9*3600+26*60 && seconds < 9*3600+28*60:
+	case !et.Before(preEndStart) && et.Before(preEndStop):
 		return intraday.PreMarketEnd, true
-	case seconds >= 16*3600+60 && seconds < 16*3600+4*60:
+	case !et.Before(regEndStart) && et.Before(regEndStop):
 		return intraday.RegularEnd, true
 	}
 	return 0, false

@@ -7,9 +7,8 @@ import (
 )
 
 // previousPostMarketVolumeWindowSQL suma el volumen M1 de la sesion post-
-// market [16:00 ET, medianoche ET) de UN dia especifico -- misma frontera
-// que usa GetIntradaySessionsBatch para "hoy" (ver queryIntradaySessionsBatch),
-// aca aplicada al dia de AYER. any_rows distingue "el simbolo no opero ese
+// market [16:00 ET, 20:00 ET) dentro de la jornada [04:00 ET, 20:00 ET) de UN
+// dia especifico -- any_rows distingue "el simbolo no opero ese
 // dia" (0 filas, hay que seguir buscando dias atras) de "opero pero sin
 // volumen post-market real" (post_vol=0 es un dato valido, no ausencia).
 const previousPostMarketVolumeWindowSQL = `
@@ -35,19 +34,16 @@ func (r *CandleRepository) GetPreviousPostMarketVolumeBatch(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("loading America/New_York location: %w", err)
 	}
-	dayStart := time.Date(before.Year(), before.Month(), before.Day(), 0, 0, 0, 0, loc)
-
 	pending := make([]string, len(symbols))
 	copy(pending, symbols)
-	for d := 1; d <= prevSessionCloseDays && len(pending) > 0; d++ {
-		day := dayStart.AddDate(0, 0, -d)
-		marketClose := day.Add(16 * time.Hour)
-		dayEnd := day.Add(24 * time.Hour)
-
+	for d, w := range previousPostMarketWindows(before, prevSessionCloseDays, loc) {
+		if len(pending) == 0 {
+			break
+		}
 		resolved := make(map[string]struct{}, len(pending))
 		for _, batch := range chunkSymbols(pending, universeBatchChunkSize) {
-			if err := r.queryPreviousPostMarketVolumeWindow(ctx, batch, marketClose, day, dayEnd, result, resolved); err != nil {
-				return nil, fmt.Errorf("querying previous post market volume window (day -%d): %w", d, err)
+			if err := r.queryPreviousPostMarketVolumeWindow(ctx, batch, w.postStart, w.start, w.end, result, resolved); err != nil {
+				return nil, fmt.Errorf("querying previous post market volume window (day -%d): %w", d+1, err)
 			}
 		}
 

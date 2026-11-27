@@ -11,12 +11,16 @@ import (
 // corresponde ahora -- sin esto, high/low/volumen del dia quedan hasta un
 // minuto atras del precio actual, que si la incluye.
 func mergeFormingCandle(snap *domain.IntradaySnapshot, current domain.Candle) {
+	mergeFormingCandleAt(snap, current, time.Now())
+}
+
+func mergeFormingCandleAt(snap *domain.IntradaySnapshot, current domain.Candle, now time.Time) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		return
 	}
 
-	nowET := time.Now().In(loc)
+	nowET := now.In(loc)
 	currentET := current.Timestamp.In(loc)
 	// p.current se vacia por completo en cada frontera del barrido nocturno,
 	// pero justo despues de medianoche (ET) puede seguir viva la ultima vela
@@ -27,14 +31,16 @@ func mergeFormingCandle(snap *domain.IntradaySnapshot, current domain.Candle) {
 		return
 	}
 
-	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
-	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
+	hours := domain.NYSESessionHoursFor(nowET)
+	if current.Timestamp.Before(hours.PreOpen) || !current.Timestamp.Before(hours.PostEnd) {
+		return
+	}
 
 	switch {
-	case current.Timestamp.Before(marketOpen):
+	case current.Timestamp.Before(hours.Open):
 		snap.PreMarketVolume += current.Volume
 		snap.PreMarketClose = current.Close
-	case current.Timestamp.Before(marketClose):
+	case current.Timestamp.Before(hours.Close):
 		if snap.Open == 0 {
 			snap.Open = current.Open
 		}

@@ -23,56 +23,58 @@ func (t *SnapshotTracker) SeedLastClose(requested []string, closes map[string]do
 		t.last[sym] = lastClose{}
 	}
 	for symbol, c := range closes {
-		t.last[symbol] = lastClose{Price: c.Close, Volume: c.Volume}
+		t.last[symbol] = lastClose{Price: c.Close, Volume: c.Volume, At: c.Timestamp}
 	}
 }
 
 // RecordClosedCandle acumula una vela M1 YA CERRADA en la sesion del dia
 // que le corresponde -- mismo bucketing pre/regular/post-market que usaba
 // GetIntradaySessionsBatch, pero sumando sobre todo el dia en vez de
-// recalcularlo desde disco en cada request. Un cambio de dia ET limpia el
-// mapa entero (nueva sesion, nadie arranca con datos de ayer).
+// recalcularlo desde disco en cada request. El paso a un dia ET posterior
+// limpia el mapa entero (nueva sesion, nadie arranca con datos de ayer).
 func (t *SnapshotTracker) RecordClosedCandle(c domain.Candle) {
-	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		return
-	}
-	tsET := c.Timestamp.In(loc)
-	day := time.Date(tsET.Year(), tsET.Month(), tsET.Day(), 0, 0, 0, 0, loc)
-	marketOpen := time.Date(tsET.Year(), tsET.Month(), tsET.Day(), 9, 30, 0, 0, loc)
-	marketClose := time.Date(tsET.Year(), tsET.Month(), tsET.Day(), 16, 0, 0, 0, loc)
+	tsET := c.Timestamp.In(newYork)
+	day := time.Date(tsET.Year(), tsET.Month(), tsET.Day(), 0, 0, 0, 0, newYork)
+	hours := domain.NYSESessionHoursFor(tsET)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.day.Equal(day) {
+	t.updateLastCloseLocked(c)
+	if !t.prepareDayLocked(day) {
+		return
+	}
+	if c.Timestamp.Before(hours.PreOpen) || !c.Timestamp.Before(hours.PostEnd) {
+		return
+	}
+	t.applyClosedCandleLocked(c, hours.Open, hours.Close)
+}
+
+func (t *SnapshotTracker) updateLastCloseLocked(c domain.Candle) {
+	prev, ok := t.last[c.Symbol]
+	if !ok || !c.Timestamp.Before(prev.At) {
+		t.last[c.Symbol] = lastClose{Price: c.Close, Volume: c.Volume, At: c.Timestamp}
+	}
+}
+
+func dateKey(t time.Time) int {
+	return t.Year()*10000 + int(t.Month())*100 + t.Day()
+}
+
+func (t *SnapshotTracker) prepareDayLocked(day time.Time) bool {
+	if t.day.IsZero() {
+		t.day = day
+		return true
+	}
+	dk, tk := dateKey(day), dateKey(t.day)
+	if dk < tk {
+		return false
+	}
+	if dk > tk {
 		t.day = day
 		t.data = make(map[string]domain.IntradaySnapshot)
+		t.minutes = make(minuteRegistry)
 	}
-
-	t.last[c.Symbol] = lastClose{Price: c.Close, Volume: c.Volume}
-
-	snap := t.data[c.Symbol]
-	snap.Symbol = c.Symbol
-	switch {
-	case c.Timestamp.Before(marketOpen):
-		snap.PreMarketVolume += c.Volume
-		snap.PreMarketClose = c.Close
-	case c.Timestamp.Before(marketClose):
-		if snap.Open == 0 {
-			snap.Open = c.Open
-		}
-		if snap.High == 0 || c.High > snap.High {
-			snap.High = c.High
-		}
-		if snap.Low == 0 || c.Low < snap.Low {
-			snap.Low = c.Low
-		}
-		snap.DayVolume += c.Volume
-	default:
-		snap.PostMarketVolume += c.Volume
-		snap.PostMarketClose = c.Close
-	}
-	t.data[c.Symbol] = snap
+	return true
 }
 
 // LastClose devuelve el precio/volumen de la ultima M1 cerrada registrada

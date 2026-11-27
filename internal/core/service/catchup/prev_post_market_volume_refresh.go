@@ -11,7 +11,7 @@ import (
 )
 
 // RefreshPrevPostMarketVolume calcula el postmarket de la sesion anterior
-// (16:00 ET-medianoche del ultimo dia habil) SOLO para los simbolos cuyo
+// (Close-PostEnd ET del ultimo dia habil) SOLO para los simbolos cuyo
 // prev_post_market_volume_updated_at quedo fuera de la ventana de
 // mantenimiento actual -- mismo guard y mismo motivo que RefreshPrevClose.
 // Sin este dato, un escaner que corre en premarket nunca ve un

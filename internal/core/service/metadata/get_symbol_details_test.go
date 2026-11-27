@@ -10,6 +10,7 @@ import (
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/out"
 	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 )
 
 type fakeDetailsSymRepo struct {
@@ -41,7 +42,7 @@ func TestGetSymbolDetails(t *testing.T) {
 	fundCache.MergePrevClose(map[string]float64{"AAPL": prev}, nil)
 	fundCache.MergeMarketMetrics([]domain.Fundamentals{{Symbol: "AAPL", NextEarningsDate: future}})
 
-	svc := NewGetSymbolDetailsService(symCache, fundCache, &fakeDetailsIntraday{err: errors.New("no candles")})
+	svc := NewGetSymbolDetailsService(symCache, fundCache, &fakeDetailsIntraday{err: errors.New("no candles")}, intraday.NewDayVolumeTracker())
 	if _, err := svc.GetSymbolDetails(ctx, "MISSING"); err == nil {
 		t.Fatal("expected error for missing symbol")
 	}
@@ -59,5 +60,25 @@ func TestGetSymbolDetails(t *testing.T) {
 	past, _ := svc.GetSymbolDetails(ctx, "AAPL")
 	if past.FundamentalData.NextEarningsDate != "" || past.FundamentalData.DaysUntilEarnings != nil {
 		t.Fatalf("expected past earnings cleared, got %+v", past.FundamentalData)
+	}
+}
+
+func TestGetSymbolDetails_UsesDayVolumeTracker(t *testing.T) {
+	ctx := context.Background()
+	symCache := NewSymbolsCache(&fakeDetailsSymRepo{syms: []domain.Symbol{{Symbol: "AAPL"}}}, nil)
+	symCache.ReloadAll(ctx)
+	fundCache := fundamentalscache.NewFundamentalsCache(nil, nil, nil)
+	dayVolumes := intraday.NewDayVolumeTracker()
+	dayVolumes.Update(time.Now(), map[string]int64{"AAPL": 987654})
+
+	svc := NewGetSymbolDetailsService(symCache, fundCache, &fakeDetailsIntraday{
+		snap: domain.IntradaySnapshot{Symbol: "AAPL", DayVolume: 100},
+	}, dayVolumes)
+	got, err := svc.GetSymbolDetails(ctx, "AAPL")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.FundamentalData.DayVolume != 987654 {
+		t.Fatalf("DayVolume = %d, want 987654", got.FundamentalData.DayVolume)
 	}
 }

@@ -26,6 +26,8 @@ func TestDueDayBoundary(t *testing.T) {
 		"end of regular window":        {at(23, 16, 3, 59), intraday.RegularEnd, true},
 		"after the regular window":     {at(23, 16, 4, 0), 0, false},
 		"weekend":                      {at(26, 9, 29, 0), 0, false},
+		"early close regular end":      {time.Date(2026, 11, 27, 13, 1, 0, 0, loc), intraday.RegularEnd, true},
+		"early close 16:01 ignored":    {time.Date(2026, 11, 27, 16, 1, 0, 0, loc), 0, false},
 	}
 	for name, tc := range cases {
 		kind, due := dueDayBoundary(tc.when)

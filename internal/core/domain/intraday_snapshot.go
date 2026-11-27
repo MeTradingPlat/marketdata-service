@@ -20,8 +20,9 @@ type IntradaySnapshot struct {
 	PrevClose float64 `json:"prevClose"`
 	DayVolume int64   `json:"dayVolume"`
 
-	PreMarketVolume  int64   `json:"preMarketVolume"`
-	PreMarketClose   float64 `json:"preMarketClose"`
-	PostMarketVolume int64   `json:"postMarketVolume"`
-	PostMarketClose  float64 `json:"postMarketClose"`
+	PreMarketVolume  int64     `json:"preMarketVolume"`
+	PreMarketClose   float64   `json:"preMarketClose"`
+	PostMarketVolume int64     `json:"postMarketVolume"`
+	PostMarketClose  float64   `json:"postMarketClose"`
+	CountedThrough   time.Time `json:"-"`
 }

@@ -1,6 +1,10 @@
 package intraday
 
-import "time"
+import (
+	"time"
+
+	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
+)
 
 type SessionPhase int
 
@@ -26,13 +30,13 @@ func PhaseAt(now time.Time) SessionPhase {
 	if et.Weekday() == time.Saturday || et.Weekday() == time.Sunday {
 		return PhaseClosed
 	}
-	minutes := et.Hour()*60 + et.Minute()
+	h := domain.NYSESessionHoursFor(et)
 	switch {
-	case minutes >= 4*60 && minutes < 9*60+30:
+	case !et.Before(h.PreOpen) && et.Before(h.Open):
 		return PhasePreMarket
-	case minutes >= 9*60+30 && minutes < 16*60:
+	case !et.Before(h.Open) && et.Before(h.Close):
 		return PhaseRegular
-	case minutes >= 16*60 && minutes < 20*60:
+	case !et.Before(h.Close) && et.Before(h.PostEnd):
 		return PhasePostMarket
 	default:
 		return PhaseClosed

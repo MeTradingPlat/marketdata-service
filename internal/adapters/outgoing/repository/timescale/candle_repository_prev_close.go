@@ -19,7 +19,7 @@ const prevSessionCloseDays = 10
 
 // GetPreviousSessionClose: ver el puerto (ports/out/repositories.go). Las
 // ventanas se calculan en America/New_York (la subasta de cierre cae a las
-// 16:00 ET tambien en horario de verano) y se mandan como parametros --
+// 16:00 ET, o 13:00 ET en cierre anticipado, tambien en horario de verano) y se mandan como parametros --
 // el planner de Postgres puede usar el indice por cada rama del OR, igual
 // que el resto de consultas de este repositorio.
 func (r *CandleRepository) GetPreviousSessionClose(ctx context.Context, symbol string, before time.Time) (*float64, error) {
@@ -27,17 +27,13 @@ func (r *CandleRepository) GetPreviousSessionClose(ctx context.Context, symbol s
 	if err != nil {
 		return nil, fmt.Errorf("loading America/New_York location: %w", err)
 	}
-	dayStart := time.Date(before.Year(), before.Month(), before.Day(), 0, 0, 0, 0, loc)
 
 	args := []any{symbol, before}
-	windows := make([]string, 0, prevSessionCloseDays)
-	for d := 1; d <= prevSessionCloseDays; d++ {
-		day := dayStart.AddDate(0, 0, -d)
-		from := day.Add(15*time.Hour + 58*time.Minute)
-		// to = 16:01 ET: la ts=16:00 es la subasta de cierre, la 16:01 ya es after-hours.
-		to := day.Add(16*time.Hour + time.Minute)
+	closeWindows := previousSessionCloseWindows(before, prevSessionCloseDays, loc)
+	windows := make([]string, 0, len(closeWindows))
+	for _, w := range closeWindows {
 		windows = append(windows, fmt.Sprintf("($%d::timestamptz <= c.ts AND c.ts < $%d::timestamptz)", len(args)+1, len(args)+2))
-		args = append(args, from, to)
+		args = append(args, w.from, w.to)
 	}
 
 	query := fmt.Sprintf(`
@@ -67,7 +63,7 @@ const previousSessionCloseWindowSQL = `
 `
 
 // GetPreviousSessionCloseBatch es GetPreviousSessionClose para un lote --
-// itera las mismas ventanas [15:58,16:01) ET dia por dia (ver
+// itera las mismas ventanas [Close-2min,Close+1min) ET dia por dia (ver
 // prevSessionCloseDays), pero con una query angosta por dia en vez de un
 // solo OR gigante (ver previousSessionCloseWindowSQL) y se corta apenas
 // todos los simbolos pedidos ya resolvieron -- en la practica casi todos
@@ -82,14 +78,15 @@ func (r *CandleRepository) GetPreviousSessionCloseBatch(ctx context.Context, sym
 	if err != nil {
 		return nil, fmt.Errorf("loading America/New_York location: %w", err)
 	}
-	dayStart := time.Date(before.Year(), before.Month(), before.Day(), 0, 0, 0, 0, loc)
 
 	pending := make([]string, len(symbols))
 	copy(pending, symbols)
-	for d := 1; d <= prevSessionCloseDays && len(pending) > 0; d++ {
-		day := dayStart.AddDate(0, 0, -d)
-		from := day.Add(15*time.Hour + 58*time.Minute)
-		to := day.Add(16*time.Hour + time.Minute)
+	for i, w := range previousSessionCloseWindows(before, prevSessionCloseDays, loc) {
+		if len(pending) == 0 {
+			break
+		}
+		d := i + 1
+		from, to := w.from, w.to
 
 		resolved := make(map[string]struct{}, len(pending))
 		for _, batch := range chunkSymbols(pending, universeBatchChunkSize) {

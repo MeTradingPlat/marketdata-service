@@ -2,21 +2,24 @@ package metadata
 
 import (
 	"context"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain/dto"
 	"github.com/MeTradingPlat/marketdata-service/internal/core/ports/in"
 	fundamentalscache "github.com/MeTradingPlat/marketdata-service/internal/core/service/fundamentals"
+	"github.com/MeTradingPlat/marketdata-service/internal/core/service/intraday"
 )
 
 type getSymbolDetailsService struct {
 	symbols      *SymbolsCache
 	fundamentals *fundamentalscache.FundamentalsCache
 	intraday     in.GetIntradaySnapshotService
+	dayVolumes   *intraday.DayVolumeTracker
 }
 
-func NewGetSymbolDetailsService(symbols *SymbolsCache, fundamentals *fundamentalscache.FundamentalsCache, intraday in.GetIntradaySnapshotService) in.GetSymbolDetailsService {
-	return &getSymbolDetailsService{symbols: symbols, fundamentals: fundamentals, intraday: intraday}
+func NewGetSymbolDetailsService(symbols *SymbolsCache, fundamentals *fundamentalscache.FundamentalsCache, intraday in.GetIntradaySnapshotService, dayVolumes *intraday.DayVolumeTracker) in.GetSymbolDetailsService {
+	return &getSymbolDetailsService{symbols: symbols, fundamentals: fundamentals, intraday: intraday, dayVolumes: dayVolumes}
 }
 
 func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol string) (dto.SymbolDetails, error) {
@@ -39,6 +42,10 @@ func (s *getSymbolDetailsService) GetSymbolDetails(ctx context.Context, symbol s
 	}
 	if snapshot.PrevClose == 0 && fundamentals.PrevClose != nil && *fundamentals.PrevClose > 0 {
 		snapshot.PrevClose = *fundamentals.PrevClose
+	}
+	if s.dayVolumes != nil {
+		snapshot = withRealDayVolume(s.dayVolumes, symbol, snapshot)
+		snapshot = withRealSessionVolumes(s.dayVolumes, symbol, snapshot, time.Now())
 	}
 
 	// Una next_earnings_date que ya paso no es "la proxima" de nada (ver

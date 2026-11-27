@@ -18,7 +18,8 @@ const intradaySessionsSQL = `
 		COALESCE(SUM(c.volume) FILTER (WHERE c.ts < $4), 0),
 		(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts < $4))[1],
 		COALESCE(SUM(c.volume) FILTER (WHERE c.ts >= $5), 0),
-		(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts >= $5))[1]
+		(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts >= $5))[1],
+		MAX(c.ts)
 	FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
 	WHERE s.symbol = $1 AND c.timeframe = 'M1' AND c.ts >= $2 AND c.ts < $3
 `
@@ -29,20 +30,22 @@ func (r *CandleRepository) GetIntradaySessions(ctx context.Context, symbol strin
 		return domain.IntradaySnapshot{}, fmt.Errorf("loading America/New_York location: %w", err)
 	}
 	nowET := time.Now().In(loc)
-	dayStart := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 0, 0, 0, 0, loc)
-	dayEnd := dayStart.Add(24 * time.Hour)
-	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
-	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
+	hours := domain.NYSESessionHoursFor(nowET)
 
 	snap := domain.IntradaySnapshot{Symbol: symbol}
 	var open, high, low, preClose, postClose *float64
-	err = r.pool.QueryRow(ctx, intradaySessionsSQL, symbol, dayStart, dayEnd, marketOpen, marketClose).Scan(
+	var countedThrough *time.Time
+	err = r.pool.QueryRow(ctx, intradaySessionsSQL, symbol, hours.PreOpen, hours.PostEnd, hours.Open, hours.Close).Scan(
 		&open, &high, &low, &snap.DayVolume,
 		&snap.PreMarketVolume, &preClose,
 		&snap.PostMarketVolume, &postClose,
+		&countedThrough,
 	)
 	if err != nil {
 		return domain.IntradaySnapshot{}, fmt.Errorf("querying intraday sessions for %s: %w", symbol, err)
+	}
+	if countedThrough != nil {
+		snap.CountedThrough = *countedThrough
 	}
 	if open != nil {
 		snap.Open = *open
@@ -76,13 +79,10 @@ func (r *CandleRepository) GetIntradaySessionsBatch(ctx context.Context, symbols
 		return nil, fmt.Errorf("loading America/New_York location: %w", err)
 	}
 	nowET := time.Now().In(loc)
-	dayStart := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 0, 0, 0, 0, loc)
-	dayEnd := dayStart.Add(24 * time.Hour)
-	marketOpen := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 9, 30, 0, 0, loc)
-	marketClose := time.Date(nowET.Year(), nowET.Month(), nowET.Day(), 16, 0, 0, 0, loc)
+	hours := domain.NYSESessionHoursFor(nowET)
 
 	for _, batch := range chunkSymbols(symbols, universeBatchChunkSize) {
-		if err := r.queryIntradaySessionsBatch(ctx, batch, dayStart, dayEnd, marketOpen, marketClose, result); err != nil {
+		if err := r.queryIntradaySessionsBatch(ctx, batch, hours.PreOpen, hours.PostEnd, hours.Open, hours.Close, result); err != nil {
 			return nil, err
 		}
 	}
@@ -100,7 +100,8 @@ func (r *CandleRepository) queryIntradaySessionsBatch(ctx context.Context, symbo
 			COALESCE(SUM(c.volume) FILTER (WHERE c.ts < $4), 0),
 			(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts < $4))[1],
 			COALESCE(SUM(c.volume) FILTER (WHERE c.ts >= $5), 0),
-			(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts >= $5))[1]
+			(ARRAY_AGG(c.close ORDER BY c.ts DESC) FILTER (WHERE c.ts >= $5))[1],
+			MAX(c.ts)
 		FROM candles c JOIN tracked_symbols s ON s.symbol_id = c.symbol_id
 		WHERE s.symbol = ANY($1) AND c.timeframe = 'M1' AND c.ts >= $2 AND c.ts < $3
 		GROUP BY s.symbol
@@ -114,9 +115,13 @@ func (r *CandleRepository) queryIntradaySessionsBatch(ctx context.Context, symbo
 	for rows.Next() {
 		var snap domain.IntradaySnapshot
 		var open, high, low, preClose, postClose *float64
+		var countedThrough *time.Time
 		if err := rows.Scan(&snap.Symbol, &open, &high, &low, &snap.DayVolume,
-			&snap.PreMarketVolume, &preClose, &snap.PostMarketVolume, &postClose); err != nil {
+			&snap.PreMarketVolume, &preClose, &snap.PostMarketVolume, &postClose, &countedThrough); err != nil {
 			return fmt.Errorf("scanning intraday sessions batch row: %w", err)
+		}
+		if countedThrough != nil {
+			snap.CountedThrough = *countedThrough
 		}
 		if open != nil {
 			snap.Open = *open
