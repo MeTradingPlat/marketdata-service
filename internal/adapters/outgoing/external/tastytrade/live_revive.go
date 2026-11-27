@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/rs/zerolog/log"
 )
 
@@ -69,8 +68,12 @@ func (p *CandlePool) reviveSilentSymbol(ctx context.Context, sym string, now tim
 		p.activityMu.Unlock()
 		return false, false
 	}
-	p.allocator.releaseKey(candleKey(sym, domain.M1))
-	err := p.subscribeLiveAtEpoch(ctx, sym, p.lastClosedTimestamp(sym), cb, tick, epoch)
+	var err error
+	if oldCh := p.liveChannelFor(sym); oldCh != nil {
+		_, err = p.moveLiveSymbolChannel(ctx, sym, oldCh, p.lastClosedTimestamp(sym), epoch, now)
+	} else {
+		err = p.subscribeLiveAtEpoch(ctx, sym, p.lastClosedTimestamp(sym), cb, tick, epoch)
+	}
 	if errors.Is(err, context.Canceled) || (err != nil && ctx.Err() != nil) {
 		return false, false
 	}

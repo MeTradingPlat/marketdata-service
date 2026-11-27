@@ -98,8 +98,7 @@ func (noLiveGateway) MarketMetrics(ctx context.Context, symbols []string) ([]dom
 func (noLiveGateway) EarningsReports(ctx context.Context, symbol string) ([]domain.EarningsReportItem, error) {
 	return nil, nil
 }
-func (noLiveGateway) ResetLiveConnections()                        {}
-func (noLiveGateway) RefreshLiveSubscriptions(ctx context.Context) {}
+func (noLiveGateway) ResetLiveConnections() {}
 
 func TestGetCurrentPrices_DBFallbackIsOneBatchCallNotOnePerSymbol(t *testing.T) {
 	repo := &fakeSlowRepo{callDelay: time.Millisecond}

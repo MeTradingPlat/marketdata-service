@@ -37,9 +37,7 @@ func (a *channelAllocator) connectionCount() int {
 
 // allChannels devuelve todos los canales pooled de todas las conexiones --
 // copia las listas bajo lock y las suelta antes de que el llamador itere,
-// mismo motivo que forceReconnectAll. Usado por CandlePool.
-// RefreshLiveSubscriptions para reenviar el Add de cada canal por su cuenta,
-// sin abrir ningun canal o conexion nueva.
+// mismo motivo que forceReconnectAll.
 func (a *channelAllocator) allChannels() []*pooledChannel {
 	a.mu.Lock()
 	conns := append([]*pooledConnection(nil), a.connections...)
@@ -89,12 +87,6 @@ func (a *channelAllocator) setMaxChannelsPerConn(n int) {
 	_ = a.lockGrow(context.Background())
 	defer a.unlockGrow()
 	a.maxChannelsPerConn = n
-}
-
-func (a *channelAllocator) releaseKey(key string) {
-	for _, ch := range a.allChannels() {
-		ch.release(key)
-	}
 }
 
 func (a *channelAllocator) removeChannel(ch *pooledChannel) bool {

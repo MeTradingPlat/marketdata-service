@@ -10,11 +10,10 @@ import (
 func (p *CandlePool) claimLiveChannel(ctx context.Context, symbol string) (*pooledChannel, error) {
 	key := candleKey(symbol, domain.M1)
 	for attempt := 0; attempt < 3; attempt++ {
-		ch, err := p.allocator.allocate(ctx)
+		ch, err := p.allocator.allocate(ctx, key)
 		if err != nil {
 			return nil, err
 		}
-		ch.occupy(key)
 		if p.allocator.owns(ch) {
 			return ch, nil
 		}

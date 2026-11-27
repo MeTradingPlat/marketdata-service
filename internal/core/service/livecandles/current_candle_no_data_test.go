@@ -51,8 +51,7 @@ func (f *fakeGateway) MarketMetrics(ctx context.Context, symbols []string) ([]do
 func (f *fakeGateway) EarningsReports(ctx context.Context, symbol string) ([]domain.EarningsReportItem, error) {
 	return nil, nil
 }
-func (f *fakeGateway) ResetLiveConnections()                        {}
-func (f *fakeGateway) RefreshLiveSubscriptions(ctx context.Context) {}
+func (f *fakeGateway) ResetLiveConnections() {}
 
 func TestGetCurrentCandle_M1_NoLiveTick_ReturnsNilInsteadOfFlatBar(t *testing.T) {
 	// Regression: antes fabricaba una vela plana (open=high=low=close =

@@ -19,18 +19,6 @@ func newPooledChannel(ch *dxLinkChannel) *pooledChannel {
 	return &pooledChannel{channel: ch, createdAt: time.Now(), symbols: make(map[string]struct{})}
 }
 
-func (p *pooledChannel) hasRoom() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return len(p.symbols) < channelCapacity
-}
-
-func (p *pooledChannel) occupy(key string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.symbols[key] = struct{}{}
-}
-
 func (p *pooledChannel) release(key string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

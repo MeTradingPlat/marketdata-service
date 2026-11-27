@@ -87,12 +87,6 @@ type CandlePool struct {
 	incompleteLiveDiscards sampledDiscardCounter
 	lateUnchangedDiscards  sampledDiscardCounter
 
-	// refreshCycle alterna que mitad de canales se refresca en cada llamada
-	// a RefreshLiveSubscriptions -- ver el comentario ahi mismo sobre por
-	// que partir el barrido en dos grupos que se turnan reduce a la mitad
-	// los mensajes de suscripcion por minuto.
-	refreshCycle atomic.Uint64
-
 	// liveDayVolume: ver day_volume_live.go -- volumen del dia mantenido en
 	// memoria por Trade/TradeETH en vivo, sobre el mismo canal que el M1 de
 	// cada simbolo.
@@ -113,6 +107,7 @@ type CandlePool struct {
 	resumeMu      sync.Mutex
 	resume        map[string]resumeState
 	reviveRunning atomic.Bool
+	movingSymbols sync.Map
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {

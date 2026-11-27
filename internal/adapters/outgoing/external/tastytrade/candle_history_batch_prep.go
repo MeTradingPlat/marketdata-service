@@ -36,6 +36,20 @@ func (p *CandlePool) lockHistorySymbols(symbols []string, tf domain.Timeframe) f
 	}
 }
 
+func candleKeys(symbols []string, tf domain.Timeframe) []string {
+	keys := make([]string, len(symbols))
+	for i, symbol := range symbols {
+		keys[i] = candleKey(symbol, tf)
+	}
+	return keys
+}
+
+func (p *CandlePool) unregisterBatchDispatch(active []string, tf domain.Timeframe, dispatchIDs map[string]uint64) {
+	for _, symbol := range active {
+		p.unregisterDispatchIfCurrent(symbol, tf, dispatchIDs[symbol], "history-batch")
+	}
+}
+
 func (p *CandlePool) registerBatchDispatch(symbols []string, tf domain.Timeframe, collector *batchHistoryCollector) ([]string, map[string]uint64) {
 	dispatchIDs := make(map[string]uint64, len(symbols))
 	active := make([]string, 0, len(symbols))

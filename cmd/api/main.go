@@ -125,18 +125,14 @@ func main() {
 		StartLiveReconcileLoop(ctx, ingest, gateway, pool, symbols, candleRepo, &liveRolloutDone)
 		// StartSnapshotReconcileLoop (reconciliar el tracker contra Postgres
 		// cada 20 min con un ARRAY_AGG sobre el M1 del dia entero) se quita a
-		// proposito el 2026-09-08 para probar si alcanza con las otras dos
-		// lineas de defensa contra huecos: RecordTodaysClosedCandles (el
-		// sweep M1 ya alimenta el tracker directo al guardar, ver
-		// daily_catchup.go/ingest_candles.go) y StartLiveRefreshLoop (reenvia
-		// cada canal en vivo cada 1-2 min, resincronizando los ultimos 3 min
-		// de cada simbolo -- ver el comentario de RefreshLiveSubscriptions).
+		// proposito el 2026-09-08 para probar si alcanza con
+		// RecordTodaysClosedCandles (el sweep M1 ya alimenta el tracker directo
+		// al guardar, ver daily_catchup.go/ingest_candles.go).
 		// Esta reconciliacion HOY llego a tardar 100s+ en una sola pasada y
 		// tumbo de lentitud a todo el servicio (CPU al tope en un host de 4
-		// nucleos) -- si las otras dos lineas bastan, no vale la pena pagar
+		// nucleos) -- si basta, no vale la pena pagar
 		// ese costo cada 20 min. tracker.MergeReconcile queda intacto (con
 		// tests) por si hay que revertir esto.
-		StartLiveRefreshLoop(ctx, gateway, backfilling)
 		StartCandleForceCloseLoop(ctx, pool)
 		StartLiveSaveFlushLoop(ctx, ingest)
 		StartSaveRetryLoop(ctx, ingest)

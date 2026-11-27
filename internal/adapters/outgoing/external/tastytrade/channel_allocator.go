@@ -84,8 +84,8 @@ func (a *channelAllocator) unlockGrow() {
 	<-a.growSem
 }
 
-func (a *channelAllocator) allocate(ctx context.Context) (*pooledChannel, error) {
-	return a.allocateExcluding(ctx, nil)
+func (a *channelAllocator) allocate(ctx context.Context, keys ...string) (*pooledChannel, error) {
+	return a.allocateExcluding(ctx, nil, keys...)
 }
 
 // staggerBeforeNewConnection espera lo que falte para completar
@@ -104,7 +104,7 @@ func (a *channelAllocator) staggerBeforeNewConnection(ctx context.Context) {
 	a.lastConnectionOpenedAt = time.Now()
 }
 
-func (a *channelAllocator) openChannelOn(ctx context.Context, pc *pooledConnection) (*pooledChannel, error) {
+func (a *channelAllocator) openChannelOn(ctx context.Context, pc *pooledConnection, keys ...string) (*pooledChannel, error) {
 	ch, err := pc.conn.OpenChannel(ctx)
 	a.recordOpenResult(ctx, pc, err)
 	if err != nil {
@@ -114,6 +114,9 @@ func (a *channelAllocator) openChannelOn(ctx context.Context, pc *pooledConnecti
 		a.onNewChannel(ch)
 	}
 	pooled := newPooledChannel(ch)
+	if !pooled.reserve(keys...) {
+		return pooled, nil
+	}
 	pc.addChannel(pooled)
 	return pooled, nil
 }

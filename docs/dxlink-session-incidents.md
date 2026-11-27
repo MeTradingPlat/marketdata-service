@@ -864,3 +864,53 @@ socket y se ponen a cero al reconectar.
 - Cada `dxlink session closed` no intencionado va seguido en 1 minuto de
   `opened` o de `dxlink reconnect failed`.
 - Las goroutines no crecen con las reconexiones.
+
+## 2026-11-27: `subscription size ... is too big` en el refresco de velas
+
+### Evidencia (producción, 2026-11-26)
+
+- 62 rechazos `BAD_ACTION` por minuto, uno por canal refrescado.
+- El único canal aceptado era el incompleto: solo se repetían 37 de 12.437
+  símbolos.
+- El alta inicial, símbolo a símbolo hasta 100 por canal, no se rechazaba.
+
+### Causas en el código
+
+- El refresco repetía las 100 altas de un canal lleno. Que el servidor sume las
+  repetidas es la única explicación compatible; no está probado.
+- `allocate` entregaba un canal con un solo hueco y el llamador lo ocupaba
+  después: dos lotes de historial podían caer en el mismo canal.
+- La reactivación liberaba la clave sin enviar la baja y volvía a pedir canal.
+
+### Fix
+
+- Reserva atómica de huecos antes de suscribir.
+- Baja del historial antes de liberar el hueco.
+- Reactivación y saneador de mudos: mueven el símbolo a otro canal. Si no hay
+  canal nuevo, la suscripción anterior queda intacta.
+- Eliminado el refresco por minuto. **No volver a añadirlo** sin dejar hueco en
+  el canal para las altas repetidas.
+
+### Sin medir: mover un símbolo puede no revivirlo
+
+- En contra: en el incidente del 2026-11-25 los símbolos quedaron mudos tras la
+  baja de un lote y el alta en otro canal. El comentario de `subscribeLive`
+  desaconseja la baja seguida del alta de la misma clave.
+- La reactivación antes no daba de baja; ahora sí, al mover.
+- Antes de desplegar: contar los `healed silent live symbol` con
+  `mode=move_channel` que reciben barras M1 después.
+
+### Correcciones de la revisión del diff
+
+- Un solo traslado por símbolo a la vez: reactivación y saneador podían
+  liberarse las reservas entre sí.
+- La limpieza del historial no da de baja un M1 en vivo alojado solo en ese
+  canal.
+- Un canal retirado al abrirse se devuelve sin publicar y el alta reintenta.
+
+### Comprobar tras desplegar
+
+- Cero rechazos `too big` en el alta en vivo y en el barrido.
+- Los lotes cortados del barrido no suben respecto a la noche anterior.
+- Tras una reconexión, `revived silent live symbol` seguido de velas del símbolo.
+- El barrido completo no supera 15 conexiones ni el límite de memoria.

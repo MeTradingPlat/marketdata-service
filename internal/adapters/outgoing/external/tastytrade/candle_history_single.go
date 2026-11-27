@@ -52,12 +52,10 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	lock.Lock()
 	defer lock.Unlock()
 
-	ch, err := p.allocator.allocate(ctx)
+	ch, err := p.allocator.allocate(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("allocating channel for %s %s history: %w", symbol, tf, err)
 	}
-
-	ch.occupy(key)
 
 	collector := newHistoryCollector(symbol, tf)
 	dispatchID := p.registerDispatch(symbol, tf, "history", collector.onCandle)
@@ -67,8 +65,10 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	// unsubscribeDrainPeriod. unregisterDispatchIfCurrent solo borra si
 	// nadie volvio a registrar esa misma clave mientras tanto.
 	cleanup := func() {
-		ch.release(key)
-		_ = ch.channel.unsubscribe(symbol, tf)
+		if !p.hostsLiveSubscription(ch, symbol, tf) {
+			_ = ch.channel.unsubscribe(symbol, tf)
+			ch.release(key)
+		}
 		if dispatchID != 0 {
 			time.AfterFunc(unsubscribeDrainPeriod, func() {
 				p.unregisterDispatchIfCurrent(symbol, tf, dispatchID, "history")

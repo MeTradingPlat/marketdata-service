@@ -117,10 +117,10 @@ func TestFlushFormingCandles_SavesBeforeDiscard(t *testing.T) {
 }
 
 // TestHandleLiveEvent_RefreshReplayOfUnchangedClosedCandleDoesNotRedispatch
-// reproduce lo que manda RefreshLiveSubscriptions cada minuto: reenvia el
+// reproduce lo que ocurre cuando la retomada tras reconectar reenvia el
 // historial reciente de un simbolo aunque nada haya cambiado. Sin el chequeo
 // de candleValuesEqual, esto reencolaba en liveSaveBuffer la MISMA vela ya
-// guardada para cada uno de los ~13k simbolos en vivo, cada minuto.
+// guardada para cada uno de los simbolos en vivo.
 func TestHandleLiveEvent_RefreshReplayOfUnchangedClosedCandleDoesNotRedispatch(t *testing.T) {
 	p := newTestPool()
 	minute10 := time.Date(2026, 9, 4, 18, 10, 0, 0, time.UTC)
