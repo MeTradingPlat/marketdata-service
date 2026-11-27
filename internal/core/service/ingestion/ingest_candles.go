@@ -24,6 +24,7 @@ type ingestCandlesService struct {
 	spool               out.CandleSpool
 	liveSaveBuffer      *liveSaveBuffer
 	retryBuffer         *saveRetryBuffer
+	saveChunkTimeout    time.Duration
 	liveMu              sync.RWMutex
 	live                map[string]bool
 	attempted           map[string]bool
