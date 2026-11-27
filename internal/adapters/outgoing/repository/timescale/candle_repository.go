@@ -44,17 +44,17 @@ func execWithDeadlockRetry(ctx context.Context, exec func(context.Context) error
 
 // verified marca si la vela vino del refill/backfill (watermark TRUE, dato
 // verificado de TastyTrade) o del live en vivo (provisional -- un reinicio
-// la re-pide). El upsert con verified=TRUE no pisa una verified=FALSE con
-// un valor mas viejo de la misma barra; y viceversa, el live jamas pisa una
-// verificada con su provisional.
+// la re-pide). El upsert con verified=TRUE pisa una verified=FALSE, y con
+// el mismo verified solo pisa si la fila existente no tiene observed_at o la
+// nueva es igual o mas reciente; el live jamas pisa una verificada.
 const upsertCandleSQL = `
-	INSERT INTO %[1]s (symbol_id, timeframe, ts, open, high, low, close, volume, trade_count, vwap, source, verified, last_written_at)
-	SELECT symbol_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now() FROM tracked_symbols WHERE symbol = $1
+	INSERT INTO %[1]s (symbol_id, timeframe, ts, open, high, low, close, volume, trade_count, vwap, source, verified, last_written_at, observed_at)
+	SELECT symbol_id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), COALESCE($13::timestamptz, now()) FROM tracked_symbols WHERE symbol = $1
 	ON CONFLICT (symbol_id, timeframe, ts) DO UPDATE SET
 		open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
 		volume = EXCLUDED.volume, trade_count = EXCLUDED.trade_count, vwap = EXCLUDED.vwap,
-		verified = %[1]s.verified OR EXCLUDED.verified, last_written_at = now()
-	WHERE EXCLUDED.verified OR NOT %[1]s.verified
+		verified = %[1]s.verified OR EXCLUDED.verified, last_written_at = now(), observed_at = EXCLUDED.observed_at
+	WHERE (EXCLUDED.verified AND NOT %[1]s.verified) OR (EXCLUDED.verified = %[1]s.verified AND (%[1]s.observed_at IS NULL OR EXCLUDED.observed_at >= %[1]s.observed_at))
 `
 
 var (

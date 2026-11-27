@@ -46,12 +46,12 @@ func (s *FileSpool) Read(id string) ([]domain.Candle, error) {
 	if err != nil {
 		return nil, err
 	}
-	var candles []domain.Candle
-	if err := json.Unmarshal(data, &candles); err != nil {
+	var records []spoolCandle
+	if err := json.Unmarshal(data, &records); err != nil {
 		_ = os.Rename(path, path+".corrupt")
 		return nil, err
 	}
-	return candles, nil
+	return fromSpoolCandles(records), nil
 }
 
 func (s *FileSpool) Remove(id string) error {

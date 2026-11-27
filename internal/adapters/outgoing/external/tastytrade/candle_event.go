@@ -29,6 +29,7 @@ type rawCandleEvent struct {
 	Volume     *float64
 	VWAP       *float64
 	EventFlags int
+	ObservedAt time.Time
 }
 
 // snapshotDone es verdadero solo cuando el servidor marco el final real de
@@ -81,6 +82,7 @@ func parseCandleRecord(record []interface{}) (rawCandleEvent, bool) {
 		Volume:     fieldNullableFloat(record, 6),
 		VWAP:       fieldNullableFloat(record, 7),
 		EventFlags: int(flags),
+		ObservedAt: time.Now(),
 	}, true
 }
 

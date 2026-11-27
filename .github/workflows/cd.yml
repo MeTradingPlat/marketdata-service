@@ -240,6 +240,16 @@ jobs:
         run: |
           docker exec -i postgres-marketdata psql -U user_marketdata -d marketdata_db < internal/adapters/outgoing/repository/timescale/schema.sql
 
+      - name: Verify observed_at column exists
+        run: |
+          for tbl in candles candles_history; do
+            count=$(docker exec postgres-marketdata psql -U user_marketdata -d marketdata_db -At -c "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='${tbl}' AND column_name='observed_at';")
+            if [ "$count" != "1" ]; then
+              echo "::error::Missing observed_at column on ${tbl}"
+              exit 1
+            fi
+          done
+
       - name: Infrastructure Diagnosis & Cleanup
         run: |
           echo "--- DISK SPACE CHECK ---"

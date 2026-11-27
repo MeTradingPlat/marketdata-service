@@ -2,6 +2,7 @@ package timescale
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
 	"github.com/jackc/pgx/v5"
@@ -36,11 +37,18 @@ func upsertCandleQuery(tf domain.Timeframe) string {
 	return upsertCandleSQLCandles
 }
 
+func observedAtParam(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+
 func buildCandleSaveBatch(candles, latestDailies []domain.Candle, withWatermark bool) *pgx.Batch {
 	batch := &pgx.Batch{}
 	for _, c := range candles {
 		batch.Queue(upsertCandleQuery(c.Timeframe), c.Symbol, string(c.Timeframe), c.Timestamp,
-			c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source, withWatermark)
+			c.Open, c.High, c.Low, c.Close, c.Volume, c.TradeCount, c.VWAP, c.Source, withWatermark, observedAtParam(c.ObservedAt))
 		if withWatermark {
 			batch.Queue(upsertWatermarkSQL, c.Symbol, string(c.Timeframe), c.Timestamp)
 		}

@@ -67,3 +67,26 @@ func TestReadCandleBatchResults(t *testing.T) {
 		t.Fatalf("expected exec error to be preserved, got %v", err)
 	}
 }
+
+func TestBuildCandleSaveBatch_ObservedAtParam(t *testing.T) {
+	ts := time.Date(2026, 11, 27, 15, 0, 0, 0, time.UTC)
+	obs := time.Date(2026, 11, 27, 15, 0, 5, 0, time.UTC)
+	candles := []domain.Candle{
+		{Symbol: "AAPL", Timeframe: domain.M1, Timestamp: ts},
+		{Symbol: "MSFT", Timeframe: domain.M1, Timestamp: ts, ObservedAt: obs},
+	}
+
+	batch := buildCandleSaveBatch(candles, nil, false)
+	if len(batch.QueuedQueries) != 2 {
+		t.Fatalf("QueuedQueries = %d, want 2", len(batch.QueuedQueries))
+	}
+	argsZero := batch.QueuedQueries[0].Arguments
+	if len(argsZero) < 13 || argsZero[12] != nil {
+		t.Fatalf("zero ObservedAt arg[12] = %#v (len %d), want nil", argsZero, len(argsZero))
+	}
+	argsSet := batch.QueuedQueries[1].Arguments
+	gotObs, ok := argsSet[12].(time.Time)
+	if len(argsSet) < 13 || !ok || !gotObs.Equal(obs) {
+		t.Fatalf("set ObservedAt arg[12] = %#v, want %v", argsSet, obs)
+	}
+}

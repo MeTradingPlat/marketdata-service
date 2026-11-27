@@ -25,7 +25,7 @@ func (s *FileSpool) Write(candles []domain.Candle) error {
 	if len(candles) == 0 {
 		return nil
 	}
-	data, err := json.Marshal(candles)
+	data, err := json.Marshal(toSpoolCandles(candles))
 	if err != nil {
 		return err
 	}

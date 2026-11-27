@@ -10,6 +10,7 @@ func mergeCandle(existing domain.Candle, ev rawCandleEvent, symbol string, tf do
 	c.Timeframe = tf
 	c.Timestamp = ev.Timestamp
 	c.Source = "tastytrade"
+	c.ObservedAt = ev.ObservedAt
 
 	if c.Open == 0 && ev.Open != nil {
 		c.Open = *ev.Open
@@ -32,7 +33,7 @@ func mergeCandle(existing domain.Candle, ev rawCandleEvent, symbol string, tf do
 	return c
 }
 
-// candleValuesEqual compara solo los campos que mergeCandle puede cambiar --
+// candleValuesEqual compara solo los valores de mercado que mergeCandle puede cambiar (ignora ObservedAt) --
 // usado para no re-despachar (y por lo tanto no re-guardar) una vela ya
 // cerrada cuando la retomada tras reconectar reproduce el mismo historial
 // reciente sin que nada haya cambiado de verdad. time.Time se compara con

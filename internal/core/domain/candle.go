@@ -16,6 +16,7 @@ type Candle struct {
 	TradeCount int       `json:"tradeCount"`
 	VWAP       float64   `json:"vwap"`
 	Source     string    `json:"source"`
+	ObservedAt time.Time `json:"-"`
 }
 
 func (c Candle) IsComplete() bool {

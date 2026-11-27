@@ -1,6 +1,8 @@
 package spool_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -44,5 +46,52 @@ func TestFileSpool_WritePendingReadRemove(t *testing.T) {
 	ids, err = s.Pending()
 	if err != nil || len(ids) != 1 {
 		t.Fatalf("Pending after Remove = (%v, %v), want 1", ids, err)
+	}
+}
+
+func TestFileSpool_PreservesObservedAt(t *testing.T) {
+	dir := t.TempDir()
+	s := spool.NewFileSpool(dir, 10*1024*1024)
+	obs := time.Date(2026, 11, 27, 15, 0, 5, 123000000, time.UTC)
+	batch := []domain.Candle{{
+		Symbol:     "AAPL",
+		Timeframe:  domain.M1,
+		Timestamp:  time.Date(2026, 11, 27, 15, 0, 0, 0, time.UTC),
+		Close:      150,
+		ObservedAt: obs,
+	}}
+	if err := s.Write(batch); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	ids, err := s.Pending()
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("Pending = (%v, %v), want 1", ids, err)
+	}
+	got, err := s.Read(ids[0])
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Read = (%+v, %v), want 1 candle", got, err)
+	}
+	if !got[0].ObservedAt.Equal(obs) {
+		t.Fatalf("ObservedAt = %v, want %v", got[0].ObservedAt, obs)
+	}
+}
+
+func TestFileSpool_ReadsLegacyFileWithoutObservedAt(t *testing.T) {
+	dir := t.TempDir()
+	s := spool.NewFileSpool(dir, 10*1024*1024)
+	legacy := `[{"symbol":"AAPL","timeframe":"M1","timestamp":"2026-11-27T15:00:00Z","open":100,"high":101,"low":99,"close":100.5,"volume":10,"tradeCount":1,"vwap":100.2,"source":"tastytrade"}]`
+	if err := os.WriteFile(filepath.Join(dir, "00000000000000000001-000001.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ids, err := s.Pending()
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("Pending = (%v, %v), want 1", ids, err)
+	}
+	got, err := s.Read(ids[0])
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Read = (%+v, %v), want 1 candle", got, err)
+	}
+	if got[0].Symbol != "AAPL" || !got[0].ObservedAt.IsZero() {
+		t.Fatalf("got = %+v, want AAPL with zero ObservedAt", got[0])
 	}
 }

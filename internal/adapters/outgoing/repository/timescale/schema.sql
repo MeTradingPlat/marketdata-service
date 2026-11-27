@@ -126,6 +126,7 @@ SELECT create_hypertable('candles_history', 'ts', chunk_time_interval => INTERVA
 ALTER TABLE candles_history SET (timescaledb.compress, timescaledb.compress_segmentby = 'symbol_id, timeframe', timescaledb.compress_orderby = 'ts DESC');
 SELECT add_compression_policy('candles_history', INTERVAL '35 days', if_not_exists => TRUE, initial_start => '2026-01-01 02:30:00+00'::timestamptz);
 ALTER TABLE candles_history SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02, autovacuum_vacuum_cost_limit = 1000);
+ALTER TABLE candles_history ADD COLUMN IF NOT EXISTS observed_at TIMESTAMPTZ;
 
 -- last_ts refleja hasta donde llega la data real por simbolo+temporalidad,
 -- actualizado en cada Save() (incluye M1 en vivo) y en cada agregacion
@@ -263,6 +264,7 @@ ALTER TABLE candles ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT F
 -- descomprimir); Save() ya manda now() explicito en cada INSERT/UPDATE, asi
 -- que toda fila nueva o tocada de aca en adelante si la tiene.
 ALTER TABLE candles ADD COLUMN IF NOT EXISTS last_written_at TIMESTAMPTZ;
+ALTER TABLE candles ADD COLUMN IF NOT EXISTS observed_at TIMESTAMPTZ;
 
 -- candles_m5/candles_m15 (continuous aggregates de TimescaleDB sobre M1)
 -- RETIRADOS el 2026-08-23: GetSeriesAggregatedBatch/getAggregatedCandles ya
