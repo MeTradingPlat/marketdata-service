@@ -41,7 +41,7 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	// resto del trafico del lote. El stream en vivo (mas el relleno de
 	// huecos tras reconexion) ya es la fuente autoritativa hacia adelante
 	// para M1, asi que aqui no hay nada que este fetch pueda aportar.
-	if tf == domain.M1 && p.LiveSubscribed(symbol) {
+	if p.shouldSkipLiveM1History(symbol, tf) {
 		return nil, nil
 	}
 
@@ -58,13 +58,20 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	lock.Lock()
 	defer lock.Unlock()
 
+	if p.shouldSkipLiveM1History(symbol, tf) {
+		return nil, nil
+	}
+
 	ch, err := p.allocator.allocate(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("allocating channel for %s %s history: %w", symbol, tf, err)
 	}
 
 	collector := newHistoryCollector(symbol, tf)
-	dispatchID := p.registerDispatch(symbol, tf, "history", collector.onCandle)
+	dispatchID := p.registerHistoryDispatch(ch, symbol, tf, key, collector.onCandle)
+	if dispatchID == 0 {
+		return nil, nil
+	}
 
 	// El remove va primero (le da al servidor la maxima ventaja de tiempo
 	// para procesarlo), el dispatch se borra despues de un rato -- ver
