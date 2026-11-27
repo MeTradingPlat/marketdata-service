@@ -59,7 +59,9 @@ func provideCandlePool(cfg *configs.Config, qt *tastytrade.QuoteToken, oauth *ta
 		}
 		return conn, nil
 	}
-	return tastytrade.NewCandlePoolWithChannels(connFactory, cfg.MaxCandlePoolConnections, cfg.MaxChannelsPerConn)
+	pool := tastytrade.NewCandlePoolWithChannels(connFactory, cfg.MaxCandlePoolConnections, cfg.MaxChannelsPerConn)
+	pool.SetHistorySubChangesPerMinute(cfg.HistorySubChangesPerMinute)
+	return pool
 }
 
 func provideGateway(oauth *tastytrade.OAuth, pool *tastytrade.CandlePool) out.MarketDataGateway {

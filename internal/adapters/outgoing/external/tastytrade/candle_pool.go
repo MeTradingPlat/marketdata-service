@@ -104,10 +104,11 @@ type CandlePool struct {
 	subscribedAt      map[string]time.Time
 	silentHealHistory map[string][]time.Time
 
-	resumeMu      sync.Mutex
-	resume        map[string]resumeState
-	reviveRunning atomic.Bool
-	movingSymbols sync.Map
+	resumeMu       sync.Mutex
+	resume         map[string]resumeState
+	reviveRunning  atomic.Bool
+	movingSymbols  sync.Map
+	historyLimiter *historySubLimiter
 }
 
 func NewCandlePool(connFactory func(ctx context.Context) (*DxLinkConn, error), maxConnections int) *CandlePool {
@@ -131,6 +132,7 @@ func NewCandlePoolWithChannels(connFactory func(ctx context.Context) (*DxLinkCon
 		lastBarTS:         make(map[string]time.Time),
 		subscribedAt:      make(map[string]time.Time),
 		silentHealHistory: make(map[string][]time.Time),
+		historyLimiter:    newHistorySubLimiter(defaultHistorySubChangesPerMinute),
 	}
 	p.allocator = newChannelAllocator(connFactory, p.wireChannel, p.handleConnectionReconnect, maxConnections)
 	p.allocator.setMaxChannelsPerConn(maxChannelsPerConn)
@@ -146,6 +148,10 @@ func (p *CandlePool) Connected() bool {
 func (p *CandlePool) SetMaxChannelsPerConn(n int) {
 	p.allocator.setMaxChannelsPerConn(n)
 	log.Info().Int("max_channels_per_conn", n).Msg("candle pool max channels per conn updated")
+}
+
+func (p *CandlePool) SetHistorySubChangesPerMinute(n int) {
+	p.historyLimiter.setQuota(n)
 }
 
 // WarmUp abre la primera conexion/canal por adelantado -- sin esto, la

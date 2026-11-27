@@ -73,6 +73,11 @@ func (p *CandlePool) FetchHistoryBatch(ctx context.Context, tf domain.Timeframe,
 	if len(symbols) == 0 {
 		return map[string][]domain.Candle{}, nil
 	}
+	res, err := p.historyLimiter.acquire(ctx, len(symbols))
+	if err != nil {
+		return nil, err
+	}
+	defer res.release()
 	unlockAll := p.lockHistorySymbols(symbols, tf)
 	defer unlockAll()
 
@@ -86,5 +91,5 @@ func (p *CandlePool) FetchHistoryBatch(ctx context.Context, tf domain.Timeframe,
 		p.unregisterBatchDispatch(active, tf, dispatchIDs)
 		return nil, fmt.Errorf("allocating channel for %s history batch: %w", tf, err)
 	}
-	return p.fetchBatchOnChannel(ctx, ch, active, tf, froms, collector, dispatchIDs)
+	return p.fetchBatchOnChannel(ctx, ch, active, tf, froms, collector, dispatchIDs, res)
 }

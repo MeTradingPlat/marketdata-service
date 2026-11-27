@@ -45,6 +45,12 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 		return nil, nil
 	}
 
+	res, err := p.historyLimiter.acquire(ctx, 1)
+	if err != nil {
+		return nil, err
+	}
+	defer res.release()
+
 	key := candleKey(symbol, tf)
 
 	lockVal, _ := p.historyLocks.LoadOrStore(key, &sync.Mutex{})
@@ -64,22 +70,13 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	// para procesarlo), el dispatch se borra despues de un rato -- ver
 	// unsubscribeDrainPeriod. unregisterDispatchIfCurrent solo borra si
 	// nadie volvio a registrar esa misma clave mientras tanto.
-	cleanup := func() {
-		if !p.hostsLiveSubscription(ch, symbol, tf) {
-			_ = ch.channel.unsubscribe(symbol, tf)
-			ch.release(key)
-		}
-		if dispatchID != 0 {
-			time.AfterFunc(unsubscribeDrainPeriod, func() {
-				p.unregisterDispatchIfCurrent(symbol, tf, dispatchID, "history")
-			})
-		}
-	}
+	cleanup := p.historyCleanup(ch, symbol, tf, key, dispatchID)
 
 	if err := ch.channel.subscribeHistory(symbol, tf, from); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("subscribing history: %w", err)
 	}
+	res.commitAdds(1)
 	if err := waitForData(ctx, collector.settled, wait); err != nil {
 		cleanup()
 		if errors.Is(err, domain.ErrPartialHistory) {
@@ -90,4 +87,20 @@ func (p *CandlePool) fetchHistory(ctx context.Context, symbol string, tf domain.
 	result := collector.complete()
 	cleanup()
 	return result, nil
+}
+
+func (p *CandlePool) historyCleanup(ch *pooledChannel, symbol string, tf domain.Timeframe, key string, dispatchID uint64) func() {
+	return func() {
+		if !p.hostsLiveSubscription(ch, symbol, tf) {
+			if err := ch.channel.unsubscribe(symbol, tf); err == nil {
+				p.historyLimiter.recordRemoves(2)
+			}
+			ch.release(key)
+		}
+		if dispatchID != 0 {
+			time.AfterFunc(unsubscribeDrainPeriod, func() {
+				p.unregisterDispatchIfCurrent(symbol, tf, dispatchID, "history")
+			})
+		}
+	}
 }

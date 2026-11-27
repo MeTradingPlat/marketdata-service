@@ -46,6 +46,9 @@ func (c *DxLinkConn) send(v interface{}) error {
 		c.dropAndReconnect(ctx)
 		return err
 	}
+	if msg, ok := v.(feedSubscriptionMessage); ok {
+		dxLinkSubChanges.record(len(msg.Add), len(msg.Remove))
+	}
 	return nil
 }
 
