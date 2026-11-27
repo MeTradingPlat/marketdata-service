@@ -87,8 +87,7 @@ func (r *CandleRepository) Save(ctx context.Context, candles []domain.Candle, wi
 	return execWithDeadlockRetry(ctx, func(ctx context.Context) error {
 		batch := buildCandleSaveBatch(candles, latestDailies, withWatermark)
 		results := r.writePool.SendBatch(ctx, batch)
-		defer results.Close()
-		affected, err := readCandleBatchResults(results, len(candles), len(latestDailies), withWatermark)
+		affected, err := consumeCandleBatchResults(results, len(candles), len(latestDailies), withWatermark)
 		if err != nil {
 			return err
 		}

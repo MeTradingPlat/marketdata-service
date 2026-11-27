@@ -20,6 +20,7 @@ type IngestCandlesService interface {
 	// caller sepa cuando hacer backoff), true si no habia nada pendiente o
 	// si se guardo todo.
 	RetryPendingSaves(ctx context.Context) bool
+	SpoolPendingSaves()
 	PendingSaves() int
 	IsLive(symbol string) bool
 	IsAttempted(symbol string) bool

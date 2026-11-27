@@ -74,6 +74,7 @@ type fakeRepo struct {
 	saveErr            error
 	failOnCall         int
 	saveCalls          int
+	saveFn             func(context.Context, []domain.Candle, bool) error
 	getResult          []domain.Candle
 	watermark          *time.Time
 
@@ -100,6 +101,9 @@ type fakeRepo struct {
 func (f *fakeRepo) Save(ctx context.Context, candles []domain.Candle, withWatermark bool) error {
 	f.saveCalls++
 	f.savedWithWatermark = append(f.savedWithWatermark, withWatermark)
+	if f.saveFn != nil {
+		return f.saveFn(ctx, candles, withWatermark)
+	}
 	if f.failOnCall > 0 && f.saveCalls == f.failOnCall {
 		return errors.New("save call failed")
 	}

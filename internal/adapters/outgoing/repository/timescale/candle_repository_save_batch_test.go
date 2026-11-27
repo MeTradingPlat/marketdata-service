@@ -10,10 +10,13 @@ import (
 )
 
 type fakeBatchResultExecer struct {
-	tags []pgconn.CommandTag
-	err  error
-	idx  int
+	tags     []pgconn.CommandTag
+	err      error
+	closeErr error
+	idx      int
 }
+
+func (f *fakeBatchResultExecer) Close() error { return f.closeErr }
 
 func (f *fakeBatchResultExecer) Exec() (pgconn.CommandTag, error) {
 	if f.err != nil && f.idx == len(f.tags) {
@@ -48,8 +51,19 @@ func TestReadCandleBatchResults(t *testing.T) {
 		t.Fatalf("got (%d, %v), want (1, nil)", affected, err)
 	}
 
-	errExecer := &fakeBatchResultExecer{tags: []pgconn.CommandTag{okTag}, err: errors.New("boom")}
+	execErr := errors.New("boom")
+	errExecer := &fakeBatchResultExecer{tags: []pgconn.CommandTag{okTag}, err: execErr}
 	if _, err := readCandleBatchResults(errExecer, 1, 0, true); err == nil {
 		t.Fatal("expected error when watermark exec fails")
+	}
+
+	closeErrExecer := &fakeBatchResultExecer{tags: []pgconn.CommandTag{okTag}, closeErr: errors.New("close boom")}
+	if _, err := consumeCandleBatchResults(closeErrExecer, 1, 0, false); err == nil {
+		t.Fatal("expected error when Close fails")
+	}
+
+	bothErrExecer := &fakeBatchResultExecer{tags: []pgconn.CommandTag{okTag}, err: execErr, closeErr: errors.New("close boom")}
+	if _, err := consumeCandleBatchResults(bothErrExecer, 1, 0, true); !errors.Is(err, execErr) {
+		t.Fatalf("expected exec error to be preserved, got %v", err)
 	}
 }

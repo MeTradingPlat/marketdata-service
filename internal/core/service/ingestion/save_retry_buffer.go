@@ -61,6 +61,15 @@ func (b *saveRetryBuffer) requeue(candles []domain.Candle) {
 	b.recordDiscarded(overflow)
 }
 
+func (b *saveRetryBuffer) restore(candles []domain.Candle) {
+	if len(candles) == 0 {
+		return
+	}
+	b.mu.Lock()
+	b.pending = append(candles, b.pending...)
+	b.mu.Unlock()
+}
+
 func (b *saveRetryBuffer) recordDiscarded(dropped []domain.Candle) {
 	b.mu.Lock()
 	b.discarded += int64(len(dropped))

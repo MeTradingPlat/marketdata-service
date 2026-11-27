@@ -12,6 +12,23 @@ type batchResultExecer interface {
 	Exec() (pgconn.CommandTag, error)
 }
 
+type batchResultCloser interface {
+	batchResultExecer
+	Close() error
+}
+
+func consumeCandleBatchResults(results batchResultCloser, candleCount, dailyCount int, withWatermark bool) (int64, error) {
+	affected, err := readCandleBatchResults(results, candleCount, dailyCount, withWatermark)
+	closeErr := results.Close()
+	if err != nil {
+		return 0, err
+	}
+	if closeErr != nil {
+		return 0, fmt.Errorf("closing candle batch results: %w", closeErr)
+	}
+	return affected, nil
+}
+
 func upsertCandleQuery(tf domain.Timeframe) string {
 	if candleTable(tf) == "candles_history" {
 		return upsertCandleSQLCandlesHistory

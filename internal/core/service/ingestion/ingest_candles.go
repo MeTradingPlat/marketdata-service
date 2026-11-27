@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MeTradingPlat/marketdata-service/internal/core/domain"
@@ -25,13 +26,16 @@ type ingestCandlesService struct {
 	liveSaveBuffer      *liveSaveBuffer
 	retryBuffer         *saveRetryBuffer
 	saveChunkTimeout    time.Duration
+	saveChunkSize       atomic.Int64
 	liveMu              sync.RWMutex
 	live                map[string]bool
 	attempted           map[string]bool
 }
 
 func NewIngestCandlesService(gateway out.MarketDataGateway, repo out.CandleRepository, broadcaster *livecandles.Broadcaster[domain.Candle], snapshotBroadcaster *livecandles.Broadcaster[domain.IntradaySnapshot], tracker *intraday.SnapshotTracker, recentCache *livecandles.RecentCache, spool out.CandleSpool) in.IngestCandlesService {
-	return &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, snapshotBroadcaster: snapshotBroadcaster, tracker: tracker, recentCache: recentCache, spool: spool, liveSaveBuffer: newLiveSaveBuffer(), retryBuffer: newSaveRetryBuffer(spool), live: make(map[string]bool), attempted: make(map[string]bool)}
+	s := &ingestCandlesService{gateway: gateway, repo: repo, broadcaster: broadcaster, snapshotBroadcaster: snapshotBroadcaster, tracker: tracker, recentCache: recentCache, spool: spool, liveSaveBuffer: newLiveSaveBuffer(), retryBuffer: newSaveRetryBuffer(spool), live: make(map[string]bool), attempted: make(map[string]bool)}
+	s.saveChunkSize.Store(liveSaveChunkSize)
+	return s
 }
 
 var ErrEmptyBackfill = errors.New("backfill returned no candles")

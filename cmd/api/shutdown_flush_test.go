@@ -23,6 +23,10 @@ func (f *fakeShutdownFlusher) RetryPendingSaves(context.Context) bool {
 	return true
 }
 
+func (f *fakeShutdownFlusher) SpoolPendingSaves() {
+	f.calls = append(f.calls, "spool")
+}
+
 func (f *fakeShutdownFlusher) PendingSaves() int { return 0 }
 
 func TestFlushSavesOnShutdown_FlushesThenRetriesWithDeadline(t *testing.T) {
@@ -30,7 +34,7 @@ func TestFlushSavesOnShutdown_FlushesThenRetriesWithDeadline(t *testing.T) {
 
 	flushSavesOnShutdown(f, time.Second)
 
-	if !slices.Equal(f.calls, []string{"flush", "retry"}) || !f.deadline {
+	if !slices.Equal(f.calls, []string{"flush", "retry", "spool"}) || !f.deadline {
 		t.Fatalf("calls = %v, deadline = %v", f.calls, f.deadline)
 	}
 }

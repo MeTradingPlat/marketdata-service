@@ -32,6 +32,8 @@ func (s *ingestCandlesService) FlushLiveSaves(ctx context.Context) bool {
 	return s.flushBufferToRetry(ctx, s.liveSaveBuffer.drain, "flushing live save batch failed, buffering for retry", "")
 }
 
+const maxConsecutiveSpoolFailures = 3
+
 // RetryPendingSaves reintenta las velas en vivo que fallaron al guardarse --
 // llamado periodicamente desde cmd/api, no en el hilo de lectura del
 // WebSocket (ver comentario de saveRetryBuffer sobre por que la suscripcion
@@ -39,13 +41,12 @@ func (s *ingestCandlesService) FlushLiveSaves(ctx context.Context) bool {
 // caller si hacer backoff (ver StartSaveRetryLoop): false solo cuando habia
 // algo pendiente y el intento fallo.
 func (s *ingestCandlesService) RetryPendingSaves(ctx context.Context) bool {
-	if !s.flushBufferToRetry(ctx, s.retryBuffer.drain, "retrying pending candle saves failed, will retry again", "recovered pending candle saves") {
-		return false
-	}
+	memOK := s.flushBufferToRetry(ctx, s.retryBuffer.drain, "retrying pending candle saves failed, will retry again", "recovered pending candle saves")
 	if s.spool == nil {
-		return true
+		return memOK
 	}
-	return s.retrySpoolBatches(ctx)
+	spoolOK := s.retrySpoolBatches(ctx)
+	return memOK && spoolOK
 }
 
 func (s *ingestCandlesService) retrySpoolBatches(ctx context.Context) bool {
@@ -54,15 +55,23 @@ func (s *ingestCandlesService) retrySpoolBatches(ctx context.Context) bool {
 		log.Error().Err(err).Msg("listing spooled candle batches failed")
 		return false
 	}
+	allOK := true
+	consecutiveFailures := 0
 	for _, id := range ids {
 		if ctx.Err() != nil {
 			return false
 		}
-		if !s.retryOneSpoolBatch(ctx, id) {
+		if s.retryOneSpoolBatch(ctx, id) {
+			consecutiveFailures = 0
+			continue
+		}
+		allOK = false
+		consecutiveFailures++
+		if consecutiveFailures >= maxConsecutiveSpoolFailures {
 			return false
 		}
 	}
-	return true
+	return allOK
 }
 
 func (s *ingestCandlesService) retryOneSpoolBatch(ctx context.Context, id string) bool {
@@ -82,6 +91,20 @@ func (s *ingestCandlesService) retryOneSpoolBatch(ctx context.Context, id string
 	}
 	log.Info().Str("batch", id).Int("candles", len(candles)).Msg("recovered spooled candle batch")
 	return true
+}
+
+func (s *ingestCandlesService) SpoolPendingSaves() {
+	if s.spool == nil {
+		return
+	}
+	pending := append(s.retryBuffer.drain(), s.liveSaveBuffer.drain()...)
+	if len(pending) == 0 {
+		return
+	}
+	if err := s.spool.Write(pending); err != nil {
+		log.Error().Err(err).Int("candles", len(pending)).Msg("spooling pending candles on shutdown failed")
+		s.retryBuffer.restore(pending)
+	}
 }
 
 func (s *ingestCandlesService) PendingSaves() int {
